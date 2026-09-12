@@ -108,6 +108,9 @@
   let hotzoneModifierDraft: ModifierKey[] | null = null;
   let hotzoneModifierError = "";
   let shortcutError = "";
+  // 录制结果的响应式镜像：currentAction() 返回的对象不保证被 Svelte 追踪，
+  // 直接读它的 .value 在录制后不会刷新界面，用独立状态驱动显示。
+  let shortcutDraft = "";
   let windowEnhancementTab: "edge" | "drag" = "edge";
   let activeFeatureTutorial: FeatureTutorial | null = null;
   $: windowDragBindingConflict = settings.windowDrag.moveButton === settings.windowDrag.resizeButton
@@ -506,6 +509,7 @@
     action.kind = preset.kind;
     action.value = preset.value;
     if (preset.kind === "volume-adjust") slot.cooldownMs = Math.min(slot.cooldownMs ?? settings.actionCooldownMs, 32);
+    shortcutDraft = preset.kind === "shortcut" ? (preset.value ?? "") : "";
     actionEditorOverrideKey = `${selectedDisplayId}:${selectedZone}:${activeTrigger}:${modifierId(selectedHotzoneModifiers)}`;
     actionEditorOverride = action;
     actionEditorRevision += 1;
@@ -519,28 +523,32 @@
   }
 
   function setActionShortcut(value: string): void {
-    const target = ensureHotzoneActionTarget().action;
+    const { action: slotAction } = ensureHotzoneActionTarget();
+    const shown = currentAction();
+    const targets = shown === slotAction ? [shown] : [shown, slotAction];
     if (!value) {
-      target.kind = "none";
-      delete target.value;
+      for (const item of targets) { item.kind = "none"; delete item.value; }
+      shortcutDraft = "";
       shortcutError = "";
       settings = { ...settings };
       persist();
       return;
     }
     if (settings.hotzones.some((zone) => zone.actions.some((slot) =>
-      [slot.action, ...(slot.modifierActions ?? []).map((item) => item.action)]
-        .some((action) => action !== target && action.kind === "shortcut" && action.value === value)
+      [slot.action, ...(slot.modifierActions ?? []).map((entry) => entry.action)]
+        .some((action) => action !== shown && action.kind === "shortcut" && action.value === value)
     )) || settings.monitorProfiles.some((profile) => profile.hotzones.some((zone) => zone.actions.some((slot) =>
-      [slot.action, ...(slot.modifierActions ?? []).map((item) => item.action)]
-        .some((action) => action !== target && action.kind === "shortcut" && action.value === value)
+      [slot.action, ...(slot.modifierActions ?? []).map((entry) => entry.action)]
+        .some((action) => action !== shown && action.kind === "shortcut" && action.value === value)
     )))) {
       shortcutError = `快捷键 ${value} 已被其他动作使用`;
       return;
     }
     shortcutError = "";
-    target.kind = "shortcut";
-    target.value = value;
+    for (const item of targets) { item.kind = "shortcut"; item.value = value; }
+    // currentAction() 返回的对象不是响应式的，改它的属性界面读不到；
+    // shortcutDraft 才是驱动录制器显示的状态。
+    shortcutDraft = value;
     settings = { ...settings };
     persist();
   }
@@ -1060,7 +1068,7 @@
                 <div class="action-editor">
                   <label><span>执行动作</span><ActionPicker options={actionPresets} value={presetIndex(currentAction())} onSelect={setActionPreset} /></label>
                   {#if currentAction().kind === "open-command" || (currentAction().kind === "shortcut" && !actionPresets.some((item) => item.kind === "shortcut" && item.value !== undefined && item.value === currentAction().value))}
-                    <label><span>{currentAction().kind === "shortcut" ? "快捷键" : "命令"}</span>{#if currentAction().kind === "shortcut"}<ShortcutRecorder label="录制快捷键" value={currentAction().value ?? ""} onChange={setActionShortcut} />{#if shortcutError}<p class="modifier-error" role="alert">{shortcutError}</p>{/if}{:else}<input value={currentAction().value ?? ""} on:input={setActionValue} placeholder="请输入参数" />{/if}</label>
+                    <label><span>{currentAction().kind === "shortcut" ? "快捷键" : "命令"}</span>{#if currentAction().kind === "shortcut"}<ShortcutRecorder label="录制快捷键" value={shortcutDraft} onChange={setActionShortcut} />{#if shortcutError}<p class="modifier-error" role="alert">{shortcutError}</p>{/if}{:else}<input value={currentAction().value ?? ""} on:input={setActionValue} placeholder="请输入参数" />{/if}</label>
                   {/if}
                   <div class="action-state"><i class:enabled={currentAction().kind !== "none"}></i><div><strong>{triggerLabel(activeTrigger)}</strong><p>{currentAction().kind === "none" ? "尚未设置动作" : actionPresets[presetIndex(currentAction())]?.label ?? "自定义动作"}</p></div></div>
                 </div>

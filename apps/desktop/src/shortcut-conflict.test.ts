@@ -207,12 +207,15 @@ describe("shortcut conflict rejection", () => {
       "target",
       "persist",
       "ensureHotzoneActionTarget",
+      "currentAction",
       `let shortcutError = "";
+       let shortcutDraft = "";
        ${handler}
-       return { setActionShortcut, readError: () => shortcutError };`
-    )(settings, target, () => {}, () => ({ slot: {}, action: target })) as {
+       return { setActionShortcut, readError: () => shortcutError, readDraft: () => shortcutDraft };`
+    )(settings, target, () => {}, () => ({ slot: {}, action: target }), () => target) as {
       setActionShortcut: (value: string) => void;
       readError: () => string;
+      readDraft: () => string;
     };
   }
 
@@ -235,6 +238,9 @@ describe("shortcut conflict rejection", () => {
     expect(instance.readError()).toBe("");
     expect(target.kind).toBe("shortcut");
     expect(target.value).toBe("Ctrl+Shift+K");
+    // 回归防护：currentAction() 返回的对象不是响应式的，改它的属性界面刷不出来。
+    // 录制结果必须同时写进 shortcutDraft，否则界面会停在空态。
+    expect(instance.readDraft()).toBe("Ctrl+Shift+K");
   });
 
   it("turns an empty recording into a cleared action", () => {
@@ -245,6 +251,7 @@ describe("shortcut conflict rejection", () => {
     expect(target.kind).toBe("none");
     expect(target.value).toBeUndefined();
     expect(instance.readError()).toBe("");
+    expect(instance.readDraft()).toBe("");
   });
 
   it("accepts a bare key when it is not already taken", () => {
@@ -254,5 +261,6 @@ describe("shortcut conflict rejection", () => {
     instance.setActionShortcut("F5");
     expect(instance.readError()).toBe("");
     expect(target.value).toBe("F5");
+    expect(instance.readDraft()).toBe("F5");
   });
 });
