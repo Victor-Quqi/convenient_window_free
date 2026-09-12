@@ -1220,7 +1220,7 @@
                         {#if selectedGestureModifiers.length && gestureModifierDraft === null}<button aria-label="删除当前手势组合" class="variant-delete" on:click={() => removeGestureVariant(selectedGestureModifiers)} title="删除当前组合" type="button">×</button>{/if}
                       </div>
                       {#if gestureModifierDraft !== null}
-                        <div class="modifier-draft"><ModifierRecorder label="录制新手势组合" value={gestureModifierDraft} onChange={commitGestureVariant} /><button aria-label="取消新增手势组合" class="variant-delete" on:click={cancelGestureVariant} title="取消" type="button">×</button></div>
+                        <div class="modifier-draft"><ModifierRecorder label="录制新手势组合" emptyHint="点击输入组合键" value={gestureModifierDraft} onChange={commitGestureVariant} /><button aria-label="取消新增手势组合" class="variant-delete" on:click={cancelGestureVariant} title="取消" type="button">×</button></div>
                       {/if}
                       {#if gestureModifierError}<p class="modifier-error" role="alert">{gestureModifierError}</p>{/if}
                       {#if gestureModifierDraft === null}

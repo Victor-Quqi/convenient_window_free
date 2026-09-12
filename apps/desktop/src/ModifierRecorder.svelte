@@ -3,8 +3,10 @@
 
   export let value: ModifierKey[] = [];
   export let onChange: (value: ModifierKey[]) => void;
-  export let label = "录制组合键";
-  export let english = false;
+  export let label = "录制组合键";  export let allowEmpty = true;
+  // 空状态提示可定制：手势草稿区需要「点击输入组合键」这样更明确的引导，
+  // 其他场景沿用默认文案。
+  export let emptyHint = "";
 
   const order: ModifierKey[] = ["ctrl", "alt", "shift", "win"];
   const names: Record<ModifierKey, string> = { ctrl: "Ctrl", alt: "Alt", shift: "Shift", win: "Win" };
@@ -31,6 +33,7 @@
     if (!recording) return;
     recording = false;
     if (captured.length) onChange([...captured]);
+
     captured = [];
   }
 
@@ -68,7 +71,7 @@
     event.stopPropagation();
     recording = false;
     captured = [];
-    onChange([]);
+    if (allowEmpty) onChange([]);
   }
 </script>
 
@@ -87,12 +90,12 @@
     {:else if value.length}
       <span class="key-row">{#each value as key}<kbd>{names[key]}</kbd>{/each}</span>
     {:else}
-      <span class="empty">{recording ? (english ? "Press keys" : "请按组合键") : (english ? "Direct" : "直接触发")}</span>
+      <span class="empty">{recording ? "请按组合键" : (emptyHint || (allowEmpty ? "直接触发" : "必须使用修饰键"))}</span>
     {/if}
     {#if recording}<i aria-hidden="true"></i>{/if}
   </button>
-  {#if value.length}
-    <button aria-label={english ? "Clear modifiers" : "清除修饰键"} class="clear" on:click={clear} title={english ? "Clear modifiers" : "清除修饰键"} type="button">×</button>
+  {#if allowEmpty && value.length}
+    <button aria-label="清除修饰键" class="clear" on:click={clear} title="清除修饰键" type="button">×</button>
   {/if}
 </div>
 
