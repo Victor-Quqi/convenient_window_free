@@ -8,6 +8,7 @@
   import MonitorStage from "./MonitorStage.svelte";
   import GestureCanvas from "./GestureCanvas.svelte";
   import ModifierRecorder from "./ModifierRecorder.svelte";
+  import ShortcutRecorder from "./ShortcutRecorder.svelte";
   import { gestureSimilarity, resampleGesture } from "./gesture-algorithm";
   import { migrateMonitorProfileIds } from "./monitor-profile-migration";
   import { addModifierVariant, MAX_MODIFIER_VARIANTS } from "./modifier-variants";
@@ -106,6 +107,7 @@
   let selectedHotzoneModifiers: ModifierKey[] = [];
   let hotzoneModifierDraft: ModifierKey[] | null = null;
   let hotzoneModifierError = "";
+  let shortcutError = "";
   let windowEnhancementTab: "edge" | "drag" = "edge";
   let activeFeatureTutorial: FeatureTutorial | null = null;
   $: windowDragBindingConflict = settings.windowDrag.moveButton === settings.windowDrag.resizeButton
@@ -513,6 +515,33 @@
 
   function setActionValue(event: Event): void {
     ensureHotzoneActionTarget().action.value = (event.currentTarget as HTMLInputElement).value;
+    persist();
+  }
+
+  function setActionShortcut(value: string): void {
+    const target = ensureHotzoneActionTarget().action;
+    if (!value) {
+      target.kind = "none";
+      delete target.value;
+      shortcutError = "";
+      settings = { ...settings };
+      persist();
+      return;
+    }
+    if (settings.hotzones.some((zone) => zone.actions.some((slot) =>
+      [slot.action, ...(slot.modifierActions ?? []).map((item) => item.action)]
+        .some((action) => action !== target && action.kind === "shortcut" && action.value === value)
+    )) || settings.monitorProfiles.some((profile) => profile.hotzones.some((zone) => zone.actions.some((slot) =>
+      [slot.action, ...(slot.modifierActions ?? []).map((item) => item.action)]
+        .some((action) => action !== target && action.kind === "shortcut" && action.value === value)
+    )))) {
+      shortcutError = `快捷键 ${value} 已被其他动作使用`;
+      return;
+    }
+    shortcutError = "";
+    target.kind = "shortcut";
+    target.value = value;
+    settings = { ...settings };
     persist();
   }
 
@@ -1031,13 +1060,16 @@
                 <div class="action-editor">
                   <label><span>执行动作</span><ActionPicker options={actionPresets} value={presetIndex(currentAction())} onSelect={setActionPreset} /></label>
                   {#if currentAction().kind === "open-command" || (currentAction().kind === "shortcut" && !actionPresets.some((item) => item.kind === "shortcut" && item.value !== undefined && item.value === currentAction().value))}
-                    <label><span>{currentAction().kind === "shortcut" ? "快捷键" : "命令"}</span><input value={currentAction().value ?? ""} on:input={setActionValue} placeholder={currentAction().kind === "shortcut" ? "例如 Ctrl+Alt+T" : "请输入参数"} /></label>
+                    <label><span>{currentAction().kind === "shortcut" ? "快捷键" : "命令"}</span>{#if currentAction().kind === "shortcut"}<ShortcutRecorder label="录制快捷键" value={currentAction().value ?? ""} onChange={setActionShortcut} />{#if shortcutError}<p class="modifier-error" role="alert">{shortcutError}</p>{/if}{:else}<input value={currentAction().value ?? ""} on:input={setActionValue} placeholder="请输入参数" />{/if}</label>
                   {/if}
                   <div class="action-state"><i class:enabled={currentAction().kind !== "none"}></i><div><strong>{triggerLabel(activeTrigger)}</strong><p>{currentAction().kind === "none" ? "尚未设置动作" : actionPresets[presetIndex(currentAction())]?.label ?? "自定义动作"}</p></div></div>
                 </div>
                 {/key}
                 {/if}
                 <div class:single={activeTrigger !== "hover"} class="timing">{#if activeTrigger === "hover"}<label><span>当前悬停延迟</span><div><input value={currentTriggerSlot().hoverDelayMs ?? settings.hoverDelayMs} min="0" max="3000" on:input={(event) => setTriggerTiming("hoverDelayMs", event)} type="number" /><em>ms</em></div></label>{/if}<label><span>当前触发冷却</span><div><input value={currentTriggerSlot().cooldownMs ?? settings.actionCooldownMs} min="10" max="5000" on:input={(event) => setTriggerTiming("cooldownMs", event)} type="number" /><em>ms</em></div></label></div>
+                <div class="subhead" style="margin-top:18px"><div><h2>热区参数</h2><p>触发角生效范围与响应频率</p></div></div>
+                <div class="form-grid"><label><span>热区宽度</span><div><input bind:value={settings.edgeSize} min="2" max="48" on:input={() => persist()} type="number" /><em>px</em></div></label></div>
+                <div class="list-section"><div class="subhead"><div><h2>暂停应用</h2><p>当前前台：{foregroundApp || "尚未获取"}</p></div><button class="quiet" on:click={() => addForeground("hotzones")} type="button">+ 添加</button></div><div class="app-list">{#each settings.pausedApps as app}<div><span>{app}</span><button aria-label={`移除 ${app}`} on:click={() => removeApp("hotzones", app)} type="button">×</button></div>{:else}<p class="empty">还没有暂停应用</p>{/each}</div></div>
               </div>
             {:else if mode === "edge-hide"}
               <div class="window-tabs"><button class:active={windowEnhancementTab === "edge"} on:click={() => { windowEnhancementTab = "edge"; }} type="button">贴边隐藏</button><button class:active={windowEnhancementTab === "drag"} on:click={() => { windowEnhancementTab = "drag"; }} type="button">拖拽与缩放</button></div>
@@ -1184,9 +1216,8 @@
               <div class="helper-meta"><span>助手 {helperInstallState.version}</span><button on:click={() => openHelperPage("repository")} type="button">公开下载仓库</button><code>{helperInstallState.installDir ?? "尚未确定安装目录"}</code></div>
               <div class:error={Boolean(helperError)} class="status-rail"><div><span>最近动作</span><strong>{lastAction}</strong></div><div><span>当前状态</span><strong aria-live="polite">{helperError || lastMessage}</strong></div></div>
             {:else}
-              <div class="setting-title"><div><h2>全局参数</h2><p>调整所有显示器共用的基础参数</p></div></div>
-              <div class="form-grid"><label><span>热区宽度</span><div><input bind:value={settings.edgeSize} min="2" max="48" on:input={() => persist()} type="number" /><em>px</em></div></label><label><span>轮询间隔</span><div><input bind:value={settings.pollIntervalMs} min="10" max="250" on:input={() => persist()} type="number" /><em>ms</em></div></label></div>
-              <div class="list-section"><div class="subhead"><div><h2>暂停应用</h2><p>这些应用位于前台时不触发热区</p></div><button class="quiet" on:click={() => addForeground("hotzones")} type="button">+ 添加</button></div><div class="app-list">{#each settings.pausedApps as app}<div><span>{app}</span><button aria-label={`移除 ${app}`} on:click={() => removeApp("hotzones", app)} type="button">×</button></div>{:else}<p class="empty">还没有暂停应用</p>{/each}</div></div>
+              <div class="setting-title"><div><h2>通用设置</h2><p>所有功能共用的应用级设置</p></div></div>
+              <div class="timing single"><label><span>轮询间隔</span><div><input value={settings.pollIntervalMs} min="10" max="250" on:input={(event) => { settings.pollIntervalMs = Number((event.currentTarget as HTMLInputElement).value); persist(); }} type="number" /><em>ms</em></div></label></div>
               <div class="config-section"><h2>配置管理</h2><div class="config-actions"><button class="quiet" on:click={exportSettings} type="button">导出配置</button><button class="quiet" on:click={importSettings} type="button">导入配置</button><button class="danger" on:click={resetSettings} type="button">恢复默认</button></div></div>
             {/if}
           </div>
