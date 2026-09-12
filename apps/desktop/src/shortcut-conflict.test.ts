@@ -4,7 +4,7 @@ import { render } from "svelte/server";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import ShortcutRecorder from "./ShortcutRecorder.svelte";
-import { formatShortcut, heldModifiers, isModifierKey, resolveKeyName } from "./shortcut-keys";
+import { formatShortcut, heldModifiers, isModifierKey, nextRecordingStep, resolveKeyName } from "./shortcut-keys";
 
 const component = readFileSync(nodePath.join(import.meta.dirname, "ShortcutRecorder.svelte"), "utf8");
 const app = readFileSync(nodePath.join(import.meta.dirname, "App.svelte"), "utf8");
@@ -16,7 +16,6 @@ function stripTypes(code: string): string {
   }).outputText;
 }
 
-// 测试直接调用 shortcut-keys 的真实实现，不做源码字符串提取。
 type KeyState = Partial<Record<"ctrlKey" | "altKey" | "shiftKey" | "metaKey", boolean>>;
 
 function event(key: string, code: string, modifiers: KeyState = {}) {
@@ -35,6 +34,69 @@ function html(props: { value: string; label: string; english: boolean }): string
   return `${out.head}${out.body}`;
 }
 
+describe("recording a full key sequence", () => {
+  // 按一次完整序列（修饰键按下 → 主键），返回最后一步结果。
+  function record(sequence: Array<KeyboardEvent>) {
+    let step = nextRecordingStep(sequence[0]);
+    for (const item of sequence.slice(1)) step = nextRecordingStep(item);
+    return step;
+  }
+
+  it("records common modifier combinations", () => {
+    const cases: Array<[string, KeyboardEvent[]]> = [
+      ["Ctrl+C", [event("Control", "ControlLeft", { ctrlKey: true }), event("c", "KeyC", { ctrlKey: true })]],
+      ["Ctrl+V", [event("Control", "ControlLeft", { ctrlKey: true }), event("v", "KeyV", { ctrlKey: true })]],
+      ["Ctrl+X", [event("Control", "ControlLeft", { ctrlKey: true }), event("x", "KeyX", { ctrlKey: true })]],
+      ["Ctrl+Alt+T", [
+        event("Control", "ControlLeft", { ctrlKey: true }),
+        event("Alt", "AltLeft", { ctrlKey: true, altKey: true }),
+        event("t", "KeyT", { ctrlKey: true, altKey: true })
+      ]],
+      ["Ctrl+Shift+S", [
+        event("Control", "ControlLeft", { ctrlKey: true }),
+        event("Shift", "ShiftLeft", { ctrlKey: true, shiftKey: true }),
+        event("s", "KeyS", { ctrlKey: true, shiftKey: true })
+      ]],
+      ["Alt+F4", [event("Alt", "AltLeft", { altKey: true }), event("F4", "F4", { altKey: true })]],
+      ["Win+D", [event("Meta", "MetaLeft", { metaKey: true }), event("d", "KeyD", { metaKey: true })]],
+      ["Alt+1", [event("Alt", "AltLeft", { altKey: true }), event("1", "Digit1", { altKey: true })]],
+      ["Ctrl+Right", [event("Control", "ControlLeft", { ctrlKey: true }), event("ArrowRight", "ArrowRight", { ctrlKey: true })]]
+    ];
+    for (const [expected, sequence] of cases) {
+      expect(record(sequence), `${expected} should be recordable`).toEqual({ action: "commit", value: expected });
+    }
+  });
+
+  it("waits while only modifiers are held", () => {
+    expect(nextRecordingStep(event("Control", "ControlLeft", { ctrlKey: true }))).toEqual({ action: "wait", hint: "Ctrl" });
+    expect(nextRecordingStep(event("Shift", "ShiftLeft", { ctrlKey: true, shiftKey: true }))).toEqual({
+      action: "wait",
+      hint: "Ctrl+Shift"
+    });
+  });
+
+  it("cancels on Escape", () => {
+    expect(nextRecordingStep(event("Escape", "Escape"))).toEqual({ action: "cancel" });
+  });
+
+  it("waits instead of committing unsupported keys", () => {
+    for (const [key, code] of [
+      ["/", "Slash"],
+      [";", "Semicolon"],
+      ["[", "BracketLeft"],
+      ["Backspace", "Backspace"],
+      ["Delete", "Delete"],
+      ["Home", "Home"],
+      ["PageUp", "PageUp"]
+    ] as const) {
+      expect(nextRecordingStep(event(key, code, { ctrlKey: true })), `${key} must not commit`).toEqual({
+        action: "wait",
+        hint: ""
+      });
+    }
+  });
+});
+
 describe("shortcut key resolution", () => {
   it("records a bare key without any modifier", () => {
     for (const [key, code, expected] of [
@@ -47,22 +109,6 @@ describe("shortcut key resolution", () => {
       ["Tab", "Tab", "Tab"]
     ] as const) {
       expect(resolveKeyName(event(key, code)), `${key} should resolve on its own`).toBe(expected);
-    }
-  });
-
-  it("ignores keys the helper cannot execute", () => {
-    // helper 的 parse_ascii_key 只接受「长度为 1 的 ASCII 字母或数字」，
-    // 标点与编辑键都会在执行时报 unsupported shortcut key，所以录制阶段就不接收。
-    for (const [key, code] of [
-      ["/", "Slash"],
-      [";", "Semicolon"],
-      ["[", "BracketLeft"],
-      ["Backspace", "Backspace"],
-      ["Delete", "Delete"],
-      ["Home", "Home"],
-      ["PageUp", "PageUp"]
-    ] as const) {
-      expect(resolveKeyName(event(key, code)), `${key} must not be recordable`).toBeNull();
     }
   });
 
@@ -102,15 +148,17 @@ describe("shortcut recorder component", () => {
     expect(filled).toContain("清除快捷键");
   });
 
-  it("isolates page shortcuts and keeps recording state in the component", () => {
-    expect(component).toContain("preventDefault");
-    expect(component).toContain("stopPropagation");
-    expect(component).toContain("if (!recording) return");
-    expect(component).toContain("onChange(next)");
+  it("listens on the window so focus and browser shortcuts cannot swallow keys", () => {
+    // 只监听按钮自身时，焦点不在按钮上就收不到按键；而 Ctrl+C/Ctrl+V 本身是
+    // 浏览器快捷键，会被优先消费，表现成「组合键录不上」。所以必须挂到 window。
+    expect(component).toContain('window.addEventListener("keydown"');
+    expect(component).toContain("handleKeydown");
+    expect(component).toContain(", true)");
+    expect(component).not.toContain("on:keydown");
   });
 
   it("cancels with Escape and supports clearing", () => {
-    expect(component).toContain('if (e.key === "Escape")');
+    expect(component).toContain("onChange(step.value)");
     expect(component).toContain('onChange("")');
   });
 });

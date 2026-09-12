@@ -59,3 +59,27 @@ export function resolveKeyName(event: KeyboardEvent): string | null {
 export function formatShortcut(modifiers: ModifierKey[], key: string): string {
   return [...modifiers.map((item) => MODIFIER_NAMES[item]), key].join("+");
 }
+
+/** 录制过程中按键处理的三种结果。 */
+export type KeyStep =
+  /** 仍在等待：只按住了修饰键，或按到了 helper 不支持的键。 */
+  | { action: "wait"; hint: string }
+  /** 用户按 Escape 放弃录制。 */
+  | { action: "cancel" }
+  /** 录制完成，value 为可直接保存的快捷键字符串。 */
+  | { action: "commit"; value: string };
+
+/**
+ * 录制状态下处理一次按键。纯函数，便于直接测试完整按键序列。
+ * 不在这里判断"是否正在录制"——那是调用方的职责。
+ */
+export function nextRecordingStep(event: KeyboardEvent): KeyStep {
+  if (event.key === "Escape") return { action: "cancel" };
+  const modifiers = heldModifiers(event);
+  if (isModifierKey(event)) {
+    return { action: "wait", hint: modifiers.map((key) => MODIFIER_NAMES[key]).join("+") };
+  }
+  const key = resolveKeyName(event);
+  if (!key) return { action: "wait", hint: "" };
+  return { action: "commit", value: formatShortcut(modifiers, key) };
+}
