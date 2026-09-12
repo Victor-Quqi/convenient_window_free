@@ -131,6 +131,14 @@
   let selectedGestureModifiers: ModifierKey[] = [];
   let gestureModifierDraft: ModifierKey[] | null = null;
   let gestureModifierError = "";
+  // 手势动作对象不是响应式：原地改 kind/value 界面读不到。用 draft 驱动编辑区显示。
+  // 只在「切换手势」和「设置动作」两处赋值；不要用 $: 同步 ——
+  // 录制结果写回 action 后 $: 会拿旧依赖值把 draft 覆盖回去。
+  let gestureActionDraft: HotzoneAction = { kind: "none" };
+  // 与快捷键录制器同理：手势动作的当前对象不保证被 Svelte 追踪，
+  // 用独立状态驱动显示，避免「值写进去但界面不刷新」。
+  let gestureShortcutDraft = "";
+  let gestureShortcutError = "";
   let availableOcrLanguages: OcrLanguage[] | null = null;
   $: activeGesture = settings.mouseGestures.gestures.find((gesture) => gesture.id === selectedGestureId)
     ?? settings.mouseGestures.gestures[0];
@@ -698,6 +706,15 @@
     selectedGestureModifiers = [];
     cancelGestureVariant();
     gestureConflict = findGestureConflict(currentGesture());
+    // 切换手势时同步动作编辑区的 draft（此处是唯一需要读 action 的时机）
+    syncGestureActionDraft();
+  }
+
+  function syncGestureActionDraft(): void {
+    const action = currentGestureAction();
+    gestureActionDraft = { ...action };
+    gestureShortcutDraft = action.kind === "shortcut" ? (action.value ?? "") : "";
+    gestureShortcutError = "";
   }
 
   function selectFirstActionGesture(): void {
@@ -765,12 +782,34 @@
     const action = ensureGestureActionTarget();
     action.kind = preset.kind;
     action.value = preset.value;
+    gestureActionDraft = { kind: preset.kind, value: preset.value };
+    gestureShortcutDraft = preset.kind === "shortcut" ? (preset.value ?? "") : "";
+    gestureShortcutError = "";
     settings = { ...settings };
     persist();
   }
 
   function setGestureActionValue(event: Event): void {
     ensureGestureActionTarget().value = (event.currentTarget as HTMLInputElement).value;
+    persist();
+  }
+
+  // 与触发角对齐：手势的自定义快捷键同样用录制器，而不是手输文本。
+  function setGestureActionShortcut(value: string): void {
+    const action = ensureGestureActionTarget();
+    gestureShortcutError = "";
+    if (!value) {
+      action.kind = "none";
+      delete action.value;
+      gestureShortcutDraft = "";
+      gestureActionDraft = { kind: "none" };
+    } else {
+      action.kind = "shortcut";
+      action.value = value;
+      gestureShortcutDraft = value;
+      gestureActionDraft = { kind: "shortcut", value };
+    }
+    settings = { ...settings };
     persist();
   }
 
@@ -1185,9 +1224,9 @@
                       {/if}
                       {#if gestureModifierError}<p class="modifier-error" role="alert">{gestureModifierError}</p>{/if}
                       {#if gestureModifierDraft === null}
-                        <label><span>识别后执行</span><ActionPicker options={actionPresets} value={presetIndex(currentGestureAction())} onSelect={setGestureActionPreset} /></label>
-                        {#if currentGestureAction().kind === "open-command" || (currentGestureAction().kind === "shortcut" && !actionPresets.some((item) => item.kind === "shortcut" && item.value !== undefined && item.value === currentGestureAction().value))}
-                          <label><span>{currentGestureAction().kind === "shortcut" ? "快捷键" : "命令"}</span><input value={currentGestureAction().value ?? ""} on:input={setGestureActionValue} placeholder="请输入参数" /></label>
+                        <label><span>识别后执行</span><ActionPicker options={actionPresets} value={presetIndex(gestureActionDraft)} onSelect={setGestureActionPreset} /></label>
+                        {#if gestureActionDraft.kind === "open-command" || (gestureActionDraft.kind === "shortcut" && !actionPresets.some((item) => item.kind === "shortcut" && item.value !== undefined && item.value === gestureActionDraft.value))}
+                          <label><span>{gestureActionDraft.kind === "shortcut" ? "快捷键" : "命令"}</span>{#if gestureActionDraft.kind === "shortcut"}<ShortcutRecorder label="录制快捷键" value={gestureShortcutDraft} onChange={setGestureActionShortcut} />{#if gestureShortcutError}<p class="modifier-error" role="alert">{gestureShortcutError}</p>{/if}{:else}<input value={gestureActionDraft.value ?? ""} on:input={setGestureActionValue} placeholder="请输入参数" />{/if}</label>
                         {/if}
                       {/if}
                     </div>
