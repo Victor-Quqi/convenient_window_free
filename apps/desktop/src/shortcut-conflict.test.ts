@@ -125,6 +125,22 @@ describe("shortcut key resolution", () => {
     expect(resolveKeyName(event("&", "Digit1"))).toBe("1");
   });
 
+  it("still records when the host omits e.code", () => {
+    // 某些嵌入环境（webview / Electron）里 e.code 可能缺失或不带 Key/Digit 前缀。
+    // 此时必须退回 e.key，否则只有 F 键能录——正是「只认特殊键位」的现象。
+    const noCode = { key: "c", ctrlKey: true } as KeyboardEvent;
+    expect(resolveKeyName(noCode)).toBe("C");
+    expect(nextRecordingStep({ key: "Control", code: "", ctrlKey: true } as KeyboardEvent)).toEqual({
+      action: "wait",
+      hint: "Ctrl"
+    });
+    expect(nextRecordingStep(noCode)).toEqual({ action: "commit", value: "Ctrl+C" });
+
+    // 但依然不能放行 helper 不支持的标点
+    expect(resolveKeyName({ key: "/", ctrlKey: true } as KeyboardEvent)).toBeNull();
+    expect(resolveKeyName({ key: "5" } as KeyboardEvent)).toBe("5");
+  });
+
   it("orders modifiers as Ctrl, Alt, Shift, Win", () => {
     const state = { shiftKey: true, metaKey: true, altKey: true, ctrlKey: true };
     expect(heldModifiers(event("a", "KeyA", state))).toEqual(["ctrl", "alt", "shift", "win"]);
@@ -150,11 +166,13 @@ describe("shortcut recorder component", () => {
 
   it("listens on the window so focus and browser shortcuts cannot swallow keys", () => {
     // 只监听按钮自身时，焦点不在按钮上就收不到按键；而 Ctrl+C/Ctrl+V 本身是
-    // 浏览器快捷键，会被优先消费，表现成「组合键录不上」。所以必须挂到 window。
+    // 浏览器快捷键，会被优先消费，表现成「组合键录不上」。
+    // 因此挂在 window 捕获阶段，并在按钮上重复绑定一次作为兜底。
+    // 捕获阶段已 stopPropagation，window 监听生效时按钮不会重复触发。
     expect(component).toContain('window.addEventListener("keydown"');
     expect(component).toContain("handleKeydown");
     expect(component).toContain(", true)");
-    expect(component).not.toContain("on:keydown");
+    expect(component).toContain("on:keydown={handleKeydown}");
   });
 
   it("cancels with Escape and supports clearing", () => {

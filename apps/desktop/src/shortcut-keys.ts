@@ -41,17 +41,28 @@ export function isModifierKey(event: KeyboardEvent): boolean {
   return ["Control", "Alt", "Shift", "Meta"].includes(event.key);
 }
 
+/** 单个 ASCII 字母或数字才算 helper 能执行的键（parse_ascii_key 的要求）。 */
+function isAsciiAlphaNumeric(value: string): boolean {
+  return /^[A-Za-z0-9]$/.test(value);
+}
+
 /**
  * 解析主键名；helper 不支持的键返回 null（表示不录制）。
- * 用 e.code 取物理键位：e.key 在非 QWERTY 布局（如 AZERTY）下会返回布局字符，
+ *
+ * 优先用 e.code 取物理键位：e.key 在非 QWERTY 布局（如 AZERTY）下会返回布局字符，
  * 会让录到的快捷键和实际按下的键对不上。
+ * 但某些嵌入环境（webview / Electron）里 e.code 可能缺失或不带 "Key"/"Digit" 前缀，
+ * 此时退回 e.key —— 只接受单个 ASCII 字母或数字，仍然不会放行 helper 不支持的键。
  */
 export function resolveKeyName(event: KeyboardEvent): string | null {
   if (NAMED_KEYS[event.key]) return NAMED_KEYS[event.key];
   if (isModifierKey(event) || event.key === "AltGraph") return null;
   if (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.key)) return event.key.toUpperCase();
-  if (/^Key[A-Z]$/.test(event.code)) return event.code.slice(3);
-  if (/^Digit[0-9]$/.test(event.code)) return event.code.slice(5);
+  const code = typeof event.code === "string" ? event.code : "";
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3);
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  const key = typeof event.key === "string" ? event.key : "";
+  if (isAsciiAlphaNumeric(key)) return key.toUpperCase();
   return null;
 }
 
