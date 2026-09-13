@@ -57,7 +57,8 @@ function isAsciiAlphaNumeric(value: string): boolean {
 export function resolveKeyName(event: KeyboardEvent): string | null {
   if (NAMED_KEYS[event.key]) return NAMED_KEYS[event.key];
   if (isModifierKey(event) || event.key === "AltGraph") return null;
-  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(event.key)) return event.key.toUpperCase();
+  // 只认 F1..F12：helper 的 parse_key 只映射到 VK_F12，F13..F24 会报 unsupported shortcut key。
+  if (/^F([1-9]|1[0-2])$/.test(event.key)) return event.key.toUpperCase();
   const code = typeof event.code === "string" ? event.code : "";
   if (/^Key[A-Z]$/.test(code)) return code.slice(3);
   if (/^Digit[0-9]$/.test(code)) return code.slice(5);

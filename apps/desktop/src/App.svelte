@@ -193,6 +193,11 @@
 
   onMount(() => {
     initTheme();
+    // 冷启动补一次 draft 同步：selectedGestureId 初值指向 gestures[0]（默认"向上 · 复制"，
+    // 动作是快捷键 Ctrl+C），而 gestureActionDraft 初值是 {kind:"none"}，两者不一致会让
+    // 用户首次打开手势面板就看到"不执行"（已用 E2E 复现）。syncGestureActionDraft 原本
+    // 只在 selectGesture 里调用，于是"不点卡片直接进面板"这条默认路径漏了同步。
+    syncGestureActionDraft();
     const offStatus = helper.onStatus((status) => {
       helperStatus = status;
       if (status === "connected") lastMessage = "helper 已连接，正在同步配置";
@@ -538,6 +543,10 @@
       for (const item of targets) { item.kind = "none"; delete item.value; }
       shortcutDraft = "";
       shortcutError = "";
+      // 动作编辑区被 {#key actionEditorRevision} 包住，块内表达式会被编译器整体 untrack，
+      // 只有 key 变化才会重建。若不递增 revision，清空后下拉框仍显示"自定义快捷键"、
+      // 录制器也仍然存在，与实际已清空的配置矛盾（已由 E2E 复现）。
+      actionEditorRevision += 1;
       settings = { ...settings };
       persist();
       return;
@@ -1103,7 +1112,7 @@
                   {#if hotzoneModifierError}<p class="modifier-error" role="alert">{hotzoneModifierError}</p>{/if}
                 </div>
                 {#if hotzoneModifierDraft === null}
-                {#key `${selectedZone}:${activeTrigger}:${modifierId(selectedHotzoneModifiers)}:${actionEditorRevision}`}
+                {#key `${selectedDisplayId}:${selectedZone}:${activeTrigger}:${modifierId(selectedHotzoneModifiers)}:${actionEditorRevision}`}
                 <div class="action-editor">
                   <label><span>执行动作</span><ActionPicker options={actionPresets} value={presetIndex(currentAction())} onSelect={setActionPreset} /></label>
                   {#if currentAction().kind === "open-command" || (currentAction().kind === "shortcut" && !actionPresets.some((item) => item.kind === "shortcut" && item.value !== undefined && item.value === currentAction().value))}

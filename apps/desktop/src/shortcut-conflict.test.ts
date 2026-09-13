@@ -119,6 +119,21 @@ describe("shortcut key resolution", () => {
     }
   });
 
+  it("only accepts F1..F12 and rejects the F13..F24 range", () => {
+    // helper 的 parse_key 只映射到 VK_F12，F13..F24 录进去会在执行时报
+    // unsupported shortcut key。前端此前按 F1..F24 放行，属两端键集漂移。
+    for (let index = 1; index <= 12; index += 1) {
+      expect(resolveKeyName(event(`F${index}`, `F${index}`)), `F${index} should be recordable`).toBe(`F${index}`);
+    }
+    for (let index = 13; index <= 24; index += 1) {
+      expect(resolveKeyName(event(`F${index}`, `F${index}`)), `F${index} must be rejected`).toBeNull();
+      expect(nextRecordingStep(event(`F${index}`, `F${index}`)), `F${index} must not commit`).toEqual({
+        action: "wait",
+        hint: ""
+      });
+    }
+  });
+
   it("takes the physical key from the layout-independent code", () => {
     // AZERTY 等布局下 e.key 会变成布局字符，必须按 e.code 记录物理键位。
     expect(resolveKeyName(event("q", "KeyA"))).toBe("A");
@@ -210,12 +225,19 @@ describe("shortcut conflict rejection", () => {
       "currentAction",
       `let shortcutError = "";
        let shortcutDraft = "";
+       let actionEditorRevision = 0;
        ${handler}
-       return { setActionShortcut, readError: () => shortcutError, readDraft: () => shortcutDraft };`
+       return {
+         setActionShortcut,
+         readError: () => shortcutError,
+         readDraft: () => shortcutDraft,
+         readRevision: () => actionEditorRevision
+       };`
     )(settings, target, () => {}, () => ({ slot: {}, action: target }), () => target) as {
       setActionShortcut: (value: string) => void;
       readError: () => string;
       readDraft: () => string;
+      readRevision: () => number;
     };
   }
 
@@ -247,11 +269,16 @@ describe("shortcut conflict rejection", () => {
     const instance = load();
     target.kind = "shortcut";
     target.value = "Ctrl+Alt+A";
+    const revisionBefore = instance.readRevision();
     instance.setActionShortcut("");
     expect(target.kind).toBe("none");
     expect(target.value).toBeUndefined();
     expect(instance.readError()).toBe("");
     expect(instance.readDraft()).toBe("");
+    // 回归防护：动作编辑区被 {#key actionEditorRevision} 包住，块内表达式被编译器整体
+    // untrack，只有 key 变化才重建。不递增 revision 时，清空后下拉框仍显示"自定义快捷键"、
+    // 录制器仍然存在（已用端到端复现），必须锁死这一点。
+    expect(instance.readRevision()).toBe(revisionBefore + 1);
   });
 
   it("accepts a bare key when it is not already taken", () => {
