@@ -124,13 +124,22 @@ $signingNote = if ($RequireTrustedSignature) {
 } else {
   "- The executable, helper, and installer are unsigned; Windows may show an unknown-publisher or SmartScreen warning."
 }
+# Promote 会复用同一份 $notes，因此状态行必须随操作切换：转正后若仍写着
+# "This pre-release is intended for ... before promoted to a stable release"，
+# 说明与状态自相矛盾。
+$statusLine = if ($Promote) {
+  "- Stable release. The assets are unchanged from the accepted pre-release; nothing was rebuilt or re-uploaded."
+} else {
+  "- This pre-release is intended for download, installation, portable, and uninstall acceptance before the same immutable assets are promoted to a stable release."
+}
+
 $notes = @"
 Convenient Window Desktop $($manifest.version) for Windows 11 x64.
 
 - Per-user NSIS installer and portable ZIP are built from public source commit $head.
 - SHA-256 values are recorded in SHA256SUMS and artifact-manifest.json.
 $signingNote
-- This pre-release is intended for download, installation, portable, and uninstall acceptance before the same immutable assets are promoted to a stable release.
+$statusLine
 "@
 
 if ($DryRun) {
@@ -157,10 +166,16 @@ $release = $null
 try {
   if ($Promote) {
     $release = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "$api/releases/tags/$tag"
-    if (-not $release.prerelease -or $release.draft) { throw "$tag is not an active pre-release" }
+    if ($release.draft) { throw "$tag is still a draft" }
     if ([string]$release.target_commitish -ne $head) { throw "$tag does not target the current main commit" }
     Assert-RemoteAssets -Release $release -ExpectedFiles $releaseFiles
-    $payload = @{ prerelease = $false; draft = $false; make_latest = "true" } | ConvertTo-Json
+    # 只改状态与文案，不上传、不替换任何资产。
+    $payload = @{
+      prerelease = $false
+      draft = $false
+      make_latest = "true"
+      body = $notes
+    } | ConvertTo-Json
     $release = Invoke-RestMethod -UseBasicParsing -Method Patch -Headers $headers -ContentType "application/json" -Body $payload -Uri "$api/releases/$($release.id)"
     Write-Output "Promoted without replacing assets: $($release.html_url)"
     return
