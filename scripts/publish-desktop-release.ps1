@@ -124,6 +124,19 @@ $signingNote = if ($RequireTrustedSignature) {
 } else {
   "- The executable, helper, and installer are unsigned; Windows may show an unknown-publisher or SmartScreen warning."
 }
+# 用户可见的更新说明单独放在 docs/release-notes/<version>.md，由脚本嵌入 Release 正文。
+# 这样发版时只需写一次该文件，Pre-release、转正和后续复核都会带上同一份说明；
+# 文件缺失时给出显式提示而不是静默漏掉（0.6.0 首次发布就因为说明只写在内部文档里、
+# 没有进 Release 正文而被指出）。
+$releaseNotesPath = Join-Path $repoRoot "docs\release-notes\$($manifest.version).md"
+if (Test-Path -LiteralPath $releaseNotesPath) {
+  $releaseNotes = (Get-Content -LiteralPath $releaseNotesPath -Raw -Encoding utf8).Trim()
+  $whatsNewSection = "## What's new`n`n$releaseNotes"
+} else {
+  Write-Warning "Release notes are missing: $releaseNotesPath（Release 正文将缺少用户可见的更新说明）"
+  $whatsNewSection = "## What's new`n`n- (no user-visible changes recorded for this version)"
+}
+
 # Promote 会复用同一份 $notes，因此状态行必须随操作切换：转正后若仍写着
 # "This pre-release is intended for ... before promoted to a stable release"，
 # 说明与状态自相矛盾。
@@ -135,6 +148,10 @@ $statusLine = if ($Promote) {
 
 $notes = @"
 Convenient Window Desktop $($manifest.version) for Windows 11 x64.
+
+$whatsNewSection
+
+## Assets
 
 - Per-user NSIS installer and portable ZIP are built from public source commit $head.
 - SHA-256 values are recorded in SHA256SUMS and artifact-manifest.json.
