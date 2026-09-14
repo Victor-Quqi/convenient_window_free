@@ -41,49 +41,68 @@ $sourceStatus = @(Get-SourceChanges)
 $helperToolchain = (Get-Content (Join-Path $repoRoot "rust-toolchain") -Raw).Trim()
 $desktopToolchain = "1.96.0-x86_64-pc-windows-msvc"
 
+# 在 $ErrorActionPreference = "Stop" 下，PowerShell 5.1 会把原生命令（cargo、rustup、npm、node）
+# 写在 stderr 的任何输出包装成 NativeCommandError 并当作终止错误抛出 —— 即使该命令的退出码是 0。
+# cargo 的编译进度、npm 的警告都会走 stderr，所以直接 `& cmd` 会在第一次真正干活时就中断脚本。
+# 统一通过这个包装调用：临时放宽为 Continue，只用退出码判断成败。
+function Invoke-Native {
+  param(
+    [Parameter(Mandatory = $true)][string]$Command,
+    [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
+  )
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    & $Command @Arguments
+    return $LASTEXITCODE
+  } finally {
+    $ErrorActionPreference = $previous
+  }
+}
+
 . (Join-Path $PSScriptRoot "windows-toolchain.ps1")
 Initialize-MsvcEnvironment
 $buildEnvironmentPath = $env:PATH
 
-& npm --prefix $desktopDir ci
-if ($LASTEXITCODE -ne 0) { throw "desktop npm ci failed with exit code $LASTEXITCODE" }
-& node (Join-Path $PSScriptRoot "generate-third-party-notices.mjs") $thirdPartyNotices
-if ($LASTEXITCODE -ne 0) { throw "third-party notice generation failed with exit code $LASTEXITCODE" }
-& (Join-Path $PSScriptRoot "prepare-desktop-sidecar.ps1")
-if ($LASTEXITCODE -ne 0) { throw "sidecar preparation failed with exit code $LASTEXITCODE" }
+$exitCode = Invoke-Native npm --prefix $desktopDir ci
+if ($exitCode -ne 0) { throw "desktop npm ci failed with exit code $exitCode" }
+$exitCode = Invoke-Native node (Join-Path $PSScriptRoot "generate-third-party-notices.mjs") $thirdPartyNotices
+if ($exitCode -ne 0) { throw "third-party notice generation failed with exit code $exitCode" }
+$exitCode = Invoke-Native (Join-Path $PSScriptRoot "prepare-desktop-sidecar.ps1")
+if ($exitCode -ne 0) { throw "sidecar preparation failed with exit code $exitCode" }
 $env:PATH = $buildEnvironmentPath
 Remove-Item Env:RUSTC -ErrorAction SilentlyContinue
 Remove-Item Env:CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER -ErrorAction SilentlyContinue
 
-& npm --prefix $desktopDir test
-if ($LASTEXITCODE -ne 0) { throw "desktop tests failed with exit code $LASTEXITCODE" }
-& npm --prefix $desktopDir run check
-if ($LASTEXITCODE -ne 0) { throw "desktop check failed with exit code $LASTEXITCODE" }
-& npm --prefix $desktopDir run build
-if ($LASTEXITCODE -ne 0) { throw "desktop frontend build failed with exit code $LASTEXITCODE" }
+$exitCode = Invoke-Native npm --prefix $desktopDir test
+if ($exitCode -ne 0) { throw "desktop tests failed with exit code $exitCode" }
+$exitCode = Invoke-Native npm --prefix $desktopDir run check
+if ($exitCode -ne 0) { throw "desktop check failed with exit code $exitCode" }
+$exitCode = Invoke-Native npm --prefix $desktopDir run build
+if ($exitCode -ne 0) { throw "desktop frontend build failed with exit code $exitCode" }
 
 Push-Location (Join-Path $repoRoot "helper")
 try {
-  & rustup run $helperToolchain cargo fmt --check
-  if ($LASTEXITCODE -ne 0) { throw "helper rustfmt failed with exit code $LASTEXITCODE" }
-  & rustup run $helperToolchain cargo test
-  if ($LASTEXITCODE -ne 0) { throw "helper tests failed with exit code $LASTEXITCODE" }
+  $exitCode = Invoke-Native rustup run $helperToolchain cargo fmt --check
+  if ($exitCode -ne 0) { throw "helper rustfmt failed with exit code $exitCode" }
+  $exitCode = Invoke-Native rustup run $helperToolchain cargo test
+  if ($exitCode -ne 0) { throw "helper tests failed with exit code $exitCode" }
 } finally {
   Pop-Location
 }
 
 Push-Location $tauriDir
 try {
-  & rustup run $desktopToolchain cargo fmt --check
-  if ($LASTEXITCODE -ne 0) { throw "desktop rustfmt failed with exit code $LASTEXITCODE" }
-  & rustup run $desktopToolchain cargo test
-  if ($LASTEXITCODE -ne 0) { throw "desktop Rust tests failed with exit code $LASTEXITCODE" }
+  $exitCode = Invoke-Native rustup run $desktopToolchain cargo fmt --check
+  if ($exitCode -ne 0) { throw "desktop rustfmt failed with exit code $exitCode" }
+  $exitCode = Invoke-Native rustup run $desktopToolchain cargo test
+  if ($exitCode -ne 0) { throw "desktop Rust tests failed with exit code $exitCode" }
 } finally {
   Pop-Location
 }
 
-& npm --prefix $desktopDir run tauri:build
-if ($LASTEXITCODE -ne 0) { throw "Tauri NSIS build failed with exit code $LASTEXITCODE" }
+$exitCode = Invoke-Native npm --prefix $desktopDir run tauri:build
+if ($exitCode -ne 0) { throw "Tauri NSIS build failed with exit code $exitCode" }
 
 $releaseDir = Join-Path $tauriDir "target\release"
 $appExe = Join-Path $releaseDir "convenient-window.exe"
