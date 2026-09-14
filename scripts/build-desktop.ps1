@@ -44,16 +44,23 @@ $desktopToolchain = "1.96.0-x86_64-pc-windows-msvc"
 # 在 $ErrorActionPreference = "Stop" 下，PowerShell 5.1 会把原生命令（cargo、rustup、npm、node）
 # 写在 stderr 的任何输出包装成 NativeCommandError 并当作终止错误抛出 —— 即使该命令的退出码是 0。
 # cargo 的编译进度、npm 的警告都会走 stderr，所以直接 `& cmd` 会在第一次真正干活时就中断脚本。
-# 统一通过这个包装调用：临时放宽为 Continue，只用退出码判断成败。
+#
+# 统一通过这个包装调用，两个细节都不能省：
+#   1. 临时把 ErrorActionPreference 放宽为 Continue，只用退出码判断成败；
+#   2. 参数用**数组**传入，不能用 ValueFromRemainingArguments —— 否则 PowerShell 的参数绑定器
+#      会把 `-e`、`-p` 这类短选项当成自身参数的简写（例如 node -e 会撞上 -ErrorAction 而报
+#      "parameter name 'e' is ambiguous"）。
+# 另外 `return $LASTEXITCODE` 前必须把命令输出交给 Out-Host：PowerShell 函数会把所有未捕获
+# 输出并入返回值，否则调用方拿到的不是数字而是被 stdout 污染的对象。
 function Invoke-Native {
-  param(
-    [Parameter(Mandatory = $true)][string]$Command,
-    [Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments
-  )
+  param([Parameter(Mandatory = $true)][string[]]$CommandLine)
   $previous = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
   try {
-    & $Command @Arguments
+    $executable = $CommandLine[0]
+    $arguments = @()
+    if ($CommandLine.Count -gt 1) { $arguments = $CommandLine[1..($CommandLine.Count - 1)] }
+    & $executable @arguments 2>&1 | Out-Host
     return $LASTEXITCODE
   } finally {
     $ErrorActionPreference = $previous
@@ -64,28 +71,28 @@ function Invoke-Native {
 Initialize-MsvcEnvironment
 $buildEnvironmentPath = $env:PATH
 
-$exitCode = Invoke-Native npm --prefix $desktopDir ci
+$exitCode = Invoke-Native @("npm", "--prefix", $desktopDir, "ci")
 if ($exitCode -ne 0) { throw "desktop npm ci failed with exit code $exitCode" }
-$exitCode = Invoke-Native node (Join-Path $PSScriptRoot "generate-third-party-notices.mjs") $thirdPartyNotices
+$exitCode = Invoke-Native @("node", (Join-Path $PSScriptRoot "generate-third-party-notices.mjs"), $thirdPartyNotices)
 if ($exitCode -ne 0) { throw "third-party notice generation failed with exit code $exitCode" }
-$exitCode = Invoke-Native (Join-Path $PSScriptRoot "prepare-desktop-sidecar.ps1")
+$exitCode = Invoke-Native @((Join-Path $PSScriptRoot "prepare-desktop-sidecar.ps1"))
 if ($exitCode -ne 0) { throw "sidecar preparation failed with exit code $exitCode" }
 $env:PATH = $buildEnvironmentPath
 Remove-Item Env:RUSTC -ErrorAction SilentlyContinue
 Remove-Item Env:CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER -ErrorAction SilentlyContinue
 
-$exitCode = Invoke-Native npm --prefix $desktopDir test
+$exitCode = Invoke-Native @("npm", "--prefix", $desktopDir, "test")
 if ($exitCode -ne 0) { throw "desktop tests failed with exit code $exitCode" }
-$exitCode = Invoke-Native npm --prefix $desktopDir run check
+$exitCode = Invoke-Native @("npm", "--prefix", $desktopDir, "run", "check")
 if ($exitCode -ne 0) { throw "desktop check failed with exit code $exitCode" }
-$exitCode = Invoke-Native npm --prefix $desktopDir run build
+$exitCode = Invoke-Native @("npm", "--prefix", $desktopDir, "run", "build")
 if ($exitCode -ne 0) { throw "desktop frontend build failed with exit code $exitCode" }
 
 Push-Location (Join-Path $repoRoot "helper")
 try {
-  $exitCode = Invoke-Native rustup run $helperToolchain cargo fmt --check
+  $exitCode = Invoke-Native @("rustup", "run", $helperToolchain, "cargo", "fmt", "--check")
   if ($exitCode -ne 0) { throw "helper rustfmt failed with exit code $exitCode" }
-  $exitCode = Invoke-Native rustup run $helperToolchain cargo test
+  $exitCode = Invoke-Native @("rustup", "run", $helperToolchain, "cargo", "test")
   if ($exitCode -ne 0) { throw "helper tests failed with exit code $exitCode" }
 } finally {
   Pop-Location
@@ -93,15 +100,15 @@ try {
 
 Push-Location $tauriDir
 try {
-  $exitCode = Invoke-Native rustup run $desktopToolchain cargo fmt --check
+  $exitCode = Invoke-Native @("rustup", "run", $desktopToolchain, "cargo", "fmt", "--check")
   if ($exitCode -ne 0) { throw "desktop rustfmt failed with exit code $exitCode" }
-  $exitCode = Invoke-Native rustup run $desktopToolchain cargo test
+  $exitCode = Invoke-Native @("rustup", "run", $desktopToolchain, "cargo", "test")
   if ($exitCode -ne 0) { throw "desktop Rust tests failed with exit code $exitCode" }
 } finally {
   Pop-Location
 }
 
-$exitCode = Invoke-Native npm --prefix $desktopDir run tauri:build
+$exitCode = Invoke-Native @("npm", "--prefix", $desktopDir, "run", "tauri:build")
 if ($exitCode -ne 0) { throw "Tauri NSIS build failed with exit code $exitCode" }
 
 $releaseDir = Join-Path $tauriDir "target\release"
