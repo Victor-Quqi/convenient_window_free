@@ -40,7 +40,16 @@ if (-not (Test-Path $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER)) {
 if (-not $SkipBuild) {
   Push-Location $helperDir
   try {
-    & $cargoExe build --release
+    # cargo 把编译进度写在 stderr。在 $ErrorActionPreference = "Stop" 下，PowerShell 5.1 会把
+    # 原生命令的任何 stderr 输出包装成 NativeCommandError 并当作终止错误抛出，于是脚本会在
+    # 第一次真正编译时中断（即使 cargo 的退出码是 0）。这里临时放宽，改用退出码判断成败。
+    $previousErrorActionPreference = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+      & $cargoExe build --release
+    } finally {
+      $ErrorActionPreference = $previousErrorActionPreference
+    }
     if ($LASTEXITCODE -ne 0) { throw "helper cargo build failed with exit code $LASTEXITCODE" }
   } finally {
     Pop-Location
