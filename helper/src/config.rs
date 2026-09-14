@@ -91,6 +91,7 @@ impl AppConfig {
             normalized_drag_modifiers(self.window_drag.move_modifiers);
         self.window_drag.resize_modifiers =
             normalized_drag_modifiers(self.window_drag.resize_modifiers);
+        self.window_drag.paused_apps = normalized_string_list(self.window_drag.paused_apps);
         if source_schema_version < 5 {
             migrate_circle_topmost_action(&mut self.mouse_gestures.gestures);
         }
@@ -502,6 +503,10 @@ pub struct WindowDragConfig {
     pub move_button: MouseButton,
     #[serde(default = "default_resize_button")]
     pub resize_button: MouseButton,
+    /// 命中这些程序时完全不接管拖拽/缩放，让 Alt + 鼠标的组合键留给目标软件。
+    /// 与鼠标手势、贴边隐藏的同类名单语义一致：按进程名、窗口标题或窗口类名做包含匹配。
+    #[serde(default)]
+    pub paused_apps: Vec<String>,
 }
 
 impl Default for WindowDragConfig {
@@ -512,6 +517,7 @@ impl Default for WindowDragConfig {
             resize_modifiers: default_drag_modifiers(),
             move_button: MouseButton::Left,
             resize_button: default_resize_button(),
+            paused_apps: Vec::new(),
         }
     }
 }
@@ -986,6 +992,7 @@ mod tests {
             "sensitivity": config.mouse_gestures.sensitivity,
             "gesturePausedApps": config.mouse_gestures.paused_apps,
             "windowDragEnabled": config.window_drag.enabled,
+            "windowDragPausedApps": config.window_drag.paused_apps,
             "moveModifiers": config.window_drag.move_modifiers,
             "resizeModifiers": config.window_drag.resize_modifiers,
             "topmostPinEnabled": config.topmost_pin.enabled,

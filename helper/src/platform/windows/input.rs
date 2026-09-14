@@ -195,6 +195,18 @@ pub fn take_window_drag_capture() -> Option<WindowDragCapture> {
     Some(capture)
 }
 
+/// 放弃本次拖拽捕获，但**不**吞掉后续的按键抬起。
+///
+/// 用于应用名单命中：此时 helper 决定完全不接管，那这次 `Alt + 鼠标` 的按下与抬起
+/// 都必须原样送到目标程序，否则目标程序会收到「只按下、没有抬起」的错配状态，
+/// 对设计软件来说等于鼠标键卡住。与 `cancel_window_drag_capture` 的区别就在于此：
+/// 后者用于「已经接管、现在要中止」，需要自己吞掉抬起避免产生多余点击。
+pub fn discard_window_drag_capture() {
+    if let Ok(mut state) = window_drag_state().lock() {
+        state.capture = None;
+    }
+}
+
 pub fn cancel_window_drag_capture() {
     if let Ok(mut state) = window_drag_state().lock() {
         if let Some((_, button)) = state.capture.take() {
@@ -647,5 +659,65 @@ mod tests {
     fn driver_injected_events_are_accepted_when_they_are_not_ours() {
         EXPECTED_HELPER_INJECTED_EVENTS.store(0, Ordering::Release);
         assert!(!should_ignore_injected_event(LLMHF_INJECTED, 0));
+    }
+
+    /// 这些用例会读写全局 hook 状态，用同一把锁串行化，避免与并行用例互相干扰。
+    fn capture_state_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn seeded_capture(sequence: u64) -> WindowDragCapture {
+        WindowDragCapture {
+            sequence,
+            mode: WindowDragMode::Move,
+            start: Point { x: 10, y: 10 },
+            current: Point { x: 20, y: 20 },
+            finished: false,
+        }
+    }
+
+    #[test]
+    fn discarding_a_capture_does_not_swallow_the_pending_release() {
+        // 应用名单命中时 helper 完全不接管，按下与抬起都必须原样送到目标程序。
+        // 若这里改用 cancel_window_drag_capture，按下是送到的（take 阶段不吞），
+        // 抬起却会被 suppress 位吞掉，目标程序就会停在「鼠标键一直按住」的状态。
+        let _guard = capture_state_lock();
+        let (sequence, button) = (4_242, MouseButton::Left);
+
+        SUPPRESSED_WINDOW_DRAG_UPS.store(0, Ordering::Release);
+        window_drag_state().lock().unwrap().capture = Some((seeded_capture(sequence), button));
+        discard_window_drag_capture();
+
+        assert!(
+            window_drag_state().lock().unwrap().capture.is_none(),
+            "discard 必须清掉捕获，否则下一次 take 会把已放弃的拖拽重新交给控制器"
+        );
+        assert_eq!(
+            SUPPRESSED_WINDOW_DRAG_UPS.load(Ordering::Acquire) & mouse_button_bit(button),
+            0,
+            "discard 不得置 suppress 位，否则抬起会被吞掉"
+        );
+    }
+
+    #[test]
+    fn cancelling_a_capture_still_swallows_the_release() {
+        // 对照：已经接管的拖拽被中止时，必须吞掉抬起，否则会在目标程序留下一次多余点击。
+        let _guard = capture_state_lock();
+        let (sequence, button) = (4_243, MouseButton::Left);
+
+        SUPPRESSED_WINDOW_DRAG_UPS.store(0, Ordering::Release);
+        window_drag_state().lock().unwrap().capture = Some((seeded_capture(sequence), button));
+        cancel_window_drag_capture();
+
+        assert!(window_drag_state().lock().unwrap().capture.is_none());
+        assert_ne!(
+            SUPPRESSED_WINDOW_DRAG_UPS.load(Ordering::Acquire) & mouse_button_bit(button),
+            0,
+            "cancel 必须置 suppress 位以吞掉抬起"
+        );
+        SUPPRESSED_WINDOW_DRAG_UPS.store(0, Ordering::Release);
     }
 }

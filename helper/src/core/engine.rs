@@ -399,8 +399,24 @@ impl Engine {
             return WindowDragActivity::default();
         };
         if controller.sequence() != Some(capture.sequence) {
+            if controller.rejects(capture.sequence) {
+                // 本次按下已被应用名单拒绝，同序号的高频移动直接跳过。
+                return WindowDragActivity::default();
+            }
             match platform::draggable_window_at(capture.start) {
-                Ok(Some(window)) => controller.start(capture, &window),
+                Ok(Some(window)) => {
+                    // 应用名单：命中时完全不接管，让 Alt + 鼠标的组合键留给目标软件
+                    // （设计软件常用 Alt+左键/右键，接管会把整个窗口拖走）。
+                    // 判定用鼠标下的目标窗口，与"拖的是谁就查谁"的语义一致。
+                    if blocks_window_drag(&config.window_drag.paused_apps, &window) {
+                        controller.reject(capture.sequence);
+                        // 不接管就当作没看见：用 discard 而不是 cancel，后者会吞掉按键抬起，
+                        // 让目标程序收到「只按下、没有抬起」的错配状态。
+                        platform::discard_window_drag_capture();
+                        return WindowDragActivity::default();
+                    }
+                    controller.start(capture, &window);
+                }
                 Ok(None) => {
                     platform::cancel_window_drag_capture();
                     return WindowDragActivity::default();
@@ -890,6 +906,14 @@ fn is_paused_app(paused_apps: &[String], window: &platform::WindowInfo) -> bool 
         !item.is_empty()
             && (process.contains(&item) || title.contains(&item) || class_name.contains(&item))
     })
+}
+
+/// 拖拽与缩放的应用名单判定。命中时完全不接管捕获，让 `Alt + 鼠标` 原样留给目标程序
+/// （设计软件普遍用这组组合键，接管会把整个窗口拖走）。
+///
+/// 判定对象是**鼠标下的目标窗口**而不是前台窗口：拖的是谁就查谁，语义与功能一致。
+fn blocks_window_drag(paused_apps: &[String], window: &platform::WindowInfo) -> bool {
+    is_paused_app(paused_apps, window)
 }
 
 fn is_fullscreen_window(window: &platform::WindowInfo, monitors: &[platform::Monitor]) -> bool {
@@ -1398,5 +1422,69 @@ mod tests {
         window.class_name = "WorkerW".into();
         window.process_name = "explorer.exe".into();
         assert!(!is_fullscreen_window(&window, &[monitor]));
+    }
+
+    fn named_window(process: &str, title: &str, class_name: &str) -> platform::WindowInfo {
+        platform::WindowInfo {
+            handle: platform::WindowHandle(1),
+            rect: Rect {
+                left: 0,
+                top: 0,
+                right: 800,
+                bottom: 600,
+            },
+            title: title.into(),
+            class_name: class_name.into(),
+            process_name: process.into(),
+            maximized: false,
+            transient: false,
+            arranged: false,
+            topmost: false,
+        }
+    }
+
+    #[test]
+    fn window_drag_paused_apps_match_process_title_or_class() {
+        // 名单语义与鼠标手势、贴边隐藏一致：进程名、窗口标题、窗口类名任一命中即屏蔽。
+        // 大小写不敏感，忽略空白，空项不命中任何窗口。
+        let by_process = vec!["photoshop.exe".to_string()];
+        assert!(blocks_window_drag(
+            &by_process,
+            &named_window("Photoshop.exe", "未命名-1", "Photoshop")
+        ));
+        assert!(!blocks_window_drag(
+            &by_process,
+            &named_window("notepad.exe", "无标题", "Notepad")
+        ));
+
+        let by_title = vec!["illustrator".to_string()];
+        assert!(blocks_window_drag(
+            &by_title,
+            &named_window("unknown.exe", "Adobe Illustrator 2024", "SomeClass")
+        ));
+
+        let by_class = vec!["blender".to_string()];
+        assert!(blocks_window_drag(
+            &by_class,
+            &named_window("unknown.exe", "无标题", "BlenderWindow")
+        ));
+
+        // 前后空白要被忽略，空字符串不得命中。
+        let padded = vec!["  sketchup.exe  ".to_string()];
+        assert!(blocks_window_drag(
+            &padded,
+            &named_window("SketchUp.exe", "模型", "SketchUp")
+        ));
+        let blank = vec!["   ".to_string(), String::new()];
+        assert!(!blocks_window_drag(
+            &blank,
+            &named_window("SketchUp.exe", "模型", "SketchUp")
+        ));
+
+        // 空名单表示不屏蔽任何应用，保持默认零影响。
+        assert!(!blocks_window_drag(
+            &[],
+            &named_window("photoshop.exe", "文档", "Photoshop")
+        ));
     }
 }

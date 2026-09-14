@@ -147,6 +147,8 @@ export interface WindowDragSettings {
   resizeModifiers: ModifierKey[];
   moveButton: MouseButton;
   resizeButton: MouseButton;
+  /** 命中这些程序时完全不接管拖拽/缩放，把 Alt + 鼠标的组合键留给目标软件。 */
+  pausedApps: string[];
 }
 
 export interface TopmostPinSettings {

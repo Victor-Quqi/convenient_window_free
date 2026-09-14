@@ -38,6 +38,7 @@ describe("normalizeSettings", () => {
       sensitivity: settings.mouseGestures.sensitivity,
       gesturePausedApps: settings.mouseGestures.pausedApps,
       windowDragEnabled: settings.windowDrag.enabled,
+      windowDragPausedApps: settings.windowDrag.pausedApps,
       moveModifiers: settings.windowDrag.moveModifiers,
       resizeModifiers: settings.windowDrag.resizeModifiers,
       topmostPinEnabled: settings.topmostPin.enabled,

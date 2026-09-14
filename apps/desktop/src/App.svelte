@@ -609,16 +609,20 @@
     persist("边条状态已更新");
   }
 
-  function addForeground(target: "hotzones" | "edge" | "gestures"): void {
+  function addForeground(target: "hotzones" | "edge" | "gestures" | "drag"): void {
     if (!foregroundApp) { lastMessage = "尚未获取到当前前台应用"; return; }
-    const list = target === "hotzones" ? settings.pausedApps : target === "edge" ? settings.edgeHide.excludedApps : settings.mouseGestures.pausedApps;
+    const list = target === "hotzones" ? settings.pausedApps
+      : target === "edge" ? settings.edgeHide.excludedApps
+      : target === "drag" ? settings.windowDrag.pausedApps
+      : settings.mouseGestures.pausedApps;
     if (!list.some((item) => item.toLowerCase() === foregroundApp.toLowerCase())) list.push(foregroundApp);
     persist(`已添加 ${foregroundApp}`);
   }
 
-  function removeApp(target: "hotzones" | "edge" | "gestures", app: string): void {
+  function removeApp(target: "hotzones" | "edge" | "gestures" | "drag", app: string): void {
     if (target === "hotzones") settings.pausedApps = settings.pausedApps.filter((item) => item !== app);
     else if (target === "edge") settings.edgeHide.excludedApps = settings.edgeHide.excludedApps.filter((item) => item !== app);
+    else if (target === "drag") settings.windowDrag.pausedApps = settings.windowDrag.pausedApps.filter((item) => item !== app);
     else settings.mouseGestures.pausedApps = settings.mouseGestures.pausedApps.filter((item) => item !== app);
     persist();
   }
@@ -1165,6 +1169,7 @@
                   <div><span><b>缩放窗口</b><small>默认 Alt + 右键</small></span><ModifierRecorder label="录制缩放窗口修饰键" value={settings.windowDrag.resizeModifiers} onChange={(value) => { settings.windowDrag.resizeModifiers = value; persist(); }} /><select aria-label="缩放窗口鼠标键" bind:value={settings.windowDrag.resizeButton} on:change={() => persist()}><option value="left">左键</option><option value="right">右键</option><option value="middle">中键</option><option value="x1">侧键 1</option><option value="x2">侧键 2</option></select></div>
                 </div>
                 {#if windowDragBindingConflict}<p class="gesture-warning">移动与缩放组合重复，请修改其中一项</p>{/if}
+                <div class="list-section drag-paused-apps"><div class="subhead"><div><h2>不接管拖拽与缩放的应用</h2><p>当前前台：{foregroundApp || "尚未获取"}</p></div><button class="quiet" on:click={() => addForeground("drag")} type="button">+ 添加当前应用</button></div><div class="app-list">{#each settings.windowDrag.pausedApps as app}<div><span>{app}</span><button aria-label={`移除 ${app}`} on:click={() => removeApp("drag", app)} type="button">×</button></div>{:else}<p class="empty">所有应用都会响应；设计软件等使用 Alt + 鼠标时可添加当前前台应用。</p>{/each}</div></div>
                 </div>
                 <div class="setting-title pin-setting"><div><h2>置顶小图钉</h2><p>跟随置顶窗口，点击即可取消置顶</p></div><label class="mini-switch"><input aria-label="启用置顶小图钉" bind:checked={settings.topmostPin.enabled} on:change={() => persist()} type="checkbox" /><span></span></label></div>
               {/if}

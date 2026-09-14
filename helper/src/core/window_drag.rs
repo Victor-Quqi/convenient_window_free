@@ -21,10 +21,14 @@ struct DragSession {
 #[derive(Default)]
 pub struct WindowDragController {
     session: Option<DragSession>,
+    /// 已被应用名单拦下的本次按下的序号。一次按下（一个 sequence）只需要判定一次，
+    /// 之后同序号的高频鼠标移动直接跳过，不必重复查询目标窗口。
+    rejected_sequence: Option<u64>,
 }
 
 impl WindowDragController {
     pub fn start(&mut self, capture: WindowDragCapture, window: &WindowInfo) {
+        self.rejected_sequence = None;
         self.session = Some(DragSession {
             sequence: capture.sequence,
             mode: capture.mode,
@@ -32,6 +36,15 @@ impl WindowDragController {
             start_cursor: capture.start,
             original_rect: window.rect,
         });
+    }
+
+    /// 记录本次按下已被应用名单拒绝，避免同一 sequence 反复查询目标窗口。
+    pub fn reject(&mut self, sequence: u64) {
+        self.rejected_sequence = Some(sequence);
+    }
+
+    pub fn rejects(&self, sequence: u64) -> bool {
+        self.rejected_sequence == Some(sequence)
     }
 
     pub fn sequence(&self) -> Option<u64> {
@@ -155,6 +168,7 @@ mod tests {
                     bottom: 800,
                 },
             }),
+            ..Default::default()
         };
         let update = controller
             .update(
@@ -200,5 +214,64 @@ mod tests {
         let rect = resized_rect(session, Point { x: 490, y: 390 });
         assert_eq!(rect.width(), 160);
         assert_eq!(rect.height(), 100);
+    }
+
+    fn test_window(handle: isize) -> WindowInfo {
+        WindowInfo {
+            handle: WindowHandle(handle),
+            rect: Rect {
+                left: 100,
+                top: 100,
+                right: 900,
+                bottom: 700,
+            },
+            title: "doc.psd".to_string(),
+            class_name: "Photoshop".to_string(),
+            process_name: "photoshop.exe".to_string(),
+            maximized: false,
+            transient: false,
+            arranged: false,
+            topmost: false,
+        }
+    }
+
+    fn test_capture(sequence: u64) -> WindowDragCapture {
+        WindowDragCapture {
+            sequence,
+            mode: WindowDragMode::Move,
+            start: Point { x: 300, y: 300 },
+            current: Point { x: 320, y: 320 },
+            finished: false,
+        }
+    }
+
+    #[test]
+    fn a_rejected_press_stays_rejected_and_never_starts_a_session() {
+        let mut controller = WindowDragController::default();
+        controller.reject(4);
+
+        // 同一按下的后续高频移动必须一直被跳过，而不是重新判定目标窗口。
+        assert!(controller.rejects(4));
+        // 未记录拒绝的其它按下不受影响。
+        assert!(!controller.rejects(5));
+        // 被拒绝的按下不会建立会话，所以拖拽始终不生效。
+        assert!(!controller.is_active());
+        assert_eq!(controller.sequence(), None);
+    }
+
+    #[test]
+    fn starting_a_session_clears_a_previous_rejection() {
+        let mut controller = WindowDragController::default();
+        controller.reject(4);
+        assert!(controller.rejects(4));
+
+        controller.start(test_capture(7), &test_window(1));
+        assert_eq!(controller.sequence(), Some(7));
+        assert!(controller.is_active());
+        // 名单被移除后（用户删掉了该应用）新的按下必须能正常开始拖拽。
+        assert!(!controller.rejects(4));
+
+        let update = controller.update(test_capture(7), false).unwrap();
+        assert_eq!(update.handle, WindowHandle(1));
     }
 }

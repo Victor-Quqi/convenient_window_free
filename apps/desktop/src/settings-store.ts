@@ -79,7 +79,8 @@ export const defaultSettings: AppSettings = {
     moveModifiers: ["alt"],
     resizeModifiers: ["alt"],
     moveButton: "left",
-    resizeButton: "right"
+    resizeButton: "right",
+    pausedApps: []
   },
   topmostPin: {
     enabled: true
@@ -384,7 +385,8 @@ function normalizeWindowDrag(value: unknown): AppSettings["windowDrag"] {
     moveModifiers: modifierList(raw.moveModifiers, defaultSettings.windowDrag.moveModifiers),
     resizeModifiers: modifierList(raw.resizeModifiers, defaultSettings.windowDrag.resizeModifiers),
     moveButton,
-    resizeButton
+    resizeButton,
+    pausedApps: stringList(raw.pausedApps)
   };
 }
 
@@ -523,7 +525,8 @@ function cloneSettings(settings: AppSettings): AppSettings {
     windowDrag: {
       ...settings.windowDrag,
       moveModifiers: [...settings.windowDrag.moveModifiers],
-      resizeModifiers: [...settings.windowDrag.resizeModifiers]
+      resizeModifiers: [...settings.windowDrag.resizeModifiers],
+      pausedApps: [...settings.windowDrag.pausedApps]
     },
     topmostPin: { ...settings.topmostPin },
     ocr: { ...settings.ocr },
