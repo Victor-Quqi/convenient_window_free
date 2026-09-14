@@ -23,18 +23,46 @@ $version = [string]$rootPackage.version
 if (-not $version -or $desktopPackage.version -ne $version -or $tauriConfig.version -ne $version) {
   throw "Desktop version mismatch: root=$($rootPackage.version), frontend=$($desktopPackage.version), tauri=$($tauriConfig.version)"
 }
-function Get-SourceChanges {
-  $unstaged = @(& git -C $repoRoot diff --name-only --)
-  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect unstaged source changes" }
-  $staged = @(& git -C $repoRoot diff --cached --name-only --)
-  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect staged source changes" }
-  $untracked = @(& git -C $repoRoot ls-files --others --exclude-standard)
-  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect untracked source files" }
-  return @($unstaged + $staged + $untracked | Sort-Object -Unique)
+# 捕获原生命令输出的版本（用于 git 这类需要读取 stdout 的调用）。
+# 同样必须临时放宽 ErrorActionPreference：git 在 stderr 上写的是 LF/CRLF 之类的**警告**，
+# 但在 Stop 模式下会被 PowerShell 当作终止错误抛出，让构建在读取工作树状态时就中断。
+# 过滤要点：必须先按记录类型打标再过滤 —— 直接 `"$_"` 会把 ErrorRecord 变成普通字符串，
+# 警告文本就混进返回值里，把「工作树是否干净」的判断污染掉。
+function Invoke-NativeCapture {
+  param([Parameter(Mandatory = $true)][string[]]$CommandLine)
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $executable = $CommandLine[0]
+    $arguments = @()
+    if ($CommandLine.Count -gt 1) { $arguments = $CommandLine[1..($CommandLine.Count - 1)] }
+    $tagged = & $executable @arguments 2>&1 | ForEach-Object {
+      if ($_ -is [System.Management.Automation.ErrorRecord]) {
+        [pscustomobject]@{ IsError = $true; Text = "$_" }
+      } else {
+        [pscustomobject]@{ IsError = $false; Text = "$_" }
+      }
+    }
+    return @($tagged | Where-Object { -not $_.IsError } | ForEach-Object { $_.Text })
+  } finally {
+    $ErrorActionPreference = $previous
+  }
 }
 
-$sourceCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
-if ($LASTEXITCODE -ne 0 -or $sourceCommit -notmatch '^[0-9a-f]{40}$') {
+function Get-SourceChanges {
+  $unstaged = @(Invoke-NativeCapture @("git", "-C", $repoRoot, "diff", "--name-only", "--"))
+  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect unstaged source changes" }
+  $staged = @(Invoke-NativeCapture @("git", "-C", $repoRoot, "diff", "--cached", "--name-only", "--"))
+  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect staged source changes" }
+  $untracked = @(Invoke-NativeCapture @("git", "-C", $repoRoot, "ls-files", "--others", "--exclude-standard"))
+  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect untracked source files" }
+  return @($unstaged + $staged + $untracked | Where-Object { $_ } | Sort-Object -Unique)
+}
+
+$sourceCommitOutput = Invoke-NativeCapture @("git", "-C", $repoRoot, "rev-parse", "HEAD")
+if ($LASTEXITCODE -ne 0) { throw "Unable to read the desktop source commit" }
+$sourceCommit = ([string]($sourceCommitOutput | Select-Object -First 1)).Trim()
+if ($sourceCommit -notmatch '^[0-9a-f]{40}$') {
   throw "Unable to read the desktop source commit"
 }
 $sourceStatus = @(Get-SourceChanges)
@@ -90,10 +118,26 @@ if ($exitCode -ne 0) { throw "desktop frontend build failed with exit code $exit
 
 Push-Location (Join-Path $repoRoot "helper")
 try {
-  $exitCode = Invoke-Native @("rustup", "run", $helperToolchain, "cargo", "fmt", "--check")
-  if ($exitCode -ne 0) { throw "helper rustfmt failed with exit code $exitCode" }
-  $exitCode = Invoke-Native @("rustup", "run", $helperToolchain, "cargo", "test")
-  if ($exitCode -ne 0) { throw "helper tests failed with exit code $exitCode" }
+  # helper/.cargo/config.toml 固定了 `[build] target = "x86_64-pc-windows-gnullvm"`，于是 cargo
+  # 总是带 --target 编译；此时 proc-macro 与 build script 也必须由**与该工具链一致**的 rustc
+  # 编译，否则报 E0461/E0463（couldn't find crate ... with expected target triple）。
+  # prepare-desktop-sidecar.ps1 会把 RUSTC 指向 gnullvm 的 rustc，但上面为了后续 MSVC 的 Tauri
+  # 构建把它清掉了。这里按需重新解析一次，用完即还原：只要 RUSTC 指向的工具链与
+  # $helperToolchain 不同，这段 Rust 验证就会失败。
+  $helperRustc = (& rustup which --toolchain $helperToolchain rustc).Trim()
+  if ($LASTEXITCODE -ne 0 -or -not (Test-Path $helperRustc)) {
+    throw "Rust toolchain is unavailable: $helperToolchain"
+  }
+  $previousRustc = $env:RUSTC
+  $env:RUSTC = $helperRustc
+  try {
+    $exitCode = Invoke-Native @("rustup", "run", $helperToolchain, "cargo", "fmt", "--check")
+    if ($exitCode -ne 0) { throw "helper rustfmt failed with exit code $exitCode" }
+    $exitCode = Invoke-Native @("rustup", "run", $helperToolchain, "cargo", "test")
+    if ($exitCode -ne 0) { throw "helper tests failed with exit code $exitCode" }
+  } finally {
+    if ($previousRustc) { $env:RUSTC = $previousRustc } else { Remove-Item Env:RUSTC -ErrorAction SilentlyContinue }
+  }
 } finally {
   Pop-Location
 }
