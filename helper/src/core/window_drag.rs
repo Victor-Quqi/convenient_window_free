@@ -21,8 +21,12 @@ struct DragSession {
 #[derive(Default)]
 pub struct WindowDragController {
     session: Option<DragSession>,
-    /// 已被应用名单拦下的本次按下的序号。一次按下（一个 sequence）只需要判定一次，
-    /// 之后同序号的高频鼠标移动直接跳过，不必重复查询目标窗口。
+    /// 曾被应用名单拦下的本次按下的序号。
+    ///
+    /// 判定后来前移到了 `platform::draggable_window_at`（必须在摘除最大化状态之前做，
+    /// 否则命中名单的窗口已经被摘下来了），因此生产路径不再写入这个字段；
+    /// 保留它是为了让控制器层面的拒绝语义仍有测试覆盖。
+    #[cfg_attr(not(test), allow(dead_code))]
     rejected_sequence: Option<u64>,
 }
 
@@ -39,10 +43,12 @@ impl WindowDragController {
     }
 
     /// 记录本次按下已被应用名单拒绝，避免同一 sequence 反复查询目标窗口。
+    #[cfg(test)]
     pub fn reject(&mut self, sequence: u64) {
         self.rejected_sequence = Some(sequence);
     }
 
+    #[cfg(test)]
     pub fn rejects(&self, sequence: u64) -> bool {
         self.rejected_sequence == Some(sequence)
     }

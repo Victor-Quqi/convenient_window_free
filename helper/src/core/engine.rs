@@ -900,10 +900,12 @@ fn is_paused_app(paused_apps: &[String], window: &platform::WindowInfo) -> bool 
     })
 }
 
-/// 拖拽与缩放的应用名单判定。命中时完全不接管捕获，让 `Alt + 鼠标` 原样留给目标程序
-/// （设计软件普遍用这组组合键，接管会把整个窗口拖走）。
+/// 拖拽与缩放的应用名单判定的测试入口。
 ///
-/// 判定对象是**鼠标下的目标窗口**而不是前台窗口：拖的是谁就查谁，语义与功能一致。
+/// 生产路径的判定已经前移到 `platform::draggable_window_at` —— 它必须在摘除最大化状态
+/// **之前**执行，否则命中名单的窗口已经被摘成浮动小窗（这是 0.6.0 用户反馈的缺陷）。
+/// 这里保留一个转发，让引擎侧的名单语义仍有测试覆盖，并与平台层实现保持单一真相。
+#[cfg(test)]
 fn blocks_window_drag(paused_apps: &[String], window: &platform::WindowInfo) -> bool {
     platform::is_paused_window(paused_apps, window)
 }
