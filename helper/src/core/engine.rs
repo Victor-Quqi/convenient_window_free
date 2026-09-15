@@ -403,22 +403,14 @@ impl Engine {
                 // 本次按下已被应用名单拒绝，同序号的高频移动直接跳过。
                 return WindowDragActivity::default();
             }
-            match platform::draggable_window_at(capture.start) {
+            // 应用名单在 draggable_window_at 内部、且在摘除最大化状态之前就已判定，
+            // 所以这里拿到的 None 既包含"不可拖拽的窗口"，也包含"命中名单的应用"。
+            match platform::draggable_window_at(capture.start, &config.window_drag.paused_apps) {
                 Ok(Some(window)) => {
-                    // 应用名单：命中时完全不接管，让 Alt + 鼠标的组合键留给目标软件
-                    // （设计软件常用 Alt+左键/右键，接管会把整个窗口拖走）。
-                    // 判定用鼠标下的目标窗口，与"拖的是谁就查谁"的语义一致。
-                    if blocks_window_drag(&config.window_drag.paused_apps, &window) {
-                        controller.reject(capture.sequence);
-                        // 不接管就当作没看见：用 discard 而不是 cancel，后者会吞掉按键抬起，
-                        // 让目标程序收到「只按下、没有抬起」的错配状态。
-                        platform::discard_window_drag_capture();
-                        return WindowDragActivity::default();
-                    }
                     controller.start(capture, &window);
                 }
                 Ok(None) => {
-                    platform::cancel_window_drag_capture();
+                    platform::discard_window_drag_capture();
                     return WindowDragActivity::default();
                 }
                 Err(error) => {
@@ -913,7 +905,7 @@ fn is_paused_app(paused_apps: &[String], window: &platform::WindowInfo) -> bool 
 ///
 /// 判定对象是**鼠标下的目标窗口**而不是前台窗口：拖的是谁就查谁，语义与功能一致。
 fn blocks_window_drag(paused_apps: &[String], window: &platform::WindowInfo) -> bool {
-    is_paused_app(paused_apps, window)
+    platform::is_paused_window(paused_apps, window)
 }
 
 fn is_fullscreen_window(window: &platform::WindowInfo, monitors: &[platform::Monitor]) -> bool {

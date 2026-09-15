@@ -83,7 +83,13 @@ pub fn window_info_for_handle(handle: WindowHandle) -> Result<Option<WindowInfo>
     window_info(HWND(handle.0 as *mut core::ffi::c_void))
 }
 
-pub fn draggable_window_at(point: Point) -> Result<Option<WindowInfo>> {
+/// 找出鼠标下可用于拖拽的窗口。
+///
+/// 应用名单必须在这里、且在 `SW_RESTORE` **之前**判定：命中名单时要让目标程序自己处理
+/// `Alt + 鼠标`，如果先把最大化的窗口摘下来再发现应该放手，窗口状态已经被改掉，
+/// 用户看到的就是「名单似乎没生效，窗口还是从全屏缩回了小窗」。
+/// 名单为空时不做额外查询，保持默认路径的行为与开销不变。
+pub fn draggable_window_at(point: Point, paused_apps: &[String]) -> Result<Option<WindowInfo>> {
     let hwnd = unsafe {
         GetAncestor(
             WindowFromPoint(POINT {
@@ -106,6 +112,9 @@ pub fn draggable_window_at(point: Point) -> Result<Option<WindowInfo>> {
     {
         return Ok(None);
     }
+    if is_paused_window(paused_apps, &window) {
+        return Ok(None);
+    }
     if window.maximized {
         unsafe {
             let _ = ShowWindow(hwnd, SW_RESTORE);
@@ -116,6 +125,22 @@ pub fn draggable_window_at(point: Point) -> Result<Option<WindowInfo>> {
         };
     }
     Ok(Some(window))
+}
+
+/// 与 `core::engine` 的应用名单语义保持一致：按进程名、窗口标题或窗口类名做小写包含匹配，
+/// 命中任一项即视为该窗口属于名单内的应用。
+pub fn is_paused_window(paused_apps: &[String], window: &WindowInfo) -> bool {
+    if paused_apps.is_empty() {
+        return false;
+    }
+    let process = window.process_name.to_lowercase();
+    let title = window.title.to_lowercase();
+    let class_name = window.class_name.to_lowercase();
+    paused_apps.iter().any(|item| {
+        let item = item.trim().to_lowercase();
+        !item.is_empty()
+            && (process.contains(&item) || title.contains(&item) || class_name.contains(&item))
+    })
 }
 
 fn window_covers_monitor(hwnd: HWND, rect: AppRect) -> bool {
@@ -441,5 +466,73 @@ mod tests {
             0
         );
         let _ = unsafe { DestroyWindow(hwnd) };
+    }
+
+    fn named_window(process: &str, title: &str, class_name: &str) -> WindowInfo {
+        WindowInfo {
+            handle: WindowHandle(1),
+            rect: AppRect {
+                left: 0,
+                top: 0,
+                right: 800,
+                bottom: 600,
+            },
+            title: title.into(),
+            class_name: class_name.into(),
+            process_name: process.into(),
+            maximized: false,
+            transient: false,
+            arranged: false,
+            topmost: false,
+        }
+    }
+
+    /// 名单匹配必须发生在 `draggable_window_at` 摘除最大化状态**之前**。
+    ///
+    /// 回归背景：名单检查原先放在引擎侧、`SW_RESTORE` 之后，于是即使命中名单，
+    /// 最大化窗口也已经被摘成浮动小窗 —— 用户看到的是「加了名单窗口还是从全屏缩回了小窗」，
+    /// 而关闭拖拽功能（那条路径在摘除前就返回）却一切正常。修法是把判定前移进本函数。
+    /// 这条测试保证判定函数本身正确；顺序约束同时写在上面的函数文档里。
+    #[test]
+    fn paused_apps_match_process_title_or_class_and_keep_the_rest_untouched() {
+        let by_process = vec!["photoshop.exe".to_string()];
+        assert!(is_paused_window(
+            &by_process,
+            &named_window("Photoshop.exe", "未命名-1", "Photoshop")
+        ));
+        assert!(!is_paused_window(
+            &by_process,
+            &named_window("notepad.exe", "无标题", "Notepad")
+        ));
+
+        let by_title = vec!["illustrator".to_string()];
+        assert!(is_paused_window(
+            &by_title,
+            &named_window("unknown.exe", "Adobe Illustrator 2024", "SomeClass")
+        ));
+
+        let by_class = vec!["blender".to_string()];
+        assert!(is_paused_window(
+            &by_class,
+            &named_window("unknown.exe", "无标题", "BlenderWindow")
+        ));
+
+        // 前后空白要被忽略；空项不得命中任何窗口。
+        let padded = vec!["  sketchup.exe  ".to_string()];
+        assert!(is_paused_window(
+            &padded,
+            &named_window("SketchUp.exe", "模型", "SketchUp")
+        ));
+        let blank = vec!["   ".to_string(), String::new()];
+        assert!(!is_paused_window(
+            &blank,
+            &named_window("SketchUp.exe", "模型", "SketchUp")
+        ));
+
+        // 空名单必须完全不命中，保证默认路径零影响。
+        assert!(!is_paused_window(
+            &[],
+            &named_window("photoshop.exe", "文档", "Photoshop")
+        ));
     }
 }
