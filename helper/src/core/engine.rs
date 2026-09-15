@@ -399,12 +399,11 @@ impl Engine {
             return WindowDragActivity::default();
         };
         if controller.sequence() != Some(capture.sequence) {
-            if controller.rejects(capture.sequence) {
-                // 本次按下已被应用名单拒绝，同序号的高频移动直接跳过。
-                return WindowDragActivity::default();
-            }
             // 应用名单在 draggable_window_at 内部、且在摘除最大化状态之前就已判定，
             // 所以这里拿到的 None 既包含"不可拖拽的窗口"，也包含"命中名单的应用"。
+            // 名单命中时窗口没有任何副作用（判定前移正是为了避免先摘掉最大化状态），
+            // 因此不需要额外记住"本次按下已被拒绝"：同序号的高频移动会重复一次
+            // draggable_window_at，但那只是读取窗口信息，名单非空时才有额外比较。
             match platform::draggable_window_at(capture.start, &config.window_drag.paused_apps) {
                 Ok(Some(window)) => {
                     controller.start(capture, &window);
