@@ -62,22 +62,52 @@ function Get-ReleaseWithExpectedAssets {
   throw "Remote release asset set did not converge to the local candidate"
 }
 
-function Get-SourceChanges {
-  $unstaged = @(& git -C $repoRoot diff --name-only --)
-  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect unstaged source changes" }
-  $staged = @(& git -C $repoRoot diff --cached --name-only --)
-  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect staged source changes" }
-  $untracked = @(& git -C $repoRoot ls-files --others --exclude-standard)
-  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect untracked source files" }
-  return @($unstaged + $staged + $untracked | Sort-Object -Unique)
+# 捕获原生命令输出的版本（用于 git 这类需要读取 stdout 的调用）。
+# 在 $ErrorActionPreference = "Stop" 下，PowerShell 5.1 会把原生命令写在 stderr 的任何输出
+# 包装成 NativeCommandError 并当作终止错误抛出 —— git 的 `LF will be replaced by CRLF`
+# 就是一条普通警告，却会让发布脚本在读取工作树状态时直接中断。
+# 必须先按记录类型打标再过滤：直接 `"$_"` 会把 ErrorRecord 变成普通字符串，
+# 警告文本就混进返回值，把「工作树是否干净」的判断污染掉。
+function Invoke-NativeCapture {
+  param([Parameter(Mandatory = $true)][string[]]$CommandLine)
+  $previous = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    $executable = $CommandLine[0]
+    $arguments = @()
+    if ($CommandLine.Count -gt 1) { $arguments = $CommandLine[1..($CommandLine.Count - 1)] }
+    $tagged = & $executable @arguments 2>&1 | ForEach-Object {
+      if ($_ -is [System.Management.Automation.ErrorRecord]) {
+        [pscustomobject]@{ IsError = $true; Text = "$_" }
+      } else {
+        [pscustomobject]@{ IsError = $false; Text = "$_" }
+      }
+    }
+    return @($tagged | Where-Object { -not $_.IsError } | ForEach-Object { $_.Text })
+  } finally {
+    $ErrorActionPreference = $previous
+  }
 }
 
-$branch = (& git -C $repoRoot branch --show-current).Trim()
+function Get-SourceChanges {
+  $unstaged = @(Invoke-NativeCapture @("git", "-C", $repoRoot, "diff", "--name-only", "--"))
+  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect unstaged source changes" }
+  $staged = @(Invoke-NativeCapture @("git", "-C", $repoRoot, "diff", "--cached", "--name-only", "--"))
+  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect staged source changes" }
+  $untracked = @(Invoke-NativeCapture @("git", "-C", $repoRoot, "ls-files", "--others", "--exclude-standard"))
+  if ($LASTEXITCODE -ne 0) { throw "Unable to inspect untracked source files" }
+  return @($unstaged + $staged + $untracked | Where-Object { $_ } | Sort-Object -Unique)
+}
+
+$branchOutput = Invoke-NativeCapture @("git", "-C", $repoRoot, "branch", "--show-current")
+$branch = ([string]($branchOutput | Select-Object -First 1)).Trim()
 if ($LASTEXITCODE -ne 0 -or $branch -ne "main") { throw "Desktop releases must run from main" }
 $dirty = @(Get-SourceChanges)
 if ($dirty.Count -gt 0) { throw "Desktop releases require a clean source worktree" }
-$head = (& git -C $repoRoot rev-parse HEAD).Trim()
-$remoteHead = (& git -C $repoRoot rev-parse origin/main).Trim()
+$headOutput = Invoke-NativeCapture @("git", "-C", $repoRoot, "rev-parse", "HEAD")
+$head = ([string]($headOutput | Select-Object -First 1)).Trim()
+$remoteHeadOutput = Invoke-NativeCapture @("git", "-C", $repoRoot, "rev-parse", "origin/main")
+$remoteHead = ([string]($remoteHeadOutput | Select-Object -First 1)).Trim()
 if ($LASTEXITCODE -ne 0 -or $head -notmatch '^[0-9a-f]{40}$' -or $head -ne $remoteHead) {
   throw "Local main must exactly match origin/main before publishing"
 }
