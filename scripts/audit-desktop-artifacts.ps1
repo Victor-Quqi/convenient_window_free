@@ -167,6 +167,10 @@ try {
     "helper/.gitkeep",
     "helper/payload-manifest.json"
   ) + @($nsisManifest.files | ForEach-Object { "helper/$($_.name)" })
+  # 7-Zip 26 extracts the generated NSIS uninstaller; older versions may omit it.
+  if (Test-Path -LiteralPath (Join-Path $nsisRoot "uninstall.exe") -PathType Leaf) {
+    $nsisFiles += "uninstall.exe"
+  }
   Assert-ExactFiles -Root $nsisRoot -Expected $nsisFiles
   Assert-ThirdPartyNotices -Path (Join-Path $nsisRoot "THIRD-PARTY-NOTICES.txt")
   Assert-HelperPayload -HelperDir (Join-Path $nsisRoot "helper") -ExtraFiles @(".gitkeep")
