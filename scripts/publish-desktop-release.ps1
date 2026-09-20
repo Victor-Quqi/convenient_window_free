@@ -217,13 +217,15 @@ try {
     if ([string]$release.target_commitish -ne $head) { throw "$tag does not target the current main commit" }
     Assert-RemoteAssets -Release $release -ExpectedFiles $releaseFiles
     # 只改状态与文案，不上传、不替换任何资产。
-    $payload = @{
+    # PowerShell 5.1 会把字符串 -Body 按 ISO-8859-1 编码发送，非 ASCII 内容会变成 "?"。
+    # 一律转成 UTF-8 字节数组再发送，保证 Release 正文在任何语言下都完整。
+    $payload = [System.Text.Encoding]::UTF8.GetBytes((@{
       prerelease = $false
       draft = $false
       make_latest = "true"
       body = $notes
-    } | ConvertTo-Json
-    $release = Invoke-RestMethod -UseBasicParsing -Method Patch -Headers $headers -ContentType "application/json" -Body $payload -Uri "$api/releases/$($release.id)"
+    } | ConvertTo-Json))
+    $release = Invoke-RestMethod -UseBasicParsing -Method Patch -Headers $headers -ContentType "application/json; charset=utf-8" -Body $payload -Uri "$api/releases/$($release.id)"
     Write-Output "Promoted without replacing assets: $($release.html_url)"
     return
   }
@@ -236,7 +238,7 @@ try {
     if (-not $_.Exception.Response -or [int]$_.Exception.Response.StatusCode -ne 404) { throw }
   }
 
-  $payload = @{
+  $payload = [System.Text.Encoding]::UTF8.GetBytes((@{
     tag_name = $tag
     target_commitish = $head
     name = "Convenient Window Desktop $($manifest.version)"
@@ -244,8 +246,8 @@ try {
     draft = $false
     prerelease = $true
     make_latest = "false"
-  } | ConvertTo-Json
-  $release = Invoke-RestMethod -UseBasicParsing -Method Post -Headers $headers -ContentType "application/json" -Body $payload -Uri "$api/releases"
+  } | ConvertTo-Json))
+  $release = Invoke-RestMethod -UseBasicParsing -Method Post -Headers $headers -ContentType "application/json; charset=utf-8" -Body $payload -Uri "$api/releases"
   $uploadBase = ($release.upload_url -replace '\{\?name,label\}$', '')
   foreach ($asset in $releaseFiles) {
     $encodedName = [Uri]::EscapeDataString($asset.Name)
