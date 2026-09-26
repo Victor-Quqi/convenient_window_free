@@ -1,16 +1,42 @@
 import { readFileSync } from "node:fs";
 import nodePath from "node:path";
 import { describe, expect, it } from "vitest";
+import * as i18n from "./i18n";
 
 const source = readFileSync(nodePath.join(import.meta.dirname, "App.svelte"), "utf8");
 const styles = readFileSync(nodePath.join(import.meta.dirname, "styles.css"), "utf8");
 const monitorStage = readFileSync(nodePath.join(import.meta.dirname, "MonitorStage.svelte"), "utf8");
 
 describe("window enhancement UI wiring", () => {
+  it("keeps one dictionary for both hosts with matching keys and a system-language default", () => {
+    // 两套前端各持一份逐字节一致的 src/i18n.ts；这里校验宿主侧契约，
+    // 跨宿主的哈希一致由私有仓库 scripts/check-i18n-parity.mjs 负责。
+    expect(i18n.LANGUAGE_KEY).toBe("convenient-window-language");
+    expect(Object.keys(i18n.en).sort()).toEqual(Object.keys(i18n.zh).sort());
+    expect(i18n.zh.power).toBe("运行中心");
+    expect(i18n.en.power).toBe("Center");
+    expect(i18n.translator("en-US")("edgeHide")).toBe("Windows");
+    expect(i18n.format(i18n.zh.sampleCount, { count: 3 })).toBe("3 个样本");
+    // 没有保存过选择时跟随系统：zh* 中文，其余英文；已保存的选择优先。
+    expect(i18n.resolveInitialLanguage(null, "zh-Hans")).toBe("zh-CN");
+    expect(i18n.resolveInitialLanguage(undefined, "en-GB")).toBe("en-US");
+    expect(i18n.resolveInitialLanguage("zh-CN", "en-US")).toBe("zh-CN");
+    expect(source).toContain('$: ui = translator(language);');
+    expect(source).toContain("resolveInitialLanguage(stored, typeof navigator === \"undefined\" ? undefined : navigator.language)");
+    expect(source).toContain('value="en-US"');
+    // 语言相关的界面文案必须走字典，不再散落中文字面量。
+    expect(source).toContain('{ui("language")}');
+    expect(source).toContain("English");
+  });
+
   it("uses the unified hotzone master-toggle copy and disabled settings body", () => {
-    expect(source).toContain("触发角总开关");
-    expect(source).toContain("把屏幕边角变成快捷操作入口");
-    expect(source).toContain("触发角设置");
+    expect(source).toContain('ui("hotzoneMaster")');
+    expect(source).toContain('ui("hotzoneTitle")');
+    expect(source).toContain('ui("hotzoneSettings")');
+    expect(i18n.zh.hotzoneMaster).toBe("触发角总开关");
+    expect(i18n.zh.hotzoneTitle).toBe("把屏幕边角变成快捷操作入口");
+    expect(i18n.zh.hotzoneSettings).toBe("触发角设置");
+    expect(i18n.en.hotzoneMaster).toBe("Corner switch");
     expect(source).toContain('class="feature-settings-body" class:off={!settings.hotzonesEnabled} inert={!settings.hotzonesEnabled}');
     expect(source).toContain('class:app-disabled={!settings.enabled}');
     expect(styles).toContain(".app-disabled .feature-settings-body");
@@ -19,7 +45,7 @@ describe("window enhancement UI wiring", () => {
   it("keeps configured hotzone markers visible in the monitor preview", () => {
     expect(source).toContain("hotzonesEnabled={settings.hotzonesEnabled}");
     expect(source).toContain("displayReady");
-    expect(source).toContain("检查连接");
+    expect(source).toContain('ui("checkConnection")');
   });
 
   it("keeps the selected monitor and edge controls above companion content", () => {
@@ -45,7 +71,7 @@ describe("window enhancement UI wiring", () => {
   it("labels fallback display data as a preview and only marks live data online", () => {
     expect(source).toContain("let displayReady = false");
     expect(source).toContain("let helperError = \"\"");
-    expect(source).toContain("检查连接");
+    expect(source).toContain('ui("checkConnection")');
     expect(source).toContain("class:ready={displayReady}");
     expect(source).toContain("displayReady={displayReady}");
     expect(styles).toContain(".display-picker i { width: 7px; height: 7px; border-radius: 50%; background: var(--faint);");
@@ -74,13 +100,16 @@ describe("window enhancement UI wiring", () => {
   });
 
   it("exposes the restore outline toggle", () => {
-    expect(source).toContain("显示展开轮廓");
-    expect(source).toContain("关闭只隐藏窗口收纳后的淡白轮廓，边缘恢复仍可触发");
+    expect(source).toContain('ui("expansionOutline")');
+    expect(source).toContain('ui("expansionOutlineDescription")');
+    expect(i18n.zh.expansionOutlineDescription).toBe("关闭只隐藏窗口收纳后的淡白轮廓，边缘恢复仍可触发");
+    expect(i18n.en.expansionOutline).toBe("Show expand outline");
     expect(source).toContain("bind:checked={settings.edgeHide.showRestoreHint}");
   });
 
   it("animates one window through drag, collapse, hover and restore", () => {
-    expect(source).toContain("拖到屏幕外边缘并松开，窗口自动收起；移到露出区域即可恢复。");
+    expect(source).toContain('ui("edgeHideTutorialBody")');
+    expect(i18n.zh.edgeHideTutorialBody).toBe("拖到屏幕外边缘并松开，窗口自动收起；移到露出区域即可恢复。");
     expect(source.match(/class="tutorial-edge-window"/g)).toHaveLength(1);
     expect(source).toContain('class="tutorial-cursor"');
     expect(styles).toContain("animation: tutorial-edge-window-cycle");

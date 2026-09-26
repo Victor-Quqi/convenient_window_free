@@ -4,6 +4,7 @@ import { render } from "svelte/server";
 import ts from "typescript";
 import { describe, expect, it } from "vitest";
 import ShortcutRecorder from "./ShortcutRecorder.svelte";
+import { format, translator } from "./i18n";
 import { formatShortcut, heldModifiers, isModifierKey, nextRecordingStep, resolveKeyName } from "./shortcut-keys";
 
 const component = readFileSync(nodePath.join(import.meta.dirname, "ShortcutRecorder.svelte"), "utf8");
@@ -223,6 +224,8 @@ describe("shortcut conflict rejection", () => {
       "persist",
       "ensureHotzoneActionTarget",
       "currentAction",
+      "ui",
+      "format",
       `let shortcutError = "";
        let shortcutDraft = "";
        let actionEditorRevision = 0;
@@ -233,7 +236,7 @@ describe("shortcut conflict rejection", () => {
          readDraft: () => shortcutDraft,
          readRevision: () => actionEditorRevision
        };`
-    )(settings, target, () => {}, () => ({ slot: {}, action: target }), () => target) as {
+    )(settings, target, () => {}, () => ({ slot: {}, action: target }), () => target, translator("zh-CN"), format) as {
       setActionShortcut: (value: string) => void;
       readError: () => string;
       readDraft: () => string;

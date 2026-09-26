@@ -353,6 +353,12 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .app-list button:hover { color: var(--danger); background: rgba(229, 107, 114, .12); }
 .empty { color: var(--faint); margin: 8px 0; font-size: 11.5px; }
 .config-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+/* 与 uTools 插件同一条语言选择样式，保证两套宿主观感一致。 */
+.language-setting { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }
+.language-setting h2 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; }
+.language-setting p { margin: 4px 0 0; color: var(--muted); font-size: 11px; }
+.language-setting select { width: 116px; height: 34px; padding: 0 9px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--bg); color: var(--ink); }
+.language-setting select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(91, 140, 255, .2); }
 .hidden { display: none; }
 .power-summary { text-align: center; padding: 10px 0 18px; }
 .power-orb { width: 72px; height: 72px; margin: 0 auto; display: grid; place-items: center; border: 1px solid var(--line-strong); border-radius: 50%; background: var(--raised); }

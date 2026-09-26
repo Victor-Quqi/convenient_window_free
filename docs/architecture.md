@@ -27,7 +27,15 @@ Shared UI code depends on a typed bridge for lifecycle, configuration, token acc
 
 ## Configuration Ownership
 
-The shared schema v7 `edgeHide.keepExpandedWhenForeground` setting defaults to `true`. An expanded edge-hidden window remains open while it is still the active foreground window; when the setting is disabled, leaving the window starts the normal restore-delay countdown even if that window remains foreground. `edgeHide.showRestoreHint` also defaults to `true`; disabling it hides only the pale collapsed-window outline while preserving the pointer restore hotzone. Missing fields preserve the prior behavior, while an explicit `false` survives host normalization and helper deserialization.
+The shared schema v7 `edgeHide.keepExpandedWhenForeground` setting defaults to `false`, so a collapsed-or-expanded window follows the normal restore delay. When the setting is enabled, an expanded edge-hidden window stays open while it is still the active foreground window. `edgeHide.showRestoreHint` defaults to `true`; disabling it hides only the pale collapsed-window outline while preserving the pointer restore hotzone. Missing fields preserve the prior behavior, while an explicit `false` survives host normalization and helper deserialization.
+
+## Interface Language
+
+`apps/desktop/src/i18n.ts` is the single source of truth for every user-visible string in the desktop settings window. The same module is mirrored byte-for-byte in the uTools plugin front end, so both hosts show identical copy and neither can drift on its own; the "no bare Chinese text nodes" rule for Svelte templates is what keeps English from silently regressing.
+
+- The interface language follows the Windows display language when the user has never chosen one (`zh*` → Chinese, everything else → English) and the explicit choice is stored under the shared `convenient-window-language` localStorage key.
+- Status text is stored as dictionary keys (for example `"helperSync"`) and translated at render time, so switching the language also retranslates the message already on screen.
+- Helpers report their own messages in Chinese today; translating helper-side text requires the protocol change tracked for a later release.
 
 The desktop host and helper never write the same file:
 

@@ -36,6 +36,7 @@ Release assets are currently unsigned. Windows may show an unknown-publisher or 
 - **Brightness controls**: adjust the triggering display through hot zones and gestures; see [platform requirements](docs/architecture.md#brightness-controls).
 - **Live settings**: most changes are persisted and applied immediately, without a separate save step.
 - **Light and dark themes**: follow the system appearance by default or remember a manual selection.
+- **Chinese and English interface**: the settings window follows your Windows display language by default, and the language can be switched at any time under More → General settings.
 
 ## Screenshots
 
