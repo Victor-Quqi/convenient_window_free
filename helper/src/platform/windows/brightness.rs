@@ -312,6 +312,7 @@ fn adjust_internal(device_id: &[u16], delta: f32) -> Result<Option<Level>> {
 mod tests {
     use super::*;
 
+    #[test]
     fn internal_failure_still_falls_back_to_ddc_ci() {
         // 回归护栏：0.6.2 合并 PR #14 时内屏后端改成 `?` 直接返回错误，
         // 台式机上 WmiMonitorBrightness 查询“不支持”就让外接屏完全调不动亮度。
