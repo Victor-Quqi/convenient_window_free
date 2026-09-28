@@ -46,9 +46,24 @@ pub(crate) fn adjust_monitor_brightness(target: &Monitor, delta: f32) -> Result<
         "目标显示器已变更"
     );
 
-    match adjust_internal(&monitor.device_id, delta)? {
-        Some(level) => Ok(level),
-        None => adjust_external(handle, delta),
+    // 内屏 WMI 只是候选后端，不是前置条件：台式机上 WmiMonitorBrightness 类存在但查询返回
+    // “不支持”，此时必须继续落到 DDC/CI，否则只有外接屏的机器完全调不动亮度。
+    resolve_backend(adjust_internal(&monitor.device_id, delta), || {
+        adjust_external(handle, delta)
+    })
+}
+
+/// 内屏后端的三种结果对应三种处理：拿到读数就用它；没匹配到内屏就交给 DDC/CI；
+/// **内屏后端报错也必须继续尝试 DDC/CI**，只在两者都失败时才把内屏原因附到最终报错上。
+fn resolve_backend<T>(
+    internal: Result<Option<T>>,
+    external: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    match internal {
+        Ok(Some(level)) => Ok(level),
+        Ok(None) => external(),
+        Err(internal_error) => external()
+            .map_err(|error| error.context(format!("Windows 亮度接口：{internal_error:#}"))),
     }
 }
 
@@ -63,12 +78,13 @@ impl Drop for PhysicalMonitors {
 fn adjust_external(monitor: HMONITOR, delta: f32) -> Result<Level> {
     let mut count = 0;
     unsafe { GetNumberOfPhysicalMonitorsFromHMONITOR(monitor, &mut count)? };
-    ensure!(count == 1, "无法唯一确定物理显示器的亮度控制");
+    ensure!(count > 0, "显示器未提供亮度控制");
     let mut physical = vec![PHYSICAL_MONITOR::default(); count as usize];
     unsafe { GetPhysicalMonitorsFromHMONITOR(monitor, &mut physical)? };
     let physical = PhysicalMonitors(physical);
-    let monitor = &physical.0[0];
-    {
+    // 同一个 HMONITOR 下有多个物理面板时全部调整（与旧行为一致），读数取第一个。
+    let mut level = None;
+    for monitor in &physical.0 {
         let (mut min, mut current, mut max) = (0, 0, 0);
         ensure!(
             unsafe {
@@ -83,21 +99,32 @@ fn adjust_external(monitor: HMONITOR, delta: f32) -> Result<Level> {
                 "显示器拒绝调整亮度"
             );
         }
-        ensure!(
-            unsafe {
-                GetMonitorBrightness(monitor.hPhysicalMonitor, &mut min, &mut current, &mut max)
-            } != 0,
-            "亮度写入后读取失败"
-        );
-        let description = monitor.szPhysicalMonitorDescription;
-        let end = description.iter().position(|c| *c == 0).unwrap_or(128);
-        Level::brightness(
-            min,
-            current,
-            max,
-            String::from_utf16_lossy(&description[..end]),
-        )
+        // 写入成功就算生效：回读失败时用请求值兜底，不要把已经改掉的亮度报成失败。
+        let mut reported = next;
+        let (mut read_min, mut read_current, mut read_max) = (0, 0, 0);
+        if unsafe {
+            GetMonitorBrightness(
+                monitor.hPhysicalMonitor,
+                &mut read_min,
+                &mut read_current,
+                &mut read_max,
+            )
+        } != 0
+        {
+            reported = read_current;
+        }
+        if level.is_none() {
+            let description = monitor.szPhysicalMonitorDescription;
+            let end = description.iter().position(|c| *c == 0).unwrap_or(128);
+            level = Some(Level::brightness(
+                min,
+                reported,
+                max,
+                String::from_utf16_lossy(&description[..end]),
+            )?);
+        }
     }
+    level.context("显示器未提供亮度控制")
 }
 
 struct ComApartment;
@@ -284,6 +311,49 @@ fn adjust_internal(device_id: &[u16], delta: f32) -> Result<Option<Level>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn internal_failure_still_falls_back_to_ddc_ci() {
+        // 回归护栏：0.6.2 合并 PR #14 时内屏后端改成 `?` 直接返回错误，
+        // 台式机上 WmiMonitorBrightness 查询“不支持”就让外接屏完全调不动亮度。
+        let mut attempted = false;
+        let level = resolve_backend::<u32>(Err(anyhow::anyhow!("WMI 不支持")), || {
+            attempted = true;
+            Ok(42)
+        })
+        .unwrap();
+        assert!(attempted, "内屏后端报错后必须继续尝试 DDC/CI");
+        assert_eq!(level, 42);
+
+        // 两者都失败时保留内屏原因，便于定位到底是哪条通道的问题。
+        // anyhow 的 `{:#}` 才会展开整条 cause 链，`to_string()` 只有最外层上下文。
+        let error = resolve_backend::<u32>(Err(anyhow::anyhow!("WMI 不支持")), || {
+            Err(anyhow::anyhow!("显示器拒绝调整亮度"))
+        })
+        .unwrap_err();
+        let chain = format!("{error:#}");
+        assert!(chain.contains("显示器拒绝调整亮度"), "{chain}");
+        assert!(chain.contains("WMI 不支持"), "{chain}");
+
+        // 命中内屏时不再触碰 DDC/CI，没匹配到内屏时照旧回落。
+        let mut external_calls = 0;
+        assert_eq!(
+            resolve_backend::<u32>(Ok(Some(7)), || {
+                external_calls += 1;
+                Ok(0)
+            })
+            .unwrap(),
+            7
+        );
+        assert_eq!(
+            resolve_backend::<u32>(Ok(None), || {
+                external_calls += 1;
+                Ok(9)
+            })
+            .unwrap(),
+            9
+        );
+        assert_eq!(external_calls, 1);
+    }
 
     #[test]
     fn wmi_matching_distinguishes_identical_monitor_models_and_instance_prefixes() {
