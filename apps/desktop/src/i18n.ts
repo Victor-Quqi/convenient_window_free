@@ -82,7 +82,9 @@ export const zh = {
   regionScreenshotHint: "画矩形截图，并悬浮在桌面", provided: "已提供", customGesture: "自定义手势", leftButton: "左键",
 
   // 音量/亮度调节反馈（桌面提示条与 uTools 状态栏共用同一套措辞）
-  adjustmentVolume: "音量", adjustmentBrightness: "亮度", adjustmentPending: "调节中", adjustmentMuted: "静音", adjustmentFailed: "调节失败", adjustmentReading: "正在读取设备"
+  adjustmentVolume: "音量", adjustmentBrightness: "亮度", adjustmentPending: "调节中", adjustmentMuted: "静音", adjustmentFailed: "调节失败", adjustmentReading: "正在读取设备",
+  // 覆盖窗自诊断（仅插件用，桌面保留同键以保持字典逐字节一致）
+  hudUnavailable: "提示条不可用", hudNoWindowApi: "uTools 没有独立窗口接口", hudPageNotReady: "提示条页面没加载", hudPreloadNotReady: "提示条脚本没就绪"
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -126,7 +128,8 @@ export const en: Record<keyof typeof zh, string> = {
   configExportFailed: "Export failed: {error}", configImportFailed: "Import failed: {error}", diagnosticsFailed: "Could not read diagnostics: {error}",
   regionScreenshotHint: "Draw a region and pin it on the desktop", provided: "Provided", customGesture: "Custom gesture", leftButton: "Left",
 
-  adjustmentVolume: "Volume", adjustmentBrightness: "Brightness", adjustmentPending: "Adjusting", adjustmentMuted: "Muted", adjustmentFailed: "Adjustment failed", adjustmentReading: "Reading device"
+  adjustmentVolume: "Volume", adjustmentBrightness: "Brightness", adjustmentPending: "Adjusting", adjustmentMuted: "Muted", adjustmentFailed: "Adjustment failed", adjustmentReading: "Reading device",
+  hudUnavailable: "Indicator unavailable", hudNoWindowApi: "No window API in this uTools", hudPageNotReady: "Indicator page did not load", hudPreloadNotReady: "Indicator script did not load"
 };
 
 export type UiKey = keyof typeof zh;
