@@ -204,7 +204,8 @@ pub fn start(app: &AppHandle) -> tauri::Result<()> {
     app.manage(HudState::default());
     let mut builder =
         WebviewWindowBuilder::new(app, "adjustment-hud", WebviewUrl::App("hud.html".into()))
-            .title("音量与亮度")
+            // 无边框、不进任务栏；前端挂载后按界面语言覆盖标题，这里只给一个中性默认值。
+            .title("Convenient Window")
             .inner_size(HUD_WIDTH, HUD_HEIGHT)
             .resizable(false)
             .decorations(false)

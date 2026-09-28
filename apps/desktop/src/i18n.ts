@@ -79,7 +79,10 @@ export const zh = {
   gestureCopyName: "{name} 副本", gestureDeleteConfirm: "删除手势“{name}”？", gestureSimilarity: "与“{name}”较相似（{score}%），建议重录",
   helperRecoveryFailedDetail: "helper 自动恢复失败：{error}", helperVersionLegacy: "旧版", helperUpgradeProgress: "正在升级 helper {current} → {expected}",
   configExportFailed: "导出失败：{error}", configImportFailed: "导入失败：{error}", diagnosticsFailed: "诊断读取失败：{error}",
-  regionScreenshotHint: "画矩形截图，并悬浮在桌面", provided: "已提供", customGesture: "自定义手势", leftButton: "左键"
+  regionScreenshotHint: "画矩形截图，并悬浮在桌面", provided: "已提供", customGesture: "自定义手势", leftButton: "左键",
+
+  // 音量/亮度调节反馈（桌面提示条与 uTools 状态栏共用同一套措辞）
+  adjustmentVolume: "音量", adjustmentBrightness: "亮度", adjustmentPending: "调节中", adjustmentMuted: "静音", adjustmentFailed: "调节失败", adjustmentReading: "正在读取设备"
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
@@ -121,7 +124,9 @@ export const en: Record<keyof typeof zh, string> = {
   gestureCopyName: "{name} copy", gestureDeleteConfirm: "Delete the gesture “{name}”?", gestureSimilarity: "Close to “{name}” ({score}%); record again",
   helperRecoveryFailedDetail: "Helper recovery failed: {error}", helperVersionLegacy: "Legacy", helperUpgradeProgress: "Upgrading helper {current} → {expected}",
   configExportFailed: "Export failed: {error}", configImportFailed: "Import failed: {error}", diagnosticsFailed: "Could not read diagnostics: {error}",
-  regionScreenshotHint: "Draw a region and pin it on the desktop", provided: "Provided", customGesture: "Custom gesture", leftButton: "Left"
+  regionScreenshotHint: "Draw a region and pin it on the desktop", provided: "Provided", customGesture: "Custom gesture", leftButton: "Left",
+
+  adjustmentVolume: "Volume", adjustmentBrightness: "Brightness", adjustmentPending: "Adjusting", adjustmentMuted: "Muted", adjustmentFailed: "Adjustment failed", adjustmentReading: "Reading device"
 };
 
 export type UiKey = keyof typeof zh;
