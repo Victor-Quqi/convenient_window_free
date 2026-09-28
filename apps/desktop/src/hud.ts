@@ -1,4 +1,4 @@
 import { mount } from "svelte";
-import AdjustmentHud from "./AdjustmentHud.svelte";
+import AdjustmentHudHost from "./AdjustmentHudHost.svelte";
 
-mount(AdjustmentHud, { target: document.getElementById("app")! });
+mount(AdjustmentHudHost, { target: document.getElementById("app")! });
