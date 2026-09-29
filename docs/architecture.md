@@ -29,6 +29,8 @@ Shared UI code depends on a typed bridge for lifecycle, configuration, token acc
 
 The shared schema v7 `edgeHide.keepExpandedWhenForeground` setting defaults to `false`, so a collapsed-or-expanded window follows the normal restore delay. When the setting is enabled, an expanded edge-hidden window stays open while it is still the active foreground window. `edgeHide.showRestoreHint` defaults to `true`; disabling it hides only the pale collapsed-window outline while preserving the pointer restore hotzone. Missing fields preserve the prior behavior, while an explicit `false` survives host normalization and helper deserialization.
 
+Edge-hide movement uses a short ease-out transition rather than an instantaneous rectangle jump; intermediate frames preserve the restored window size and the final frame reapplies its original topmost state. A transient foreground surface or a non-maximized surface covering a monitor (for example a screenshot-selection overlay) does not start the expanded-window leave timer, and a cursor inside the live expanded window clears that timer even when foreground-hold is disabled. Shutdown restoration remains immediate so lifecycle cleanup is not delayed by animation.
+
 ## Interface Language
 
 `apps/desktop/src/i18n.ts` is the single source of truth for every user-visible string in the desktop settings window. The same module is mirrored byte-for-byte in the uTools plugin front end, so both hosts show identical copy and neither can drift on its own; the "no bare Chinese text nodes" rule for Svelte templates is what keeps English from silently regressing.

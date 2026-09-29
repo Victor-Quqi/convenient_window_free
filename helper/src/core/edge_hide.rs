@@ -933,7 +933,7 @@ impl EdgeHideController {
         now: Instant,
         config: &EdgeHideConfig,
         cursor: Point,
-        _monitors: &[Monitor],
+        monitors: &[Monitor],
         foreground: Option<&WindowInfo>,
     ) -> Option<EdgeHideCommand> {
         let mut remove_handle = None;
@@ -957,6 +957,15 @@ impl EdgeHideController {
             self.states.remove(&handle);
         }
 
+        // Temporary and full-screen foreground surfaces (for example a screenshot
+        // selection overlay) are not a user's intent to leave the expanded window.
+        // They often steal the foreground while the pointer is being moved over
+        // the capture surface. Keep the edge-hidden window expanded until a normal
+        // foreground window is observed again.
+        let foreground_is_overlay = foreground.is_some_and(|window| {
+            window.transient || is_fullscreen_surface(window.rect, monitors, window.maximized)
+        });
+
         let target = self.states.iter_mut().find_map(|(handle, state)| {
             if let EdgeHideState::Expanded {
                 edge,
@@ -967,17 +976,21 @@ impl EdgeHideController {
                 leave_since,
             } = state
             {
-                if restore_rect
-                    .inflate(config.trigger_distance.max(1))
-                    .contains(cursor)
+                let cursor_in_expanded_window = foreground
+                    .is_some_and(|window| window.handle == *handle && window.rect.contains(cursor));
+                if cursor_in_expanded_window
+                    || restore_rect
+                        .inflate(config.trigger_distance.max(1))
+                        .contains(cursor)
                 {
                     *pointer_entered = true;
                     *leave_since = None;
                     return None;
                 }
 
-                if config.keep_expanded_when_foreground
-                    && foreground.is_some_and(|window| window.handle == *handle)
+                if foreground_is_overlay
+                    || (config.keep_expanded_when_foreground
+                        && foreground.is_some_and(|window| window.handle == *handle))
                 {
                     *leave_since = None;
                     return None;
@@ -1489,6 +1502,19 @@ fn is_edge_exposed_for_rect(
                     && other.bounds.top <= monitor.bounds.bottom + ADJACENCY_TOLERANCE
             }
         }
+    })
+}
+
+fn is_fullscreen_surface(rect: Rect, monitors: &[Monitor], maximized: bool) -> bool {
+    if maximized {
+        return false;
+    }
+    monitors.iter().any(|monitor| {
+        let bounds = monitor.bounds;
+        rect.left <= bounds.left + 2
+            && rect.top <= bounds.top + 2
+            && rect.right >= bounds.right - 2
+            && rect.bottom >= bounds.bottom - 2
     })
 }
 
@@ -4656,6 +4682,104 @@ mod tests {
     }
 
     #[test]
+    fn expanded_window_does_not_recollapse_when_same_app_overlay_is_foreground() {
+        let config = EdgeHideConfig {
+            enabled: true,
+            keep_expanded_when_foreground: false,
+            collapse_delay_ms: 0,
+            restore_delay_ms: 10,
+            ..EdgeHideConfig::default()
+        };
+        let mut controller = EdgeHideController::new();
+        let visible = window(Rect {
+            left: 0,
+            top: 120,
+            right: 600,
+            bottom: 700,
+        });
+        let start = Instant::now();
+
+        controller.tick(
+            start,
+            &config,
+            Point { x: 900, y: 500 },
+            &[monitor()],
+            Some(&visible),
+        );
+        let collapse = controller.tick(
+            start + Duration::from_millis(1),
+            &config,
+            Point { x: 900, y: 500 },
+            &[monitor()],
+            Some(&visible),
+        );
+        let Some(EdgeHideCommand::Collapse { rect: hidden, .. }) = collapse else {
+            panic!("window should collapse first");
+        };
+        controller.command_succeeded(
+            collapse.expect("collapse command was checked above"),
+            EdgeHideLiveState::Visible(hidden),
+            start + Duration::from_millis(1),
+        );
+
+        let restore = controller.tick(
+            start + Duration::from_millis(2),
+            &config,
+            Point { x: 2, y: 200 },
+            &[monitor()],
+            None,
+        );
+        let Some(EdgeHideCommand::Restore { rect, .. }) = restore else {
+            panic!("window should restore from the exposed strip");
+        };
+        assert_eq!(rect, visible.rect);
+        controller.command_succeeded(
+            restore.expect("restore command was checked above"),
+            EdgeHideLiveState::Visible(visible.rect),
+            start + Duration::from_millis(2),
+        );
+
+        let mut screenshot_overlay = window_with_handle(
+            WindowHandle(99),
+            Rect {
+                left: 700,
+                top: 100,
+                right: 1200,
+                bottom: 900,
+            },
+        );
+        screenshot_overlay.process_name = visible.process_name.clone();
+        screenshot_overlay.transient = true;
+        assert_eq!(
+            controller.tick(
+                start + Duration::from_millis(3),
+                &config,
+                Point { x: 1200, y: 900 },
+                &[monitor()],
+                Some(&screenshot_overlay),
+            ),
+            None
+        );
+        assert_eq!(
+            controller.tick(
+                start + Duration::from_millis(20),
+                &config,
+                Point { x: 1200, y: 900 },
+                &[monitor()],
+                Some(&screenshot_overlay),
+            ),
+            None
+        );
+        assert!(matches!(
+            controller.states.get(&visible.handle),
+            Some(EdgeHideState::Expanded {
+                leave_since: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
     fn foreground_expanded_window_does_not_recollapse_while_in_use() {
         let config = EdgeHideConfig {
             enabled: true,
@@ -4710,6 +4834,95 @@ mod tests {
                 leave_since: None,
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn expanded_window_stays_open_while_cursor_is_inside_it() {
+        let config = EdgeHideConfig {
+            enabled: true,
+            keep_expanded_when_foreground: false,
+            collapse_delay_ms: 0,
+            restore_delay_ms: 10,
+            ..EdgeHideConfig::default()
+        };
+        let mut controller = EdgeHideController::new();
+        let visible = window(Rect {
+            left: 0,
+            top: 120,
+            right: 600,
+            bottom: 700,
+        });
+        let start = Instant::now();
+        controller.tick(
+            start,
+            &config,
+            Point { x: 300, y: 300 },
+            &[monitor()],
+            Some(&visible),
+        );
+        let Some(collapse) = controller.tick(
+            start + Duration::from_millis(1),
+            &config,
+            Point { x: 300, y: 300 },
+            &[monitor()],
+            Some(&visible),
+        ) else {
+            panic!("window should collapse first");
+        };
+        let hidden = match collapse {
+            EdgeHideCommand::Collapse { rect, .. } => rect,
+            _ => unreachable!(),
+        };
+        assert!(matches!(
+            controller.tick(
+                start + Duration::from_millis(2),
+                &config,
+                Point { x: 1, y: 300 },
+                &[monitor()],
+                None,
+            ),
+            Some(EdgeHideCommand::Restore { .. })
+        ));
+
+        assert_eq!(
+            controller.tick(
+                start + Duration::from_millis(3),
+                &config,
+                Point { x: 300, y: 300 },
+                &[monitor()],
+                Some(&visible),
+            ),
+            None
+        );
+        assert!(matches!(
+            controller.states.get(&visible.handle),
+            Some(EdgeHideState::Expanded {
+                pointer_entered: true,
+                leave_since: None,
+                ..
+            })
+        ));
+
+        assert_eq!(
+            controller.tick(
+                start + Duration::from_millis(4),
+                &config,
+                Point { x: 1200, y: 900 },
+                &[monitor()],
+                Some(&visible),
+            ),
+            None
+        );
+        assert!(matches!(
+            controller.tick(
+                start + Duration::from_millis(14),
+                &config,
+                Point { x: 1200, y: 900 },
+                &[monitor()],
+                Some(&visible),
+            ),
+            Some(EdgeHideCommand::Collapse { rect, .. }) if rect == hidden
         ));
     }
 

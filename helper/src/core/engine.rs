@@ -774,18 +774,70 @@ fn engine_poll_interval(configured_ms: u64, dragging: bool) -> Duration {
     })
 }
 
+const EDGE_HIDE_ANIMATION_DURATION: Duration = Duration::from_millis(160);
+
 fn execute_edge_hide_command(command: EdgeHideCommand) -> Result<(&'static str, platform::Rect)> {
-    match command {
-        EdgeHideCommand::Collapse { handle, rect } => {
-            platform::set_window_rect_topmost(handle, rect, true)
-                .map(|_| ("edge-hide.collapse", rect))
-        }
+    let (handle, rect, topmost, kind) = match command {
+        EdgeHideCommand::Collapse { handle, rect } => (handle, rect, true, "edge-hide.collapse"),
         EdgeHideCommand::Restore {
             handle,
             rect,
             topmost,
-        } => platform::set_window_rect_topmost(handle, rect, topmost)
-            .map(|_| ("edge-hide.restore", rect)),
+        } => (handle, rect, topmost, "edge-hide.restore"),
+    };
+    let from = platform::window_info_for_handle(handle)
+        .ok()
+        .flatten()
+        .map(|window| window.rect)
+        .unwrap_or(rect);
+    animate_edge_hide_window(handle, from, rect, topmost)?;
+    Ok((kind, rect))
+}
+
+fn animate_edge_hide_window(
+    handle: platform::WindowHandle,
+    from: platform::Rect,
+    to: platform::Rect,
+    topmost: bool,
+) -> Result<()> {
+    if from == to {
+        platform::set_window_rect_topmost(handle, to, topmost)?;
+        return Ok(());
+    }
+
+    let frames = (EDGE_HIDE_ANIMATION_DURATION.as_millis() / 16).clamp(4, 20) as i32;
+    let frame_duration = EDGE_HIDE_ANIMATION_DURATION / frames as u32;
+    for frame in 1..=frames {
+        let progress = frame as f64 / frames as f64;
+        // Ease-out cubic: fast response at the edge, then a soft settle.
+        let eased = 1.0 - (1.0 - progress).powi(3);
+        let rect = interpolate_edge_hide_rect(from, to, eased, frame == frames);
+        if frame == frames {
+            platform::set_window_rect_topmost(handle, rect, topmost)?;
+        } else {
+            platform::set_window_rect(handle, rect)?;
+            std::thread::sleep(frame_duration);
+        }
+    }
+    Ok(())
+}
+
+fn interpolate_edge_hide_rect(
+    from: platform::Rect,
+    to: platform::Rect,
+    progress: f64,
+    final_frame: bool,
+) -> platform::Rect {
+    if final_frame {
+        return to;
+    }
+    let mix =
+        |start: i32, end: i32| (start as f64 + (end - start) as f64 * progress).round() as i32;
+    platform::Rect {
+        left: mix(from.left, to.left),
+        top: mix(from.top, to.top),
+        right: mix(from.right, to.right),
+        bottom: mix(from.bottom, to.bottom),
     }
 }
 
@@ -1095,6 +1147,28 @@ mod tests {
             primary: true,
             device_id: [0; 128],
         }
+    }
+
+    #[test]
+    fn edge_hide_animation_preserves_window_size_until_final_frame() {
+        let from = Rect {
+            left: 0,
+            top: 120,
+            right: 600,
+            bottom: 700,
+        };
+        let to = Rect {
+            left: -584,
+            top: 120,
+            right: 16,
+            bottom: 700,
+        };
+        let middle = interpolate_edge_hide_rect(from, to, 0.5, false);
+        assert_eq!(middle.width(), from.width());
+        assert_eq!(middle.height(), from.height());
+        assert!(middle.left < from.left);
+        assert!(middle.left > to.left);
+        assert_eq!(interpolate_edge_hide_rect(from, to, 0.1, true), to);
     }
 
     #[test]
