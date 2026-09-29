@@ -79,7 +79,7 @@ describe("normalizeSettings", () => {
     expect(settings.edgeHide.triggerRatio).toBe(33);
     expect(settings.edgeHide.collapseDelayMs).toBe(300);
     expect(settings.edgeHide.restoreDelayMs).toBe(200);
-    expect(settings.schemaVersion).toBe(7);
+    expect(settings.schemaVersion).toBe(8);
     expect(settings.mouseGestures.gestures).toHaveLength(5);
   });
 

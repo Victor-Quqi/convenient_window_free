@@ -196,10 +196,10 @@ try {
     if (-not $token -or $tokenValue.Length -ne 64) {
       throw "Desktop helper token was not created correctly"
     }
-    if (-not $config) { throw "Desktop schema v7 configuration was not persisted" }
+    if (-not $config) { throw "Desktop schema v8 configuration was not persisted" }
     $configValue = [System.IO.File]::ReadAllText($config.FullName, [System.Text.Encoding]::UTF8) | ConvertFrom-Json
-    if ($configValue.schemaVersion -ne 7) { throw "Desktop configuration did not preserve schema v7" }
-    Write-Output "desktop runtime success: helper listened, schema v7 persisted, graceful stop recorded"
+    if ($configValue.schemaVersion -ne 8) { throw "Desktop configuration did not preserve schema v8" }
+    Write-Output "desktop runtime success: helper listened, schema v8 persisted, graceful stop recorded"
   }
 
   $payloadHelperPath = Join-Path (Split-Path -Parent $AppPath) "helper\magic-corners-helper.exe"

@@ -35,6 +35,14 @@ pub struct Level {
     device_name: String,
 }
 
+#[derive(Clone, PartialEq, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FeedbackError {
+    code: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    details: Option<String>,
+}
+
 #[derive(Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Feedback {
@@ -43,7 +51,7 @@ pub struct Feedback {
     kind: Kind,
     screen: Screen,
     level: Option<Level>,
-    error: Option<String>,
+    error: Option<FeedbackError>,
     pending: bool,
 }
 
@@ -494,7 +502,10 @@ mod tests {
         variants[1].level.as_mut().unwrap().value = 0.4;
         variants[2].level.as_mut().unwrap().device_name = "Other display".into();
         variants[2].level.as_mut().unwrap().value = 0.4;
-        variants[3].error = Some("Unavailable".into());
+        variants[3].error = Some(FeedbackError {
+            code: "brightness_adjustment_failed".into(),
+            details: None,
+        });
         variants[4].screen.left = 0;
         for next in variants {
             let mut state = Presentation::default();
@@ -560,7 +571,10 @@ mod tests {
             0.6
         );
         let mut failure = feedback(20, false);
-        failure.error = Some("Disconnected".into());
+        failure.error = Some(FeedbackError {
+            code: "volume_adjustment_failed".into(),
+            details: None,
+        });
         state.update(failure, now);
         assert!(state.snapshot.feedback.as_ref().unwrap().level.is_none());
     }
@@ -586,7 +600,10 @@ mod tests {
     fn fast_readback_or_error_cancels_the_initial_wait() {
         let now = Instant::now();
         let mut failure = feedback(2, false);
-        failure.error = Some("Disconnected".into());
+        failure.error = Some(FeedbackError {
+            code: "volume_adjustment_failed".into(),
+            details: None,
+        });
         for result in [readback(2, 0.4), failure] {
             let mut state = Presentation::default();
             state.update(feedback(1, true), now);

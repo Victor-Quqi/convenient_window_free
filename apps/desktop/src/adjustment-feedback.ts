@@ -1,3 +1,5 @@
+import { runtimeErrorText } from "./runtime-error";
+import type { RuntimeError } from "./runtime-error";
 // 音量/亮度调节反馈的纯逻辑：两套宿主共用，界面措辞一律来自共享字典。
 //
 // 本文件在两套前端中必须逐字节一致：
@@ -17,7 +19,7 @@ export interface AdjustmentFeedback {
   kind: "volume" | "brightness";
   level: { value: number; muted: boolean; deviceName: string } | null;
   pending: boolean;
-  error: string | null;
+  error: RuntimeError | null;
 }
 
 export function feedbackKindLabel(feedback: AdjustmentFeedback, ui: AdjustmentTranslator): string {
@@ -35,7 +37,7 @@ export function feedbackValueText(feedback: AdjustmentFeedback, ui: AdjustmentTr
 /** 单行状态文案，供状态栏这类只有一行可用的宿主使用；失败时保留 helper 给出的原因。 */
 export function feedbackStatusLine(feedback: AdjustmentFeedback, ui: AdjustmentTranslator): string {
   const label = feedbackKindLabel(feedback, ui);
-  if (feedback.error) return `${ui("adjustmentFailed")} · ${feedback.error}`;
+  if (feedback.error) return runtimeErrorText(feedback.error, ui);
   if (feedback.level?.muted) return `${label} · ${ui("adjustmentMuted")}`;
   if (feedback.level) return `${label} ${Math.round(feedback.level.value * 100)}%`;
   return feedback.pending ? `${label} · ${ui("adjustmentPending")}` : label;

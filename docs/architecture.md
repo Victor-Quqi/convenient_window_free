@@ -23,11 +23,11 @@ Platform-specific behavior stays behind the helper adapter boundary. Core code m
 
 ## Host Bridge
 
-Shared UI code depends on a typed bridge for lifecycle, configuration, token access, file dialogs, external links, diagnostics, and host actions. Protocol v6 emits `host.action` with generic kinds and values; the uTools adapter maps redirect actions to its host API. The helper accepts the legacy `utools-redirect` configuration value as an alias, while normalized helper state uses `host-action`. The standalone adapter hides uTools-only actions while preserving unknown action records loaded from schema v7 configuration.
+Shared UI code depends on a typed bridge for lifecycle, configuration, token access, file dialogs, external links, diagnostics, and host actions. Protocol v7 emits `host.action` with generic kinds and values; the uTools adapter maps redirect actions to its host API. The helper accepts the legacy `utools-redirect` configuration value as an alias, while normalized helper state uses `host-action`. The standalone adapter hides uTools-only actions while preserving unknown action records loaded from schema v8 configuration.
 
 ## Configuration Ownership
 
-The shared schema v7 `edgeHide.keepExpandedWhenForeground` setting defaults to `false`, so a collapsed-or-expanded window follows the normal restore delay. When the setting is enabled, an expanded edge-hidden window stays open while it is still the active foreground window. `edgeHide.showRestoreHint` defaults to `true`; disabling it hides only the pale collapsed-window outline while preserving the pointer restore hotzone. Missing fields preserve the prior behavior, while an explicit `false` survives host normalization and helper deserialization.
+The shared schema v8 `edgeHide.keepExpandedWhenForeground` setting defaults to `false`, so a collapsed-or-expanded window follows the normal restore delay. When the setting is enabled, an expanded edge-hidden window stays open while it is still the active foreground window. `edgeHide.showRestoreHint` defaults to `true`; disabling it hides only the pale collapsed-window outline while preserving the pointer restore hotzone. Missing fields preserve the prior behavior, while an explicit `false` survives host normalization and helper deserialization.
 
 ## Interface Language
 
@@ -35,14 +35,18 @@ The shared schema v7 `edgeHide.keepExpandedWhenForeground` setting defaults to `
 
 - The interface language follows the Windows display language when the user has never chosen one (`zh*` → Chinese, everything else → English) and the explicit choice is stored under the shared `convenient-window-language` localStorage key.
 - Status text is stored as dictionary keys (for example `"helperSync"`) and translated at render time, so switching the language also retranslates the message already on screen.
-- Helpers report their own messages in Chinese today; translating helper-side text requires the protocol change tracked for a later release.
+- Protocol 7 reports errors as `{ code, details, requestId? }` in `runtime.error` and `adjustment.updated.error`. Hosts translate the stable `code`, use a generic localized fallback for unknown codes, and keep `details` for diagnostics. Request failures return only to the requesting socket. The error-code contract is covered by `tests/fixtures/runtime-errors.json`.
+
+`helper.ready` reports `protocolVersion: 7` and `schemaVersion: 8`. A `config.update` payload contains `{ protocolVersion: 7, revision, config, gestureLabels? }`; `config.schemaVersion` must be 8. Other versions are rejected before storage or application. `config.applied` retains `requestId`, `revision` and `adjusted`. `gestureLabels` maps configured IDs to translated overlay labels, is capped at 80 non-control characters per label, and is excluded from storage. Hosts resend it on reconnect or language changes.
+
+Schema 8 identifies built-in gestures by their five reserved IDs; an absent `name` selects the dictionary default and an explicit name overrides it. Schema 7 and earlier remove only names matching a reserved ID and a known historical default; other names and actions survive. Those schemas did not record whether a default name was explicitly chosen. The migration is idempotent and rejects future schemas before normalization. Shared migration cases live in `tests/fixtures/i18n-migration.json`. Historical-name rules remain frozen while old settings imports are supported; new translations never enter that table. `gesture.recognized.name` carries an override or `null`; hosts resolve display names by ID. `runtime.status` uses `gesture_not_recognized` or `window_topmost_changed`, with `{ title, topmost }` parameters for the latter.
 
 The desktop host and helper never write the same file:
 
 - The desktop host is the only writer of `<app-data>/desktop-settings.json`. This is the UI's authoritative settings snapshot.
 - The helper is the only writer of `<app-data>/helper-data/config.json`. This is the last runtime configuration it accepted.
 
-The UI awaits a successful durable desktop-settings write before sending that exact revision to the helper. A failed write is visible to the UI and is never applied to the helper. On first launch after upgrading from the early shared-file layout, the desktop host copies the legacy helper configuration into `desktop-settings.json` only when the new file does not exist; it never overwrites an existing desktop settings file.
+The UI awaits a successful durable desktop-settings write before sending that exact revision to the helper. Migration uses the same atomic writer and rolling `.bak` file; later saves replace that backup. A failed write is visible to the UI and is never applied to the helper. On first launch after upgrading from the early shared-file layout, the desktop host copies the legacy helper configuration into `desktop-settings.json` only when the new file does not exist; it never overwrites an existing desktop settings file.
 
 ## Helper Lifecycle
 
@@ -104,3 +108,5 @@ The current Linux input and monitor backend requires X11. Wayland support needs 
 | Linux Wayland | Session detection and capability reporting only | Degradation behavior tested; no false-ready support claim | Global input and arbitrary-window control unless a future portal path is proven |
 
 The package produces a per-user NSIS installer and a portable archive for the currently accepted Windows target. macOS/Linux assets stay out of release manifests until native runner and real-machine acceptance records their exact binary, size, and SHA-256. Public GitHub Releases use immutable final-version assets: a clean `main` build is published as a Pre-release for online acceptance, then promoted in place. Automatic updates and trusted commercial code signing are not implemented.
+
+The product name is `Convenient Window`; the identifier `com.ximizhou.convenientwindow`, executable name and application-data directory remain stable. Windows upgrades validate the legacy registration and keep the existing installation directory, then remove the old uninstall entry and matching shortcuts after installation succeeds. Startup migration accepts only entries targeting that same executable path, preserves Task Manager's disabled state, writes the new entry before deleting the old one, and can retry after interruption. Registry migration failure does not block application launch. These legacy identity rules remain isolated in the Windows adapter and installer hooks.

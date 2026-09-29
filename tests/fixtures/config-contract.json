@@ -24,7 +24,7 @@
     }
   },
   "expected": {
-    "schemaVersion": 7,
+    "schemaVersion": 8,
     "hotzonesEnabled": false,
     "edgeSize": 48,
     "hoverDelayMs": 0,

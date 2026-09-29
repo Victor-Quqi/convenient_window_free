@@ -100,7 +100,7 @@ export interface GesturePoint {
 
 export interface GestureTemplate {
   id: string;
-  name: string;
+  name?: string;
   enabled: boolean;
   builtin: boolean;
   mode: GestureMode;

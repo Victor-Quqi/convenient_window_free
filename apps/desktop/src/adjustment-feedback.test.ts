@@ -24,8 +24,8 @@ describe("adjustment feedback", () => {
     expect(feedbackValueText(muted, en)).toBe("Muted");
     expect(feedbackValueText({ ...feedback, pending: true, level: null }, zh)).toBe("调节中");
     expect(feedbackValueText({ ...feedback, pending: true, level: null }, en)).toBe("Adjusting");
-    expect(feedbackValueText({ ...feedback, error: "Disconnected" }, zh)).toBe("调节失败");
-    expect(feedbackValueText({ ...feedback, error: "Disconnected", pending: true }, en)).toBe("Adjustment failed");
+    expect(feedbackValueText({ ...feedback, error: { code: "volume_adjustment_failed" } }, zh)).toBe("调节失败");
+    expect(feedbackValueText({ ...feedback, error: { code: "volume_adjustment_failed" }, pending: true }, en)).toBe("Adjustment failed");
     expect(feedbackKindLabel(feedback, zh)).toBe("音量");
     expect(feedbackKindLabel({ ...feedback, kind: "brightness" }, en)).toBe("Brightness");
   });
@@ -36,8 +36,8 @@ describe("adjustment feedback", () => {
     expect(feedbackStatusLine(muted, zh)).toBe("音量 · 静音");
     expect(feedbackStatusLine({ ...feedback, level: null, pending: true }, en)).toBe("Volume · Adjusting");
     expect(feedbackStatusLine({ ...feedback, level: null, pending: true }, zh)).toBe("音量 · 调节中");
-    // 失败时保留 helper 给出的原因，标签仍走字典。
-    expect(feedbackStatusLine({ ...feedback, error: "pactl missing" }, en)).toBe("Adjustment failed · pactl missing");
+    // Diagnostic details never become user-facing copy.
+    expect(feedbackStatusLine({ ...feedback, error: { code: "volume_adjustment_failed", details: "pactl missing" } }, en)).toBe(en("errorVolume"));
   });
 
   it("rejects late snapshots and accepts a new helper session after reset", () => {

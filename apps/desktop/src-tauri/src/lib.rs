@@ -2,9 +2,11 @@ mod adjustment_hud;
 mod storage;
 mod supervisor;
 #[cfg(windows)]
+mod windows_autostart;
+#[cfg(windows)]
 mod windows_lifecycle;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -13,9 +15,9 @@ use supervisor::{HelperProcess, StartResult, StopResult};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
-use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
+use tauri_plugin_autostart::ManagerExt;
 
-const HELPER_VERSION: &str = "0.6.1";
+const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
 const REPOSITORY_URL: &str = "https://github.com/ximizhou/convenient_window_free";
 const SMOKE_EXIT_ENV: &str = "CONVENIENT_WINDOW_SMOKE_EXIT_MS";
 const DATA_DIR_ENV: &str = "CONVENIENT_WINDOW_DATA_DIR";
@@ -260,25 +262,64 @@ fn show_main_window(app: &AppHandle) {
     }
 }
 
+struct NativeMenu {
+    show: MenuItem<tauri::Wry>,
+    autostart: CheckMenuItem<tauri::Wry>,
+    quit: MenuItem<tauri::Wry>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct NativeLabels {
+    title: String,
+    show: String,
+    autostart: String,
+    quit: String,
+}
+
+#[tauri::command]
+fn set_native_labels(app: AppHandle, labels: NativeLabels) -> Result<(), String> {
+    let menu = app.state::<NativeMenu>();
+    menu.show
+        .set_text(&labels.show)
+        .map_err(|error| error.to_string())?;
+    menu.autostart
+        .set_text(&labels.autostart)
+        .map_err(|error| error.to_string())?;
+    menu.quit
+        .set_text(&labels.quit)
+        .map_err(|error| error.to_string())?;
+    if let Some(tray) = app.tray_by_id("main-tray") {
+        tray.set_tooltip(Some(&labels.title))
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(window) = app.get_webview_window("main") {
+        window
+            .set_title(&labels.title)
+            .map_err(|error| error.to_string())?;
+    }
+    Ok(())
+}
+
 fn create_tray(app: &AppHandle) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "打开设置", true, None::<&str>)?;
+    let show = MenuItem::with_id(app, "show", "Open settings", true, None::<&str>)?;
     let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
     let autostart = CheckMenuItem::with_id(
         app,
         "autostart",
-        "开机自动启动",
+        "Start at login",
         true,
         autostart_enabled,
         None::<&str>,
     )?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, "quit", "退出便捷窗口", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Convenient Window", true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&show, &autostart, &separator, &quit])?;
     let autostart_menu = autostart.clone();
     let mut builder = TrayIconBuilder::with_id("main-tray")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("便捷窗口")
+        .tooltip("Convenient Window")
         .on_menu_event(move |app, event| match event.id.as_ref() {
             "show" => show_main_window(app),
             "autostart" => {
@@ -286,9 +327,13 @@ fn create_tray(app: &AppHandle) -> tauri::Result<()> {
                 let manager = app.autolaunch();
                 let previous = manager.is_enabled().unwrap_or(!desired);
                 let result = if desired {
-                    manager.enable()
+                    #[cfg(not(windows))]
+                    let result = manager.enable().map_err(|error| error.to_string());
+                    #[cfg(windows)]
+                    let result = windows_autostart::enable().map_err(|error| error.to_string());
+                    result
                 } else {
-                    manager.disable()
+                    manager.disable().map_err(|error| error.to_string())
                 };
                 if result.is_err() {
                     let _ = autostart_menu.set_checked(previous);
@@ -313,6 +358,11 @@ fn create_tray(app: &AppHandle) -> tauri::Result<()> {
         builder = builder.icon(icon.clone());
     }
     builder.build(app)?;
+    app.manage(NativeMenu {
+        show,
+        autostart,
+        quit,
+    });
     Ok(())
 }
 
@@ -366,10 +416,12 @@ pub fn run() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .plugin(tauri_plugin_autostart::init(
-            MacosLauncher::LaunchAgent,
-            Some(vec!["--autostart"]),
-        ))
+        .plugin(
+            tauri_plugin_autostart::Builder::new()
+                .app_name("Convenient Window")
+                .arg("--autostart")
+                .build(),
+        )
         .setup(move |app| {
             if let Some((config, webview_data_dir)) = &isolated_window {
                 std::fs::create_dir_all(webview_data_dir)?;
@@ -386,6 +438,12 @@ pub fn run() {
                 shutdown_started: AtomicBool::new(false),
             });
             adjustment_hud::start(app.handle())?;
+            #[cfg(windows)]
+            if explicit_data_dir.is_none() {
+                if let Err(error) = windows_autostart::migrate_current_user() {
+                    eprintln!("Startup registration migration failed: {error}");
+                }
+            }
             create_tray(app.handle())?;
             #[cfg(windows)]
             windows_lifecycle::listen_for_uninstall(app.handle().clone())
@@ -406,6 +464,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             adjustment_hud::adjustment_hud_ready,
             adjustment_hud::adjustment_hud_present,
+            set_native_labels,
             desktop_status,
             start_helper,
             stop_helper,
