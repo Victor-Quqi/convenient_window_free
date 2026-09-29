@@ -23,6 +23,8 @@ Every cross-host change runs the closest unit and contract tests first, followed
 6. Artifact inventory and secret scan for installers and portable output.
 
 Tests must not be skipped, converted to TODOs, weakened, or replaced with mocks of the behavior under test merely to satisfy a gate.
+Window-drag acceptance must include a real application in `windowDrag.pausedApps`: the configured modifier+mouse combination must remain usable by that application, including both the original press and release, while the same combination still moves/resizes an unlisted ordinary window. A maximized unlisted window must still restore and drag, and the low-level admission check must not change its geometry before the engine accepts the capture.
+
 
 Cross-host UI acceptance requires settings to persist on each valid change without a generic manual-save button. The hot-zone master switch must leave saved configuration, preview, and configured markers visible while the editing controls are inert. Window enhancement currently exposes only the edge-hide tutorial: one circled question mark beside its heading, a hover/focus card that remains readable while the pointer enters it, the center-to-right/collapse/restore CSS sequence, no drag or pin tutorial, no horizontal overflow at 1280x720, 900x600, or 640x600, and no positional animation under reduced motion. Both hosts expose `showRestoreHint`, default it on for missing legacy fields, preserve an explicit off value, and explain that disabling it hides only the pale outline while edge restore remains active.
 
@@ -38,9 +40,9 @@ Native acceptance still needs one real macOS machine with Accessibility and Scre
 
 ## Brightness Controls
 
-Automated tests cover target-display selection, brightness range/clamping, per-display queue coalescing, duplicate/disconnected DRM connectors, backlight association, DDC packets, command failure/timeout cleanup, and settings round trips. macOS protocol and value tests also run on Windows and Linux; Intel IOKit ABI layout assertions run when compiling for that target.
+Automated tests cover target-display selection, brightness range/clamping, per-display queue coalescing, duplicate/disconnected DRM connectors, backlight association, DDC packets, Windows WMI/DDC fallback resolution, GDI gamma scaling/clamping, command failure/timeout cleanup, and settings round trips. macOS protocol and value tests also run on Windows and Linux; Intel IOKit ABI layout assertions run when compiling for that target.
 
-Hardware acceptance must verify internal/external pairs, same-model displays, negative desktop coordinates, rapid scrolling, unplug/replug, mirrored outputs, missing dependencies, denied device access, brightness limits, and coexistence with desktop brightness controls. Only the triggering display should change, and mouse input must remain responsive while hardware calls are pending. Use the [platform requirements](architecture.md#brightness-controls) to prepare each machine.
+Hardware acceptance must verify internal/external pairs, same-model displays, negative desktop coordinates, rapid scrolling, unplug/replug, mirrored outputs, missing dependencies, denied device access, brightness limits, coexistence with desktop brightness controls, and a Windows display with WMI/DDC/CI unavailable to confirm the 70% software fallback and normal-shutdown gamma restoration. Only the triggering display should change, and mouse input must remain responsive while hardware calls are pending. Use the [platform requirements](architecture.md#brightness-controls) to prepare each machine.
 
 WSL/Xvfb checks do not exercise physical backlight or DDC devices. macOS cross-compilation does not exercise native linking or DisplayServices. Actual display control requires hardware acceptance on each platform.
 

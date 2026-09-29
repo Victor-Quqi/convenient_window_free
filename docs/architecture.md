@@ -55,6 +55,7 @@ The NSIS pre-uninstall hook signals `Local\com.ximizhou.convenientwindow.shutdow
 Automated runtime tests may set the absolute `CONVENIENT_WINDOW_DATA_DIR` override. In that mode desktop settings, helper data, and WebView data all stay below the explicit root. Production startup uses the platform application-data path.
 
 Edge-hide state keeps the target edge and restore geometry across monitor changes. The helper enables a restore strip and its pointer hotzone only when the restore rectangle still intersects the current monitor topology, its edge remains exposed on the virtual desktop, and a visible live window still matches the hidden rectangle. Empty or changed monitor snapshots, failed platform queries, externally moved, hidden, or minimized windows, and removed displays therefore cannot leave either a stale pale outline or an invisible hotzone. Initial and repeated collapse commands remain unconfirmed until that live-geometry check succeeds; an expand command likewise remains unconfirmed until the live window reaches its restore rectangle. A mismatch enters a hint-free cleanup state, and cleanup or batch-restore failures back off and retry instead of losing the original topmost state. After a topology change, the helper relocates a window that remains at its old collapsed geometry, including when an added display turns the old outer edge into a seam, or adopts the expected new geometry when Windows already moved it. A relocation is committed only after the same check; failures back off without blocking other windows. Disabling or stopping the engine reclamps restore geometry, makes up to three immediate recovery attempts, and explicitly clears the final rendered hint frame.
+Window-drag admission is split into a read-only low-level hook check and an engine-side resolver. The hook checks the pointer target against `windowDrag.pausedApps` before consuming the configured modifier+mouse press; a blocked target receives the original press, motion, and release unchanged. Only an allowed target reaches the engine resolver, which may restore a maximized window and start the drag session. The hook check must never mutate window geometry.
 
 ## Brightness Controls
 
@@ -64,10 +65,12 @@ A background worker merges consecutive deltas for the same display and direction
 
 | Platform | Internal or system-controlled display | Other external displays |
 | --- | --- | --- |
-| Windows | WMI matched to the monitor instance | Windows monitor APIs; enable DDC/CI in the monitor menu |
+| Windows | WMI when supported; DDC/CI is the peer fallback | DDC/CI through Windows monitor APIs; if WMI and DDC/CI both fail, use per-display GDI gamma software fallback (70–100%) |
 | Linux X11 | sysfs backlight reads and logind `SetBrightness`; requires `busctl`, systemd-logind, and an authorized local session | `ddcutil`, VCP `0x10`; install with `sudo apt install ddcutil` on Debian/Ubuntu, enable DDC/CI, and configure [I²C permissions](https://www.ddcutil.com/i2c_permissions/) |
 | macOS Intel | DisplayServices loaded at runtime | Native IOKit I²C/DDC |
 | macOS Apple Silicon | DisplayServices loaded at runtime | [m1ddc](https://github.com/waydabber/m1ddc) 1.2.0 or newer; install with `brew install m1ddc` |
+
+On Windows, WMI and DDC/CI are peer hardware candidates rather than a strict priority chain. When both are unavailable, the helper applies a per-display GDI gamma ramp as a visual fallback, clamps it to 70–100% because common Intel/Windows drivers reject lower peaks, labels the feedback as software brightness, and restores the captured ramp on normal helper shutdown. This does not replace physical backlight control; enabling DDC/CI in the monitor OSD remains preferred.
 
 Linux matches the selected RandR output's EDID to exactly one connected DRM connector and uses that connector's DDC bus. Internal backlights must belong to the connector or its GPU, with exactly one backlight and one connected internal panel on that GPU. Ambiguous matches, missing EDIDs, virtual outputs, and cloned outputs produce errors. Backlight access follows the [kernel ABI](https://www.kernel.org/doc/Documentation/ABI/stable/sysfs-class-backlight) and [logind interface](https://www.freedesktop.org/software/systemd/man/latest/org.freedesktop.login1.html).
 

@@ -90,6 +90,7 @@ impl Engine {
                 modifier_config_mask(&config.window_drag.move_modifiers),
                 config.window_drag.resize_button,
                 modifier_config_mask(&config.window_drag.resize_modifiers),
+                &config.window_drag.paused_apps,
             );
             let input = platform::input_state();
 
@@ -287,6 +288,7 @@ impl Engine {
                     0,
                     config.window_drag.resize_button,
                     0,
+                    &config.window_drag.paused_apps,
                 );
                 platform::update_edge_hide_preview(None);
                 platform::update_strip_hints(&[]);
@@ -347,6 +349,7 @@ impl Engine {
             0,
             config.window_drag.resize_button,
             0,
+            &config.window_drag.paused_apps,
         );
         platform::update_edge_hide_preview(None);
         platform::update_strip_hints(&[]);

@@ -3,6 +3,8 @@ use crate::platform::adjustment::Level;
 use crate::platform::brightness::adjusted_brightness;
 use crate::platform::Monitor;
 use anyhow::{ensure, Context, Result};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use windows::core::{w, BSTR, PCWSTR, VARIANT};
 use windows::Win32::Devices::Display::{
     DestroyPhysicalMonitors, GetMonitorBrightness, GetNumberOfPhysicalMonitorsFromHMONITOR,
@@ -10,7 +12,8 @@ use windows::Win32::Devices::Display::{
 };
 use windows::Win32::Foundation::{POINT, RPC_E_TOO_LATE};
 use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MonitorFromPoint, HMONITOR, MONITORINFOEXW, MONITOR_DEFAULTTONULL,
+    CreateDCW, DeleteDC, GetMonitorInfoW, MonitorFromPoint, HMONITOR, MONITORINFOEXW,
+    MONITOR_DEFAULTTONULL,
 };
 use windows::Win32::Security::PSECURITY_DESCRIPTOR;
 use windows::Win32::System::Com::{
@@ -23,6 +26,7 @@ use windows::Win32::System::Wmi::{
     IWbemClassObject, IWbemLocator, WbemLocator, WBEM_FLAG_CONNECT_USE_MAX_WAIT,
     WBEM_FLAG_FORWARD_ONLY, WBEM_FLAG_RETURN_IMMEDIATELY, WBEM_FLAG_RETURN_WBEM_COMPLETE,
 };
+use windows::Win32::UI::ColorSystem::{GetDeviceGammaRamp, SetDeviceGammaRamp};
 
 pub(crate) fn adjust_monitor_brightness(target: &Monitor, delta: f32) -> Result<Level> {
     let monitor = super::monitors()?
@@ -48,9 +52,13 @@ pub(crate) fn adjust_monitor_brightness(target: &Monitor, delta: f32) -> Result<
 
     // 内屏 WMI 只是候选后端，不是前置条件：台式机上 WmiMonitorBrightness 类存在但查询返回
     // “不支持”，此时必须继续落到 DDC/CI，否则只有外接屏的机器完全调不动亮度。
-    resolve_backend(adjust_internal(&monitor.device_id, delta), || {
+    let physical = resolve_backend(adjust_internal(&monitor.device_id, delta), || {
         adjust_external(handle, delta)
-    })
+    });
+    // Some external monitors expose neither WMI brightness nor DDC/CI (for
+    // example when DDC/CI is disabled in the monitor OSD). Keep brightness
+    // usable by falling back to a per-display software gamma ramp.
+    resolve_software_fallback(physical, || adjust_software(&info.szDevice, delta))
 }
 
 /// 内屏后端的三种结果对应三种处理：拿到读数就用它；没匹配到内屏就交给 DDC/CI；
@@ -64,6 +72,120 @@ fn resolve_backend<T>(
         Ok(None) => external(),
         Err(internal_error) => external()
             .map_err(|error| error.context(format!("Windows 亮度接口：{internal_error:#}"))),
+    }
+}
+
+fn resolve_software_fallback<T>(
+    physical: Result<T>,
+    software: impl FnOnce() -> Result<T>,
+) -> Result<T> {
+    physical.or_else(|physical_error| {
+        software().map_err(|software_error| {
+            physical_error.context(format!("软件亮度回退失败：{software_error:#}"))
+        })
+    })
+}
+
+// Intel/Windows display drivers commonly reject gamma ramps whose peak is
+// reduced too far. Keep the software fallback inside the reliably accepted
+// range; the real panel OSD/DDC path remains the only way to reach 0–70%.
+const SOFTWARE_BRIGHTNESS_MIN: f32 = 0.70;
+type GammaRamp = [u16; 768];
+
+struct SoftwareRamp {
+    baseline: GammaRamp,
+    level: f32,
+}
+
+static SOFTWARE_RAMPS: OnceLock<Mutex<HashMap<String, SoftwareRamp>>> = OnceLock::new();
+
+fn software_ramps() -> &'static Mutex<HashMap<String, SoftwareRamp>> {
+    SOFTWARE_RAMPS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn software_level(current: f32, delta: f32) -> Result<f32> {
+    ensure!(
+        current.is_finite() && (0.0..=1.0).contains(&current),
+        "无效的软件亮度读数"
+    );
+    ensure!(
+        delta.is_finite() && delta != 0.0,
+        "invalid brightness delta"
+    );
+    Ok((current + delta).clamp(SOFTWARE_BRIGHTNESS_MIN, 1.0))
+}
+
+fn scaled_gamma_ramp(baseline: &GammaRamp, level: f32) -> GammaRamp {
+    let mut ramp = [0u16; 768];
+    for (index, value) in baseline.iter().enumerate() {
+        ramp[index] = (f32::from(*value) * level).round().clamp(0.0, 65535.0) as u16;
+    }
+    ramp
+}
+
+fn display_name(device: &[u16; 32]) -> String {
+    let end = device
+        .iter()
+        .position(|value| *value == 0)
+        .unwrap_or(device.len());
+    String::from_utf16_lossy(&device[..end])
+}
+
+fn display_dc(device: &[u16; 32]) -> Result<windows::Win32::Graphics::Gdi::HDC> {
+    let device_name = PCWSTR(device.as_ptr());
+    let hdc = unsafe { CreateDCW(w!("DISPLAY"), device_name, PCWSTR::null(), None) };
+    ensure!(hdc.0 != std::ptr::null_mut(), "无法打开显示器设备上下文");
+    Ok(hdc)
+}
+
+fn adjust_software(device: &[u16; 32], delta: f32) -> Result<Level> {
+    let name = display_name(device);
+    ensure!(!name.is_empty(), "无法识别显示器设备");
+    let hdc = display_dc(device)?;
+    let result = (|| {
+        let mut ramps = [0u16; 768];
+        ensure!(
+            unsafe { GetDeviceGammaRamp(hdc, ramps.as_mut_ptr().cast()) }.as_bool(),
+            "显示器不支持软件亮度"
+        );
+        let mut states = software_ramps()
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let state = states.entry(name.clone()).or_insert_with(|| SoftwareRamp {
+            baseline: ramps,
+            level: 1.0,
+        });
+        let level = software_level(state.level, delta)?;
+        let next_ramp = scaled_gamma_ramp(&state.baseline, level);
+        ensure!(
+            unsafe { SetDeviceGammaRamp(hdc, next_ramp.as_ptr().cast()) }.as_bool(),
+            "显示器拒绝软件亮度"
+        );
+        state.level = level;
+        Level::brightness(
+            0,
+            (level * 100.0).round() as u32,
+            100,
+            format!("{name}（软件亮度）"),
+        )
+    })();
+    let _ = unsafe { DeleteDC(hdc) };
+    result
+}
+
+/// Restore gamma ramps changed by the software fallback before the helper exits.
+pub(crate) fn reset_software_brightness() {
+    let mut states = software_ramps()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    for (name, state) in states.drain() {
+        let mut device = [0u16; 32];
+        let encoded: Vec<u16> = name.encode_utf16().take(device.len() - 1).collect();
+        device[..encoded.len()].copy_from_slice(&encoded);
+        if let Ok(hdc) = display_dc(&device) {
+            let _ = unsafe { SetDeviceGammaRamp(hdc, state.baseline.as_ptr().cast()) };
+            let _ = unsafe { DeleteDC(hdc) };
+        }
     }
 }
 
@@ -354,6 +476,45 @@ mod tests {
             9
         );
         assert_eq!(external_calls, 1);
+    }
+
+    #[test]
+    fn physical_brightness_failure_uses_software_fallback_and_preserves_both_errors() {
+        let mut attempted = false;
+        assert_eq!(
+            resolve_software_fallback::<u32>(Err(anyhow::anyhow!("DDC 不支持")), || {
+                attempted = true;
+                Ok(95)
+            })
+            .unwrap(),
+            95
+        );
+        assert!(attempted);
+
+        let error = resolve_software_fallback::<u32>(Err(anyhow::anyhow!("DDC 不支持")), || {
+            Err(anyhow::anyhow!("gamma ramp 被拒绝"))
+        })
+        .unwrap_err();
+        let chain = format!("{error:#}");
+        assert!(chain.contains("DDC 不支持"), "{chain}");
+        assert!(chain.contains("gamma ramp 被拒绝"), "{chain}");
+    }
+
+    #[test]
+    fn software_brightness_clamps_and_scales_gamma_without_overflow() {
+        assert_eq!(software_level(1.0, -0.05).unwrap(), 0.95);
+        assert_eq!(software_level(0.70, -0.05).unwrap(), 0.70);
+        assert_eq!(software_level(0.95, 0.05).unwrap(), 1.0);
+        assert!(software_level(f32::NAN, -0.05).is_err());
+
+        let mut baseline = [0u16; 768];
+        baseline[0] = 100;
+        baseline[255] = 65_535;
+        baseline[256] = 32_000;
+        let ramp = scaled_gamma_ramp(&baseline, 0.5);
+        assert_eq!(ramp[0], 50);
+        assert_eq!(ramp[255], 32_768);
+        assert_eq!(ramp[256], 16_000);
     }
 
     #[test]

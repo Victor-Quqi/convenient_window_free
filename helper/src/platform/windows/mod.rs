@@ -11,7 +11,7 @@ pub mod topmost_pin;
 pub mod window;
 
 pub(crate) use audio::adjust_system_volume;
-pub(crate) use brightness::adjust_monitor_brightness;
+pub(crate) use brightness::{adjust_monitor_brightness, reset_software_brightness};
 pub use hints::*;
 pub use input::*;
 pub use keyboard::*;

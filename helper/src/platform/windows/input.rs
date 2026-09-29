@@ -69,6 +69,26 @@ fn window_drag_state() -> &'static Mutex<WindowDragHookState> {
     STATE.get_or_init(|| Mutex::new(WindowDragHookState::default()))
 }
 
+fn window_drag_paused_apps() -> &'static Mutex<Vec<String>> {
+    static APPS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    APPS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn set_window_drag_paused_apps(paused_apps: &[String]) {
+    if let Ok(mut configured) = window_drag_paused_apps().lock() {
+        if configured.as_slice() != paused_apps {
+            *configured = paused_apps.to_vec();
+        }
+    }
+}
+
+fn window_drag_target_is_allowed(point: Point) -> bool {
+    let Ok(paused_apps) = window_drag_paused_apps().lock() else {
+        return false;
+    };
+    super::window::window_drag_target_allowed_at(point, &paused_apps).unwrap_or(false)
+}
+
 pub fn install_mouse_hook() -> Result<()> {
     match HOOK_STATE.compare_exchange(
         HOOK_NOT_STARTED,
@@ -175,11 +195,13 @@ pub fn configure_window_drag_capture(
     move_modifiers: u8,
     resize_button: MouseButton,
     resize_modifiers: u8,
+    paused_apps: &[String],
 ) {
     WINDOW_DRAG_MOVE_BUTTON.store(mouse_button_to_u8(move_button), Ordering::Release);
     WINDOW_DRAG_RESIZE_BUTTON.store(mouse_button_to_u8(resize_button), Ordering::Release);
     WINDOW_DRAG_MOVE_MODIFIERS.store(move_modifiers, Ordering::Release);
     WINDOW_DRAG_RESIZE_MODIFIERS.store(resize_modifiers, Ordering::Release);
+    set_window_drag_paused_apps(paused_apps);
     WINDOW_DRAG_ENABLED.store(enabled, Ordering::Release);
     if !enabled {
         cancel_window_drag_capture();
@@ -314,6 +336,14 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
 }
 
 fn handle_window_drag_message(message: u32, hook: &MSLLHOOKSTRUCT) -> bool {
+    handle_window_drag_message_with_target(message, hook, window_drag_target_is_allowed)
+}
+
+fn handle_window_drag_message_with_target(
+    message: u32,
+    hook: &MSLLHOOKSTRUCT,
+    target_allowed: impl FnOnce(Point) -> bool,
+) -> bool {
     if hook.flags & LLMHF_INJECTED != 0 && hook.dwExtraInfo == super::mouse::GESTURE_INJECT_TAG {
         return false;
     }
@@ -367,6 +397,21 @@ fn handle_window_drag_message(message: u32, hook: &MSLLHOOKSTRUCT) -> bool {
         (false, true) => WindowDragMode::Resize,
         _ => return false,
     };
+    begin_window_drag_capture(&mut state, point, button, mode, target_allowed(point))
+}
+
+fn begin_window_drag_capture(
+    state: &mut WindowDragHookState,
+    point: Point,
+    button: MouseButton,
+    mode: WindowDragMode,
+    target_allowed: bool,
+) -> bool {
+    // Reject before capturing/consuming the mouse-down so the target application
+    // receives the configured modifier+mouse combination unchanged.
+    if !target_allowed {
+        return false;
+    }
     let sequence = WINDOW_DRAG_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1;
     state.capture = Some((
         WindowDragCapture {
@@ -587,6 +632,22 @@ unsafe fn message_loop() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blocked_window_does_not_capture_or_consume_the_configured_mouse_press() {
+        let mut state = WindowDragHookState::default();
+        assert!(
+            !begin_window_drag_capture(
+                &mut state,
+                Point { x: 10, y: 20 },
+                MouseButton::Left,
+                WindowDragMode::Move,
+                false,
+            ),
+            "a paused target must let the original modifier+mouse press reach the application"
+        );
+        assert!(state.capture.is_none());
+    }
 
     #[test]
     fn cancelled_gesture_swallows_its_release_without_queuing_a_short_click() {

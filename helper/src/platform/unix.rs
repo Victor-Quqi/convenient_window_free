@@ -74,6 +74,11 @@ pub fn draggable_window_at(
     )
 }
 
+pub fn window_drag_target_allowed_at(point: Point, paused_apps: &[String]) -> Result<bool> {
+    Ok(backend::draggable_window_at(point)?
+        .is_some_and(|window| !is_paused_window(paused_apps, &window)))
+}
+
 /// 与 `core::engine` 的应用名单语义保持一致：按进程名、窗口标题或窗口类名做小写包含匹配，
 /// 命中任一项即视为该窗口属于名单内的应用。行为与 Windows 侧的同名函数对称。
 ///

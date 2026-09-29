@@ -90,29 +90,10 @@ pub fn window_info_for_handle(handle: WindowHandle) -> Result<Option<WindowInfo>
 /// 用户看到的就是「名单似乎没生效，窗口还是从全屏缩回了小窗」。
 /// 名单为空时不做额外查询，保持默认路径的行为与开销不变。
 pub fn draggable_window_at(point: Point, paused_apps: &[String]) -> Result<Option<WindowInfo>> {
-    let hwnd = unsafe {
-        GetAncestor(
-            WindowFromPoint(POINT {
-                x: point.x,
-                y: point.y,
-            }),
-            GA_ROOT,
-        )
-    };
-    let mut window = match window_info(hwnd)? {
-        Some(window) => window,
-        None => return Ok(None),
-    };
-    if window.transient
-        || matches!(
-            window.class_name.as_str(),
-            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "#32768"
-        )
-        || (!window.maximized && window_covers_monitor(hwnd, window.rect))
-    {
+    let Some((hwnd, mut window)) = window_at_point_for_drag(point)? else {
         return Ok(None);
-    }
-    if is_paused_window(paused_apps, &window) {
+    };
+    if !is_drag_candidate(hwnd, &window) || is_paused_window(paused_apps, &window) {
         return Ok(None);
     }
     if window.maximized {
@@ -125,6 +106,38 @@ pub fn draggable_window_at(point: Point, paused_apps: &[String]) -> Result<Optio
         };
     }
     Ok(Some(window))
+}
+
+/// Read-only admission check used by the low-level mouse hook. It must not
+/// restore maximized windows or otherwise mutate the target before the engine
+/// has accepted the capture.
+pub fn window_drag_target_allowed_at(point: Point, paused_apps: &[String]) -> Result<bool> {
+    let Some((hwnd, window)) = window_at_point_for_drag(point)? else {
+        return Ok(false);
+    };
+    Ok(is_drag_candidate(hwnd, &window) && !is_paused_window(paused_apps, &window))
+}
+
+fn window_at_point_for_drag(point: Point) -> Result<Option<(HWND, WindowInfo)>> {
+    let hwnd = unsafe {
+        GetAncestor(
+            WindowFromPoint(POINT {
+                x: point.x,
+                y: point.y,
+            }),
+            GA_ROOT,
+        )
+    };
+    Ok(window_info(hwnd)?.map(|window| (hwnd, window)))
+}
+
+fn is_drag_candidate(hwnd: HWND, window: &WindowInfo) -> bool {
+    !window.transient
+        && !matches!(
+            window.class_name.as_str(),
+            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "#32768"
+        )
+        && (window.maximized || !window_covers_monitor(hwnd, window.rect))
 }
 
 /// 与 `core::engine` 的应用名单语义保持一致：按进程名、窗口标题或窗口类名做小写包含匹配，

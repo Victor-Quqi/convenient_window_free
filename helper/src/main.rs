@@ -168,6 +168,9 @@ async fn main() -> Result<()> {
         usage_task.abort();
     }
 
+    #[cfg(target_os = "windows")]
+    platform::reset_software_brightness();
+
     runtime_result
 }
 

@@ -24,6 +24,26 @@ static RESIZE_BUTTON: AtomicU8 = AtomicU8::new(1);
 static MOVE_MODIFIERS: AtomicU8 = AtomicU8::new(2);
 static RESIZE_MODIFIERS: AtomicU8 = AtomicU8::new(2);
 
+fn window_drag_paused_apps() -> &'static Mutex<Vec<String>> {
+    static APPS: OnceLock<Mutex<Vec<String>>> = OnceLock::new();
+    APPS.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn set_window_drag_paused_apps(paused_apps: &[String]) {
+    if let Ok(mut configured) = window_drag_paused_apps().lock() {
+        if configured.as_slice() != paused_apps {
+            *configured = paused_apps.to_vec();
+        }
+    }
+}
+
+fn window_drag_target_is_allowed(point: Point) -> bool {
+    let Ok(paused_apps) = window_drag_paused_apps().lock() else {
+        return false;
+    };
+    super::window_drag_target_allowed_at(point, &paused_apps).unwrap_or(false)
+}
+
 #[derive(Default)]
 struct InputStore {
     state: InputState,
@@ -125,11 +145,13 @@ pub fn configure_window_drag_capture(
     move_modifiers: u8,
     resize_button: MouseButton,
     resize_modifiers: u8,
+    paused_apps: &[String],
 ) {
     MOVE_BUTTON.store(mouse_button_to_u8(move_button), Ordering::Release);
     RESIZE_BUTTON.store(mouse_button_to_u8(resize_button), Ordering::Release);
     MOVE_MODIFIERS.store(move_modifiers, Ordering::Release);
     RESIZE_MODIFIERS.store(resize_modifiers, Ordering::Release);
+    set_window_drag_paused_apps(paused_apps);
     DRAG_ENABLED.store(enabled, Ordering::Release);
     if !enabled {
         cancel_window_drag_capture();
@@ -328,6 +350,9 @@ fn handle_drag_event(state: &mut InputStore, button: MouseButton, down: bool) ->
         (false, true) => WindowDragMode::Resize,
         _ => return false,
     };
+    if !window_drag_target_is_allowed(state.cursor) {
+        return false;
+    }
     let sequence = DRAG_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1;
     state.drag = Some((
         WindowDragCapture {
