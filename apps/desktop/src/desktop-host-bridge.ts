@@ -1,3 +1,4 @@
+import { translator, LANGUAGE_KEY, resolveInitialLanguage, type Language } from "./i18n";
 import { invoke } from "@tauri-apps/api/core";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
@@ -29,6 +30,9 @@ export async function createDesktopHostBridge(): Promise<HostBridge> {
     invoke<DesktopStatus>("desktop_status"),
     invoke<unknown | null>("load_config")
   ]);
+  let storedLanguage: string | null = null;
+  try { storedLanguage = localStorage.getItem(LANGUAGE_KEY); } catch { /* Storage may be unavailable. */ }
+  let language: Language = resolveInitialLanguage(storedLanguage, navigator.language);
   let token = status.token;
   let saveQueue: Promise<void> = Promise.resolve();
   let helperState: HelperInstallState = {
@@ -44,6 +48,11 @@ export async function createDesktopHostBridge(): Promise<HostBridge> {
 
   return {
     kind: "desktop",
+    async setLanguage(value) {
+      language = value;
+      const ui = translator(language);
+      await invoke("set_native_labels", { labels: { title: ui("brandName"), show: ui("trayShow"), autostart: ui("trayAutostart"), quit: ui("trayQuit") } });
+    },
     async startHelper() {
       try {
         const result = await invoke<StartHelperResult>("start_helper");
@@ -86,10 +95,10 @@ export async function createDesktopHostBridge(): Promise<HostBridge> {
     },
     async importSettings() {
       const selected = await open({
-        title: "导入便捷窗口配置",
+        title: translator(language)("configImportTitle"),
         multiple: false,
         directory: false,
-        filters: [{ name: "JSON 配置", extensions: ["json"] }]
+        filters: [{ name: translator(language)("configFileType"), extensions: ["json"] }]
       });
       if (!selected || Array.isArray(selected)) return null;
       const content = await invoke<string>("read_config_file", { path: selected });
@@ -97,9 +106,9 @@ export async function createDesktopHostBridge(): Promise<HostBridge> {
     },
     async exportSettings(settings) {
       const selected = await save({
-        title: "导出便捷窗口配置",
+        title: translator(language)("configExportTitle"),
         defaultPath: "convenient-window-settings.json",
-        filters: [{ name: "JSON 配置", extensions: ["json"] }]
+        filters: [{ name: translator(language)("configFileType"), extensions: ["json"] }]
       });
       if (!selected) return false;
       await invoke("write_config_file", {

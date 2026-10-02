@@ -119,7 +119,7 @@ export interface GesturePoint {
 
 export interface GestureTemplate {
   id: string;
-  name: string;
+  name?: string;
   enabled: boolean;
   builtin: boolean;
   mode: GestureMode;
@@ -141,6 +141,7 @@ export interface MouseGestureSettings {
 
 export interface EdgeHideSettings {
   enabled: boolean;
+  animationEnabled: boolean;
   showPreview: boolean;
   showRestoreHint: boolean;
   keepExpandedWhenForeground: boolean;

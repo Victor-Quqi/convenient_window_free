@@ -2,6 +2,7 @@ import App from "./App.svelte";
 import { createDesktopHostBridge } from "./desktop-host-bridge";
 import { configureHostBridge } from "./host-bridge";
 import "./styles.css";
+import { normalizeSettings, SETTINGS_SCHEMA_VERSION } from "./settings-store";
 import { mount } from "svelte";
 
 async function bootstrap(): Promise<void> {
@@ -10,6 +11,10 @@ async function bootstrap(): Promise<void> {
 
   const host = await createDesktopHostBridge();
   configureHostBridge(host);
+  const stored = host.getInitialSettings();
+  if (stored && typeof stored === "object" && ((stored as { schemaVersion?: number }).schemaVersion ?? 0) < SETTINGS_SCHEMA_VERSION) {
+    await host.saveSettings(normalizeSettings(stored));
+  }
   mount(App, { target });
   document.documentElement.dataset.appReady = "true";
 }

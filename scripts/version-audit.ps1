@@ -31,6 +31,7 @@ $values["workspace"] = Read-JsonVersion (Join-Path $root 'package.json') 'worksp
 $values["desktop package"] = Read-JsonVersion (Join-Path $root 'apps/desktop/package.json') 'desktop package'
 $values["desktop cargo"] = Read-CargoVersion (Join-Path $root 'apps/desktop/src-tauri/Cargo.toml') 'desktop Cargo.toml'
 $values["tauri"] = Read-JsonVersion (Join-Path $root 'apps/desktop/src-tauri/tauri.conf.json') 'Tauri config'
+$values["desktop helper assets"] = Read-JsonVersion (Join-Path $root 'apps/desktop/helper-assets.json') 'desktop helper assets'
 $values["helper cargo"] = Read-CargoVersion (Join-Path $root 'helper/Cargo.toml') 'helper Cargo.toml'
 if ($PluginPackagePath) { $values["plugin package"] = Read-JsonVersion $PluginPackagePath 'plugin package' }
 if ($PluginManifestPath) { $values["plugin manifest"] = Read-JsonVersion $PluginManifestPath 'plugin manifest' }

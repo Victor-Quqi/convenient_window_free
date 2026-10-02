@@ -47,6 +47,18 @@ jobs:
         shell: pwsh
         run: npm run desktop:install-smoke
 
+      - name: Verify upgrade from the last protocol 6 release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force target/legacy-upgrade | Out-Null
+          gh release download v0.6.2 --repo ximizhou/convenient_window_free --pattern '*setup.exe' --dir target/legacy-upgrade
+          if ($LASTEXITCODE -ne 0) { throw "Could not obtain the legacy upgrade fixture" }
+          $legacy = Get-ChildItem target/legacy-upgrade -Filter '*setup.exe' | Select-Object -First 1
+          $current = Get-ChildItem artifacts -Filter '*setup.exe' | Select-Object -First 1
+          ./scripts/desktop-upgrade-smoke.ps1 -LegacyInstaller $legacy.FullName -Installer $current.FullName
+
       - name: Audit installer and portable contents
         shell: pwsh
         env:

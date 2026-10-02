@@ -715,6 +715,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .drag-bindings > div > span { grid-column: 1 / -1; }
 .drag-bindings span b,.drag-bindings span small { display: block; }.drag-bindings span b { color: var(--ink); font-size: 11.5px; }.drag-bindings span small { margin-top: 3px; color: var(--faint); font-size: 10px; }
 .drag-bindings select,.ocr-language select { width: 100%; height: 34px; padding: 0 8px; border: 1px solid var(--line-strong); border-radius: 5px; background: var(--bg); color: var(--ink); font-size: 11px; }
+.edge-animation-setting { margin: 0 0 16px; padding-bottom: 16px; border-bottom: 1px solid var(--line); }
 .edge-preview-setting { margin-top: 0; padding-top: 0; border-top: 0; }
 .edge-restore-hint-setting, .edge-foreground-setting { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--line); }
 .pin-setting { margin-top: 18px; padding-top: 16px; border-top: 1px solid var(--line); }

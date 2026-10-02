@@ -1,3 +1,4 @@
+import { migrateGestureName } from "./gesture-names";
 import type {
   AppSettings, GesturePoint, GestureTemplate, GestureTriggerButton, HotzoneAction,
   HotzoneId, HotzoneSetting, ModifierAction, ModifierKey, MouseButton, OcrLanguage,
@@ -6,6 +7,7 @@ import type {
 import { getOptionalHostBridge } from "./host-bridge";
 import { resampleGesture } from "./gesture-algorithm";
 
+export const SETTINGS_SCHEMA_VERSION = 8;
 export const MAX_GESTURE_TEMPLATES = 64;
 export const MAX_SETTINGS_STORAGE_BYTES = 900 * 1024;
 
@@ -38,7 +40,7 @@ const ocrLanguages: OcrLanguage[] = ["auto", "zh-Hans", "en"];
 const screenshotResultModes: ScreenshotResultMode[] = ["pin", "copy-text", "pin-and-copy"];
 
 export const defaultSettings: AppSettings = {
-  schemaVersion: 7,
+  schemaVersion: SETTINGS_SCHEMA_VERSION,
   taskbarAppearance: {
     enabled: false,
     mode: "transparent",
@@ -67,6 +69,7 @@ export const defaultSettings: AppSettings = {
   monitorProfiles: [],
   edgeHide: {
     enabled: false,
+    animationEnabled: true,
     showPreview: true,
     showRestoreHint: true,
     keepExpandedWhenForeground: false,
@@ -105,12 +108,12 @@ export const defaultSettings: AppSettings = {
     fullscreenPause: true,
     pausedApps: [],
     gestures: [
-      builtinGesture("gesture-up", "向上 · 复制", { kind: "shortcut", value: "Ctrl+C" }, [[0.5, 0.9], [0.5, 0.1]]),
-      builtinGesture("gesture-down", "向下 · 粘贴", { kind: "shortcut", value: "Ctrl+V" }, [[0.5, 0.1], [0.5, 0.9]]),
-      builtinGesture("gesture-l", "L 型 · 关闭窗口", { kind: "shortcut", value: "Alt+F4" }, [[0.2, 0.1], [0.2, 0.85], [0.85, 0.85]]),
-      builtinGesture("gesture-circle", "圆圈 · 切换窗口置顶", { kind: "toggle-window-topmost" }, circleSample()),
+      builtinGesture("gesture-up", { kind: "shortcut", value: "Ctrl+C" }, [[0.5, 0.9], [0.5, 0.1]]),
+      builtinGesture("gesture-down", { kind: "shortcut", value: "Ctrl+V" }, [[0.5, 0.1], [0.5, 0.9]]),
+      builtinGesture("gesture-l", { kind: "shortcut", value: "Alt+F4" }, [[0.2, 0.1], [0.2, 0.85], [0.85, 0.85]]),
+      builtinGesture("gesture-circle", { kind: "toggle-window-topmost" }, circleSample()),
       {
-        ...builtinGesture("gesture-rectangle", "矩形截图", { kind: "none" }, [[0.15, 0.15], [0.85, 0.15], [0.85, 0.85], [0.15, 0.85], [0.15, 0.15]]),
+        ...builtinGesture("gesture-rectangle", { kind: "none" }, [[0.15, 0.15], [0.85, 0.15], [0.85, 0.85], [0.15, 0.85], [0.15, 0.15]]),
         mode: "region-screenshot"
       }
     ]
@@ -123,6 +126,9 @@ export function loadSettings(): AppSettings {
 }
 
 export function normalizeSettings(stored: Partial<AppSettings> | null | undefined): AppSettings {
+  if (stored && typeof stored.schemaVersion === "number" && stored.schemaVersion > SETTINGS_SCHEMA_VERSION) {
+    throw new Error("Unsupported settings schema version");
+  }
   if (!stored) {
     return cloneSettings(defaultSettings);
   }
@@ -137,7 +143,7 @@ export function normalizeSettings(stored: Partial<AppSettings> | null | undefine
     5000
   );
   return {
-    schemaVersion: 7,
+    schemaVersion: SETTINGS_SCHEMA_VERSION,
     enabled: booleanValue(stored.enabled, defaultSettings.enabled),
     hotzonesEnabled: typeof stored.hotzonesEnabled === "boolean"
       ? stored.hotzonesEnabled
@@ -151,6 +157,7 @@ export function normalizeSettings(stored: Partial<AppSettings> | null | undefine
     pausedApps: stringList(stored.pausedApps),
     edgeHide: {
       enabled: booleanValue(edgeHide?.enabled, defaultSettings.edgeHide.enabled),
+      animationEnabled: booleanValue(edgeHide?.animationEnabled, defaultSettings.edgeHide.animationEnabled),
       showPreview: booleanValue(edgeHide?.showPreview, defaultSettings.edgeHide.showPreview),
       showRestoreHint: booleanValue(
         edgeHide?.showRestoreHint,
@@ -298,7 +305,7 @@ function normalizeMouseGestures(value: unknown, sourceSchemaVersion = 5): AppSet
   const defaultsById = new Map(defaultSettings.mouseGestures.gestures.map((gesture) => [gesture.id, gesture]));
   const normalized: GestureTemplate[] = [];
   for (const item of rawGestures) {
-    const gesture = normalizeGesture(item, defaultsById.get(typeof item?.id === "string" ? item.id : ""));
+    const gesture = normalizeGesture(item, defaultsById.get(typeof item?.id === "string" ? item.id.trim().slice(0, 80) : ""), sourceSchemaVersion);
     if (gesture && !normalized.some((existing) => existing.id === gesture.id)) normalized.push(gesture);
   }
   for (const fallback of defaultSettings.mouseGestures.gestures) {
@@ -331,20 +338,20 @@ function normalizeMouseGestures(value: unknown, sourceSchemaVersion = 5): AppSet
   };
 }
 
-function normalizeGesture(value: unknown, fallback?: GestureTemplate): GestureTemplate | null {
+function normalizeGesture(value: unknown, fallback?: GestureTemplate, sourceSchemaVersion = 8): GestureTemplate | null {
   if (!value || typeof value !== "object") return fallback ? cloneGesture(fallback) : null;
   const raw = value as Partial<GestureTemplate>;
   const id = optionalString(raw.id) ?? fallback?.id;
-  const name = optionalString(raw.name) ?? fallback?.name;
-  if (!id || !name) return null;
+  const name = id ? migrateGestureName(id, optionalString(raw.name), sourceSchemaVersion) : undefined;
+  if (!id || (!fallback && !name)) return null;
   const samples = Array.isArray(raw.samples)
     ? raw.samples.map(normalizeGestureSample).filter((sample) => sample.length >= 2).slice(0, 8)
     : [];
   return {
     id: id.slice(0, 80),
-    name: name.slice(0, 40),
+    ...(name ? { name: Array.from(name).slice(0, 40).join("") } : {}),
     enabled: booleanValue(raw.enabled, fallback?.enabled ?? true),
-    builtin: fallback ? true : booleanValue(raw.builtin, false),
+    builtin: !!fallback,
     mode: fallback?.mode ?? (raw.mode === "region-screenshot" ? "region-screenshot" : "action"),
     action: normalizeAction(raw.action ?? fallback?.action),
     modifierActions: normalizeModifierActions(raw.modifierActions),
@@ -378,7 +385,8 @@ function normalizeModifierActions(value: unknown): ModifierAction[] {
 
 function modifierList(value: unknown, fallback: ModifierKey[] = []): ModifierKey[] {
   if (!Array.isArray(value)) return [...fallback];
-  return modifierKeys.filter((key) => value.includes(key));
+  const normalized = modifierKeys.filter((key) => value.includes(key));
+  return normalized.length ? normalized : [...fallback];
 }
 
 function sameModifiers(left: ModifierKey[], right: ModifierKey[]): boolean {
@@ -575,13 +583,11 @@ function cloneGesture(gesture: GestureTemplate): GestureTemplate {
 
 function builtinGesture(
   id: string,
-  name: string,
   action: HotzoneAction,
   points: [number, number][]
 ): GestureTemplate {
   return {
     id,
-    name,
     enabled: true,
     builtin: true,
     mode: "action",
@@ -617,4 +623,3 @@ function cloneModifierAction(item: ModifierAction): ModifierAction {
     action: { ...item.action }
   };
 }
-

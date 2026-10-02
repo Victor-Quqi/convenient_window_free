@@ -1,5 +1,6 @@
 export interface HostBridge {
   readonly kind: "desktop";
+  setLanguage?(language: import("./i18n").Language): Promise<void>;
   startHelper(): Promise<{
     ok: boolean;
     alreadyRunning?: boolean;

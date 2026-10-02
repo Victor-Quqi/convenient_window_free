@@ -108,7 +108,7 @@ describe("normalizeSettings", () => {
     expect(settings.edgeHide.triggerRatio).toBe(33);
     expect(settings.edgeHide.collapseDelayMs).toBe(300);
     expect(settings.edgeHide.restoreDelayMs).toBe(200);
-    expect(settings.schemaVersion).toBe(7);
+    expect(settings.schemaVersion).toBe(8);
     expect(settings.mouseGestures.gestures).toHaveLength(5);
   });
 
@@ -376,7 +376,7 @@ describe("normalizeSettings", () => {
     expect(settings.windowDrag).toMatchObject({
       enabled: true,
       moveModifiers: ["alt", "win"],
-      resizeModifiers: [],
+      resizeModifiers: ["alt"],
       moveButton: "x1"
     });
     expect(settings.topmostPin.enabled).toBe(false);
@@ -452,3 +452,29 @@ describe("saveSettings", () => {
   });
 });
 
+
+
+describe("edge hide animation preference", () => {
+  it("defaults on and preserves explicit off across normalization and old imports", () => {
+    expect(defaultSettings.edgeHide.animationEnabled).toBe(true);
+    expect(normalizeSettings({ schemaVersion: 7 }).edgeHide.animationEnabled).toBe(true);
+    const settings = structuredClone(defaultSettings);
+    settings.edgeHide.animationEnabled = false;
+    const imported = normalizeSettings(JSON.parse(JSON.stringify(settings)));
+    expect(imported.edgeHide.animationEnabled).toBe(false);
+    expect(normalizeSettings(imported).edgeHide).toEqual(imported.edgeHide);
+    (settings.edgeHide as unknown as { animationEnabled: unknown }).animationEnabled = "off";
+    expect(normalizeSettings(settings).edgeHide.animationEnabled).toBe(true);
+  });
+});
+
+
+it("keeps Alt required for missing and empty drag bindings, matching the helper contract", () => {
+  expect(normalizeSettings({}).windowDrag.moveModifiers).toEqual(["alt"]);
+  const settings = structuredClone(defaultSettings);
+  settings.windowDrag.moveModifiers = [];
+  settings.windowDrag.resizeModifiers = [];
+  const normalized = normalizeSettings(settings);
+  expect(normalized.windowDrag.moveModifiers).toEqual(["alt"]);
+  expect(normalized.windowDrag.resizeModifiers).toEqual(["alt"]);
+});

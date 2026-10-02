@@ -28,7 +28,7 @@ Release assets are currently unsigned. Windows may show an unknown-publisher or 
 Development source adds an **Appearance** (slim wand-and-sparkle) entry and moves global settings to a circular top-right gear. Taskbar material is an off-by-default Windows 11 x64 technical prototype with transparent, acrylic and tinted modes plus opacity and border controls. Activation is direct; the Explorer risk note remains inside the panel. The illustrated preview is not proof of actual rendering; initial transparency has received positive local acceptance feedback, while new materials, icon clarity, and cross-environment recovery still require acceptance and are not features of the published stable `0.6.2` release.
 
 - **Hot zones**: configure the four corners and four edges of each monitor independently, with hover, mouse-button, wheel, and edge-movement triggers.
-- **Window edge hiding**: move windows partly off-screen and restore them from a visible edge strip, with multi-window and multi-monitor support. The pale restore outline can be hidden independently without disabling edge restoration.
+- **Window edge hiding**: move windows partly off-screen and restore them from a visible edge strip, with multi-window and multi-monitor support. The restore outline and hide/restore animation can be disabled independently without disabling edge restoration.
 - **Anywhere move and resize**: move or resize the active window with configurable modifier-and-mouse combinations.
 - **Topmost controls**: keep a window above others and optionally use a small on-window pin to release it quickly.
 - **Global mouse gestures**: bind gestures to shortcuts, system actions, commands, and window controls; create and manage custom gesture samples.
@@ -38,7 +38,7 @@ Development source adds an **Appearance** (slim wand-and-sparkle) entry and move
 - **Brightness controls**: adjust the triggering display through hot zones and gestures; see [platform requirements](docs/architecture.md#brightness-controls).
 - **Live settings**: most changes are persisted and applied immediately, without a separate save step.
 - **Light and dark themes**: follow the system appearance by default or remember a manual selection.
-- **Chinese and English interface**: the settings window follows your Windows display language by default, and the language can be switched at any time under More → General settings.
+- **Chinese and English interface**: the settings window follows your Windows display language by default, and the language can be switched at any time under Settings (gear) → General settings.
 
 ## Screenshots
 

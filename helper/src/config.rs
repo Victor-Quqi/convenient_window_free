@@ -1,12 +1,17 @@
 use serde::{Deserialize, Serialize};
 
+pub const SCHEMA_VERSION: u32 = 8;
+
 const MAX_GESTURE_TEMPLATES: usize = 64;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
-    #[serde(default = "default_schema_version")]
+    #[serde(default)]
     pub schema_version: u32,
+    /// Connection-local translated labels; excluded from persisted settings.
+    #[serde(skip)]
+    pub gesture_labels: std::collections::HashMap<String, String>,
     #[serde(default = "default_true")]
     pub enabled: bool,
     #[serde(default = "default_true")]
@@ -43,6 +48,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             schema_version: default_schema_version(),
+            gesture_labels: Default::default(),
             enabled: true,
             hotzones_enabled: true,
             edge_size: 8,
@@ -100,6 +106,14 @@ impl Default for TaskbarAppearanceConfig {
 }
 
 impl AppConfig {
+    pub fn gesture_label<'a>(&'a self, gesture: &'a GestureTemplate) -> Option<&'a str> {
+        if !gesture.name.is_empty() {
+            Some(&gesture.name)
+        } else {
+            self.gesture_labels.get(&gesture.id).map(String::as_str)
+        }
+    }
+
     pub fn normalized(mut self) -> Self {
         let source_schema_version = self.schema_version;
         self.schema_version = default_schema_version();
@@ -139,7 +153,8 @@ impl AppConfig {
         self.mouse_gestures.min_distance = self.mouse_gestures.min_distance.clamp(12, 240);
         self.mouse_gestures.sensitivity = self.mouse_gestures.sensitivity.clamp(35, 95);
         self.mouse_gestures.paused_apps = normalized_string_list(self.mouse_gestures.paused_apps);
-        self.mouse_gestures.gestures = normalize_gestures(self.mouse_gestures.gestures);
+        self.mouse_gestures.gestures =
+            normalize_gestures(self.mouse_gestures.gestures, source_schema_version);
         self.window_drag.move_modifiers =
             normalized_drag_modifiers(self.window_drag.move_modifiers);
         self.window_drag.resize_modifiers =
@@ -517,6 +532,7 @@ pub struct GesturePoint {
 #[serde(rename_all = "camelCase")]
 pub struct GestureTemplate {
     pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub name: String,
     #[serde(default = "default_true")]
     pub enabled: bool,
@@ -625,6 +641,8 @@ pub struct OcrConfig {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EdgeHideConfig {
+    #[serde(default = "default_true")]
+    pub animation_enabled: bool,
     #[serde(default)]
     pub enabled: bool,
     #[serde(default = "default_true")]
@@ -658,6 +676,7 @@ pub struct EdgeHideConfig {
 impl Default for EdgeHideConfig {
     fn default() -> Self {
         Self {
+            animation_enabled: true,
             enabled: false,
             show_preview: true,
             show_restore_hint: true,
@@ -706,7 +725,7 @@ fn default_true() -> bool {
 }
 
 fn default_schema_version() -> u32 {
-    7
+    SCHEMA_VERSION
 }
 
 fn default_gesture_min_distance() -> i32 {
@@ -784,7 +803,6 @@ fn default_gestures() -> Vec<GestureTemplate> {
     vec![
         builtin_gesture(
             "gesture-up",
-            "向上 · 复制",
             HotzoneAction {
                 kind: ActionKind::Shortcut,
                 value: Some("Ctrl+C".into()),
@@ -794,7 +812,6 @@ fn default_gestures() -> Vec<GestureTemplate> {
         ),
         builtin_gesture(
             "gesture-down",
-            "向下 · 粘贴",
             HotzoneAction {
                 kind: ActionKind::Shortcut,
                 value: Some("Ctrl+V".into()),
@@ -804,7 +821,6 @@ fn default_gestures() -> Vec<GestureTemplate> {
         ),
         builtin_gesture(
             "gesture-l",
-            "L 型 · 关闭窗口",
             HotzoneAction {
                 kind: ActionKind::Shortcut,
                 value: Some("Alt+F4".into()),
@@ -814,7 +830,6 @@ fn default_gestures() -> Vec<GestureTemplate> {
         ),
         builtin_gesture(
             "gesture-circle",
-            "圆圈 · 切换窗口置顶",
             HotzoneAction {
                 kind: ActionKind::ToggleWindowTopmost,
                 value: None,
@@ -824,7 +839,6 @@ fn default_gestures() -> Vec<GestureTemplate> {
         ),
         builtin_gesture(
             "gesture-rectangle",
-            "矩形截图",
             HotzoneAction::default(),
             &[
                 (0.15, 0.15),
@@ -863,14 +877,13 @@ fn circle_points() -> Vec<(f32, f32)> {
 
 fn builtin_gesture(
     id: &str,
-    name: &str,
     action: HotzoneAction,
     points: &[(f32, f32)],
     mode: GestureMode,
 ) -> GestureTemplate {
     GestureTemplate {
         id: id.into(),
-        name: name.into(),
+        name: String::new(),
         enabled: true,
         builtin: true,
         mode,
@@ -880,14 +893,36 @@ fn builtin_gesture(
     }
 }
 
-fn normalize_gestures(values: Vec<GestureTemplate>) -> Vec<GestureTemplate> {
+fn is_legacy_gesture_name(id: &str, name: &str) -> bool {
+    match id {
+        "gesture-up" => matches!(name, "向上 · 复制" | "Up · Copy"),
+        "gesture-down" => matches!(name, "向下 · 粘贴" | "Down · Paste"),
+        "gesture-l" => matches!(name, "L 型 · 关闭窗口" | "L · Close"),
+        "gesture-circle" => matches!(
+            name,
+            "圆圈 · 切换窗口置顶" | "圆圈 · 显示桌面" | "Circle · Topmost"
+        ),
+        "gesture-rectangle" => matches!(name, "矩形截图" | "Region capture"),
+        _ => false,
+    }
+}
+
+fn normalize_gestures(
+    values: Vec<GestureTemplate>,
+    source_schema_version: u32,
+) -> Vec<GestureTemplate> {
     let defaults = default_gestures();
     let mut normalized = Vec::new();
     for mut gesture in values.into_iter().take(MAX_GESTURE_TEMPLATES) {
         gesture.id = gesture.id.trim().chars().take(80).collect();
         gesture.name = gesture.name.trim().chars().take(40).collect();
+        let builtin = defaults.iter().any(|item| item.id == gesture.id);
+        if source_schema_version < 8 && is_legacy_gesture_name(&gesture.id, &gesture.name) {
+            gesture.name.clear();
+        }
+        gesture.builtin = builtin;
         if gesture.id.is_empty()
-            || gesture.name.is_empty()
+            || (!builtin && gesture.name.is_empty())
             || normalized
                 .iter()
                 .any(|item: &GestureTemplate| item.id == gesture.id)
@@ -1026,6 +1061,75 @@ fn normalized_optional_string(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edge_hide_animation_defaults_on_and_preserves_disabled_on_roundtrip() {
+        let default: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(default.edge_hide.animation_enabled);
+        let disabled: AppConfig = serde_json::from_value(serde_json::json!({
+            "schemaVersion": 7, "edgeHide": { "animationEnabled": false }
+        }))
+        .unwrap();
+        assert!(!disabled.clone().normalized().edge_hide.animation_enabled);
+        let roundtrip: AppConfig =
+            serde_json::from_value(serde_json::to_value(disabled).unwrap()).unwrap();
+        assert!(!roundtrip.edge_hide.animation_enabled);
+    }
+
+    #[test]
+    fn shared_schema_eight_migration_preserves_user_data_and_is_idempotent() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/i18n-migration.json")).unwrap();
+        let config: AppConfig = serde_json::from_value(fixture["input"].clone()).unwrap();
+        let migrated = config.normalized();
+        assert_eq!(migrated.schema_version, 8);
+        for (id, name) in fixture["expectedNames"].as_object().unwrap() {
+            let gesture = migrated
+                .mouse_gestures
+                .gestures
+                .iter()
+                .find(|gesture| &gesture.id == id)
+                .unwrap();
+            assert_eq!(gesture.name, name.as_str().unwrap_or(""));
+            assert!(!gesture.enabled);
+            assert_eq!(gesture.action.value.as_deref(), Some("Ctrl+K"));
+            assert_eq!(
+                gesture.modifier_actions[0].action.value.as_deref(),
+                Some("Ctrl+Q")
+            );
+            assert_eq!(
+                gesture.samples,
+                serde_json::from_value::<Vec<Vec<GesturePoint>>>(
+                    fixture["input"]["mouseGestures"]["gestures"][0]["samples"].clone()
+                )
+                .unwrap()
+            );
+        }
+        assert!(
+            !migrated
+                .mouse_gestures
+                .gestures
+                .iter()
+                .find(|gesture| gesture.id == "custom")
+                .unwrap()
+                .builtin
+        );
+        let serialized = serde_json::to_value(&migrated).unwrap();
+        assert!(serialized["mouseGestures"]["gestures"][0]
+            .get("name")
+            .is_none());
+        let roundtrip: AppConfig = serde_json::from_value(serialized.clone()).unwrap();
+        assert_eq!(
+            serde_json::to_value(roundtrip.normalized()).unwrap(),
+            serialized
+        );
+        let mut customized = AppConfig::default();
+        customized.mouse_gestures.gestures[0].name = "向上 · 复制".into();
+        assert_eq!(
+            customized.normalized().mouse_gestures.gestures[0].name,
+            "向上 · 复制"
+        );
+    }
 
     #[test]
     fn matches_shared_frontend_helper_configuration_contract_fixture() {
@@ -1406,7 +1510,7 @@ mod tests {
         rectangle.mode = GestureMode::Action;
         gestures[0] = rectangle;
 
-        let normalized = normalize_gestures(gestures);
+        let normalized = normalize_gestures(gestures, SCHEMA_VERSION);
         let protected_rectangle = normalized
             .iter()
             .find(|gesture| gesture.id == "gesture-rectangle")
