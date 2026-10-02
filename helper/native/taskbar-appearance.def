@@ -1,0 +1,4 @@
+LIBRARY taskbar-appearance
+EXPORTS
+    DllGetClassObject PRIVATE
+    DllCanUnloadNow PRIVATE

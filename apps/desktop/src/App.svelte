@@ -1,4 +1,5 @@
 <script lang="ts">
+  import TaskbarAppearance from "./TaskbarAppearance.svelte";
   import { onMount } from "svelte";
   import { fly } from "svelte/transition";
   import { HelperClient, isSupportedHelperProtocol, SUPPORTED_HELPER_PROTOCOL } from "./helper-client";
@@ -22,10 +23,18 @@
   import type {
     ActionKind, AppSettings, DisplayInfo, Edge, HelperPlatformInfo, HelperStatus, HotzoneAction,
     GesturePoint, GestureTemplate, HotzoneId, HotzoneSetting, ModifierKey,
-    OcrLanguage, TriggerAction, TriggerKind
+    OcrLanguage, TaskbarAppearanceSettings, TaskbarAppearanceStatus, TriggerAction, TriggerKind
   } from "./types";
 
-  type Mode = "power" | "hotzones" | "edge-hide" | "gestures" | "more";
+  type Mode = "power" | "hotzones" | "edge-hide" | "gestures" | "more" | "beautification";
+  let taskbarStatus: TaskbarAppearanceStatus | null = null;
+  function updateTaskbarAppearance(patch: Partial<TaskbarAppearanceSettings>): void {
+    settings = {
+      ...settings,
+      taskbarAppearance: { ...settings.taskbarAppearance, ...patch }
+    };
+    persist();
+  }
   type ConnectionTestState = "idle" | "testing" | "success" | "failed";
   type ActionPreset = { label: string; labelEn: string; group: string; groupEn: string; kind: ActionKind; value?: string };
   type FeatureTutorial = "edge-hide";
@@ -259,6 +268,7 @@
         displayReady = false;
         runtimeSummary = "";
         helperPlatform = null;
+        taskbarStatus = null;
         const wasReady = helperWasReady;
         helperWasReady = false;
         if (!stopping && !upgradingHelper && settings.enabled && !helperError) {
@@ -288,6 +298,8 @@
           helperError = "";
           markHelperReady();
         }
+      } else if (message.type === "taskbar.status") {
+        taskbarStatus = message.data as typeof taskbarStatus;
       } else if (message.type === "config.applied") {
         const data = message.data as { revision?: unknown; adjusted?: unknown } | null;
         if (helper.isLatestConfigRevision(data?.revision)) {
@@ -1116,6 +1128,9 @@
     <div class="brand"><img src="app-icon.png" alt="" /><strong>{ui("brandName")}</strong></div>
     <div class:connected={helperStatus === "connected"} class="connection"><i></i>{helperStatus === "connected" ? ui("connected") : helperStatus === "connecting" ? ui("connecting") : ui("disconnected")}<span>{displayReady ? (runtimeSummary || ui("statusRuntimeIdle")) : helperStatus === "connecting" ? ui("connecting") : ui("displayPreview")}</span></div>
     <label class="master">{ui("masterState")} <input checked={settings.enabled} disabled={starting || stopping} on:change={togglePower} type="checkbox" /><span></span></label>
+    <button aria-label={ui("settingsLabel")} title={ui("settingsLabel")} class="theme-toggle settings-toggle" class:active={mode === "more"} aria-expanded={mode === "more"} on:click={() => toggleMode("more")} type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"><path d="m9.4 3-.5 2.1-1.8 1-2.1-.6-2.2 3.8 1.6 1.5v2.2l-1.6 1.5L5 18.3l2.1-.6 1.8 1 .5 2.1h4.4l.5-2.1 1.8-1 2.1.6 2.2-3.8-1.6-1.5v-2.2l1.6-1.5-2.2-3.8-2.1.6-1.8-1-.5-2.1z"/><circle cx="11.6" cy="12" r="3.1"/></svg>
+    </button>
     <button aria-label={theme === "dark" ? ui("themeLight") : ui("themeDark")} class="theme-toggle" on:click={toggleTheme} title={theme === "dark" ? ui("themeLight") : ui("themeDark")} type="button">
       <svg class="icon-sun" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5 5l1.7 1.7M17.3 17.3 19 19M19 5l-1.7 1.7M6.7 17.3 5 19" /></svg>
       <svg class="icon-moon" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewBox="0 0 24 24"><path d="M20.4 13.2A8.4 8.4 0 1 1 10.8 3.6a6.8 6.8 0 0 0 9.6 9.6z" /></svg>
@@ -1150,14 +1165,14 @@
         <button class:active={mode === "hotzones"} on:click={() => toggleMode("hotzones")} type="button"><span class="nav-icon corner-icon"></span><b>{ui("hotzones")}</b></button>
         <button class:active={mode === "edge-hide"} on:click={() => toggleMode("edge-hide")} type="button"><span class="nav-icon edge-icon"></span><b>{ui("edgeHide")}</b></button>
         <button class:active={mode === "gestures"} on:click={() => toggleMode("gestures")} type="button"><span class="nav-icon gesture-icon"></span><b>{ui("gestures")}</b></button>
-        <button class:active={mode === "more"} on:click={() => toggleMode("more")} type="button"><span class="nav-icon more-icon"></span><b>{ui("more")}</b></button>
+        <button class:active={mode === "beautification"} on:click={() => toggleMode("beautification")} type="button"><svg class="nav-beauty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" aria-hidden="true"><path d="m4.5 19.5 10-10a1.4 1.4 0 0 1 2 2l-10 10a1.4 1.4 0 0 1-2-2ZM12 12l2 2M8 3l.8 2.2L11 6l-2.2.8L8 9l-.8-2.2L5 6l2.2-.8ZM19 3v4m-2-2h4M20 16v4m-2-2h4"/></svg><b>{ui("beautification")}</b></button>
       </nav>
     </section>
 
     {#if mode !== null}
       <aside class:gesture-drawer={mode === "gestures"} class="drawer" in:fly={{ x: 28, duration: 220 }}>
         <header class="drawer-head">
-          <div><span>{mode === "power" ? ui("power") : mode === "hotzones" ? ui("hotzones") : mode === "edge-hide" ? ui("edgeHide") : mode === "gestures" ? ui("gestures") : ui("moreSettings")}</span><p>{mode === "hotzones" ? `${zoneLabel(selectedZone)} · S${Math.max(0, displays.findIndex((item) => item.id === selectedDisplayId)) + 1}` : mode === "edge-hide" ? windowEnhancementTab === "edge" ? ui("edgeSubtitle") : ui("dragSubtitle") : mode === "gestures" ? ui("gestureSubtitle") : mode === "more" ? ui("moreSubtitle") : ui("powerSubtitle")}</p></div>
+          <div><span>{mode === "power" ? ui("power") : mode === "hotzones" ? ui("hotzones") : mode === "edge-hide" ? ui("edgeHide") : mode === "gestures" ? ui("gestures") : mode === "beautification" ? ui("beautification") : ui("settingsLabel")}</span><p>{mode === "hotzones" ? `${zoneLabel(selectedZone)} · S${Math.max(0, displays.findIndex((item) => item.id === selectedDisplayId)) + 1}` : mode === "edge-hide" ? windowEnhancementTab === "edge" ? ui("edgeSubtitle") : ui("dragSubtitle") : mode === "gestures" ? ui("gestureSubtitle") : mode === "more" ? ui("moreSubtitle") : mode === "beautification" ? ui("beautificationSubtitle") : ui("powerSubtitle")}</p></div>
           <button aria-label={ui("close")} class="close-drawer" on:click={closeMode} type="button">×</button>
         </header>
 
@@ -1362,6 +1377,8 @@
               <div class="power-actions"><button class="apply" disabled={!helperInstallState.installed || settings.enabled || starting || stopping} on:click={() => setPowerEnabled(true)} type="button">{ui("openFeature")}</button><button class="quiet" disabled={starting || stopping || (!settings.enabled && helperStatus === "disconnected")} on:click={() => setPowerEnabled(false)} type="button">{ui("closeFeature")}</button><button aria-live="polite" class:failed={connectionTestState === "failed"} class:success={connectionTestState === "success"} class:testing={connectionTestState === "testing"} class="quiet connection-test" disabled={helperStatus !== "connected" || connectionTestState === "testing"} on:click={runConnectionTest} type="button"><i aria-hidden="true"></i><span>{connectionTestState === "testing" ? ui("connectionTesting") : connectionTestState === "success" ? ui("connectionOk") : connectionTestState === "failed" ? ui("connectionFailed") : ui("connectionTest")}</span></button><button class="quiet" on:click={copyDiagnostics} type="button">{ui("diagnostics")}</button></div>
               <div class="helper-meta"><span>{format(ui("helperVersion"), { version: helperInstallState.version })}</span><button on:click={() => openHelperPage("repository")} type="button">{ui("publicDownload")}</button><code>{helperInstallState.installDir ?? ui("helperInstallDirUnknown")}</code></div>
               <div class:error={Boolean(helperError)} class="status-rail"><div><span>{ui("recentAction")}</span><strong>{lastAction || statusText("noAction")}</strong></div><div><span>{ui("currentState")}</span><strong aria-live="polite">{statusText(helperError) || renderedLastMessage}</strong></div></div>
+            {:else if mode === "beautification"}
+              <TaskbarAppearance {english} appearance={settings.taskbarAppearance} connected={helperStatus === "connected"} masterEnabled={settings.enabled} status={taskbarStatus} onChange={updateTaskbarAppearance} />
             {:else}
               <div class="setting-title"><div><h2>{ui("moreGlobal")}</h2><p>{ui("moreDescription")}</p></div></div>
               <div class="language-setting"><div><h2>{ui("language")}</h2><p>{ui("languageDescription")}</p></div><select aria-label={ui("language")} bind:value={language} on:change={setLanguage}><option value="zh-CN">{ui("chinese")}</option><option value="en-US">{ui("english")}</option></select></div>

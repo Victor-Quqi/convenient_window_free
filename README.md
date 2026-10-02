@@ -25,6 +25,8 @@ Release assets are currently unsigned. Windows may show an unknown-publisher or 
 
 ## Features
 
+Development source adds an **Appearance** (slim wand-and-sparkle) entry and moves global settings to a circular top-right gear. Taskbar material is an off-by-default Windows 11 x64 technical prototype with transparent, acrylic and tinted modes plus opacity and border controls. Activation is direct; the Explorer risk note remains inside the panel. The illustrated preview is not proof of actual rendering; initial transparency has received positive local acceptance feedback, while new materials, icon clarity, and cross-environment recovery still require acceptance and are not features of the published stable `0.6.2` release.
+
 - **Hot zones**: configure the four corners and four edges of each monitor independently, with hover, mouse-button, wheel, and edge-movement triggers.
 - **Window edge hiding**: move windows partly off-screen and restore them from a visible edge strip, with multi-window and multi-monitor support. The pale restore outline can be hidden independently without disabling edge restoration.
 - **Anywhere move and resize**: move or resize the active window with configurable modifier-and-mouse combinations.
@@ -104,6 +106,8 @@ This repository is the source of truth for:
 Host integrations consume this repository as a submodule and supply their own host adapters. They do not maintain a second copy of the helper source.
 
 ### Prerequisites
+
+Building the Windows x64 helper now also requires Visual Studio C++ Build Tools and a Windows SDK with C++/WinRT headers. The native taskbar build reuses `scripts/windows-toolchain.ps1`; if discovery cannot find an existing installation, set `VSINSTALLDIR` to that installation directory. No additional runtime download is performed for the taskbar component.
 
 - Node.js `24.14.0` as pinned by `.node-version`
 - Windows 11 x64 for the release installer, portable archive, and full Windows behavior

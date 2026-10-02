@@ -16,6 +16,35 @@ vi.mock("./host-bridge", () => ({
 }));
 
 describe("normalizeSettings", () => {
+  it("keeps taskbar transparency off for legacy and malformed configuration", () => {
+    expect(defaultSettings.taskbarAppearance.enabled).toBe(false);
+    expect(normalizeSettings({}).taskbarAppearance.enabled).toBe(false);
+    expect(normalizeSettings({ taskbarAppearance: { enabled: "true" } } as unknown as Partial<AppSettings>).taskbarAppearance.enabled).toBe(false);
+  });
+  it("round-trips explicit taskbar opt-in and opt-out", () => {
+    for (const enabled of [true, false]) {
+      const normalized = normalizeSettings({ taskbarAppearance: { enabled } } as unknown as Partial<AppSettings>);
+      expect(normalizeSettings(JSON.parse(JSON.stringify(normalized))).taskbarAppearance.enabled).toBe(enabled);
+    }
+  });
+  it("preserves the original transparent appearance when upgrading a boolean-only prototype", () => {
+    const settings = normalizeSettings({ taskbarAppearance: { enabled: true } } as unknown as Partial<AppSettings>);
+    expect(settings.taskbarAppearance).toEqual({ enabled: true, mode: "transparent", opacity: 58, tint: "#233A63", showBorder: false });
+  });
+  it("normalizes taskbar material controls", () => {
+    const normalized = normalizeSettings({
+      taskbarAppearance: { enabled: true, mode: "unknown", opacity: 180, tint: "not-a-color", showBorder: "yes" }
+    } as unknown as Partial<AppSettings>);
+    expect(normalized.taskbarAppearance).toEqual({ enabled: true, mode: "transparent", opacity: 100, tint: "#233A63", showBorder: false });
+    expect(normalizeSettings({ taskbarAppearance: { ...defaultSettings.taskbarAppearance, opacity: NaN } }).taskbarAppearance.opacity).toBe(58);
+  });
+  it("round-trips all taskbar materials, color, strength and border settings", () => {
+    for (const mode of ["transparent", "acrylic", "solid"] as const) {
+      const settings = normalizeSettings({ taskbarAppearance: { enabled: true, mode, opacity: 73, tint: " #eaf1fc ", showBorder: true } });
+      expect(settings.taskbarAppearance).toEqual({ enabled: true, mode, opacity: 73, tint: "#EAF1FC", showBorder: true });
+      expect(normalizeSettings(JSON.parse(JSON.stringify(settings))).taskbarAppearance).toEqual(settings.taskbarAppearance);
+    }
+  });
   it("matches the shared frontend/helper configuration contract fixture", () => {
     const settings = normalizeSettings(contractFixture.input as Partial<AppSettings>);
     expect({

@@ -35,6 +35,8 @@ pub struct AppConfig {
     pub topmost_pin: TopmostPinConfig,
     #[serde(default)]
     pub ocr: OcrConfig,
+    #[serde(default)]
+    pub taskbar_appearance: TaskbarAppearanceConfig,
 }
 
 impl Default for AppConfig {
@@ -55,6 +57,44 @@ impl Default for AppConfig {
             window_drag: WindowDragConfig::default(),
             topmost_pin: TopmostPinConfig::default(),
             ocr: OcrConfig::default(),
+            taskbar_appearance: TaskbarAppearanceConfig::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskbarAppearanceConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    #[serde(default = "default_taskbar_mode")]
+    pub mode: String,
+    #[serde(default = "default_taskbar_opacity")]
+    pub opacity: u32,
+    #[serde(default = "default_taskbar_tint")]
+    pub tint: String,
+    #[serde(default)]
+    pub show_border: bool,
+}
+
+fn default_taskbar_mode() -> String {
+    "transparent".into()
+}
+fn default_taskbar_opacity() -> u32 {
+    58
+}
+fn default_taskbar_tint() -> String {
+    "#233A63".into()
+}
+
+impl Default for TaskbarAppearanceConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            mode: default_taskbar_mode(),
+            opacity: default_taskbar_opacity(),
+            tint: default_taskbar_tint(),
+            show_border: false,
         }
     }
 }
@@ -76,6 +116,19 @@ impl AppConfig {
         self.poll_interval_ms = self.poll_interval_ms.clamp(10, 250);
         self.action_cooldown_ms = self.action_cooldown_ms.clamp(10, 5000);
         self.paused_apps = normalized_string_list(self.paused_apps);
+        if !matches!(
+            self.taskbar_appearance.mode.as_str(),
+            "transparent" | "acrylic" | "solid"
+        ) {
+            self.taskbar_appearance.mode = default_taskbar_mode();
+        }
+        self.taskbar_appearance.opacity = self.taskbar_appearance.opacity.clamp(0, 100);
+        let taskbar_tint = self.taskbar_appearance.tint.trim();
+        if !is_hex_color(taskbar_tint) {
+            self.taskbar_appearance.tint = default_taskbar_tint();
+        } else {
+            self.taskbar_appearance.tint = taskbar_tint.to_uppercase();
+        }
 
         self.edge_hide.strip_size = self.edge_hide.strip_size.clamp(4, 64);
         self.edge_hide.trigger_distance = self.edge_hide.trigger_distance.clamp(4, 96);
@@ -944,6 +997,11 @@ fn normalized_modifiers(values: Vec<ModifierKey>) -> Vec<ModifierKey> {
         .collect()
 }
 
+fn is_hex_color(value: &str) -> bool {
+    let value = value.trim();
+    value.len() == 7 && value.starts_with('#') && value[1..].chars().all(|c| c.is_ascii_hexdigit())
+}
+
 fn normalized_string_list(values: Vec<String>) -> Vec<String> {
     let mut normalized = Vec::new();
     for value in values {
@@ -1416,5 +1474,60 @@ mod tests {
             .action;
         assert_eq!(action.kind, ActionKind::Shortcut);
         assert_eq!(action.value.as_deref(), Some("Win+D"));
+    }
+}
+
+#[cfg(test)]
+mod taskbar_config_tests {
+    use super::*;
+    #[test]
+    fn legacy_configuration_does_not_enable_injection() {
+        let config: AppConfig = serde_json::from_str("{}").unwrap();
+        assert!(!config.taskbar_appearance.enabled);
+        assert!(!config.normalized().taskbar_appearance.enabled);
+    }
+    #[test]
+    fn taskbar_opt_in_round_trips_without_touching_other_rules() {
+        for enabled in [true, false] {
+            let mut config = AppConfig::default();
+            config.taskbar_appearance.enabled = enabled;
+            config.taskbar_appearance.mode = "solid".into();
+            config.taskbar_appearance.opacity = 83;
+            config.taskbar_appearance.tint = "#ab12ef".into();
+            config.taskbar_appearance.show_border = false;
+            let json = serde_json::to_string(&config).unwrap();
+            let restored = serde_json::from_str::<AppConfig>(&json)
+                .unwrap()
+                .normalized();
+            assert_eq!(restored.taskbar_appearance.enabled, enabled);
+            assert_eq!(restored.taskbar_appearance.mode, "solid");
+            assert_eq!(restored.taskbar_appearance.opacity, 83);
+            assert_eq!(restored.taskbar_appearance.tint, "#AB12EF");
+            assert!(!restored.taskbar_appearance.show_border);
+        }
+    }
+    #[test]
+    fn old_boolean_only_prototype_keeps_its_clear_background() {
+        let config =
+            serde_json::from_str::<AppConfig>(r##"{"taskbarAppearance":{"enabled":true}}"##)
+                .unwrap()
+                .normalized();
+        assert!(config.taskbar_appearance.enabled);
+        assert_eq!(config.taskbar_appearance.mode, "transparent");
+        assert!(!config.taskbar_appearance.show_border);
+    }
+    #[test]
+    fn material_settings_are_normalized_and_keep_valid_color_whitespace() {
+        let mut config = AppConfig::default();
+        config.taskbar_appearance.mode = "unknown".into();
+        config.taskbar_appearance.opacity = 400;
+        config.taskbar_appearance.tint = "not-a-color".into();
+        let normalized = config.normalized().taskbar_appearance;
+        assert_eq!(normalized.mode, "transparent");
+        assert_eq!(normalized.opacity, 100);
+        assert_eq!(normalized.tint, "#233A63");
+        let mut config = AppConfig::default();
+        config.taskbar_appearance.tint = " #eaf1fc ".into();
+        assert_eq!(config.normalized().taskbar_appearance.tint, "#EAF1FC");
     }
 }

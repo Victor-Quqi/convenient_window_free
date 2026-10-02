@@ -4,7 +4,7 @@
 
   export let displays: DisplayInfo[];
   export let selectedDisplayId: string;
-  export let mode: "power" | "hotzones" | "edge-hide" | "gestures" | "more" | null;
+  export let mode: "power" | "hotzones" | "edge-hide" | "gestures" | "more" | "beautification" | null;
   export let english = false;
   export let selectedZone: HotzoneId;
   export let hotzonesEnabled: boolean;
@@ -54,9 +54,9 @@
     return `--slot:${slot};--tilt:${slot % 2 === 0 ? -1.2 : 1.1}deg`;
   }
 
-  function displayLabel(display: DisplayInfo): string {
-    if (!displayReady) return english ? "Preview" : "预览";
-    return display.primary ? (english ? "Primary" : "主显示器") : `${display.bounds.right - display.bounds.left} × ${display.bounds.bottom - display.bounds.top}`;
+  function displayLabel(display: DisplayInfo, useEnglish: boolean): string {
+    if (!displayReady) return useEnglish ? "Preview" : "预览";
+    return display.primary ? (useEnglish ? "Primary" : "主显示器") : `${display.bounds.right - display.bounds.left} × ${display.bounds.bottom - display.bounds.top}`;
   }
 
   function zoneLabel(zone: HotzoneId): string {
@@ -101,7 +101,7 @@
       >
         <span class="screen-index">S{index + 1}</span>
         <strong>{display.id === selectedDisplayId ? `S${index + 1} · ${displayReady ? (english ? "Current" : "当前") : (english ? "Preview" : "预览")}` : `S${index + 1}`}</strong>
-        <small>{displayLabel(display)}</small>
+        <small>{displayLabel(display, english)}</small>
       </button>
 
       {#if display.id === selectedDisplayId && mode === "hotzones"}

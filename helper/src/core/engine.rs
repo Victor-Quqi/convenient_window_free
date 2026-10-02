@@ -54,6 +54,11 @@ impl Engine {
         let mut config_rx = self.config_rx.clone();
         let mut config = config_rx.borrow_and_update().clone();
         let mut shutdown_rx = self.shutdown_rx.resubscribe();
+        let taskbar = platform::TaskbarAppearanceWorker::new(self.event_tx.clone());
+        taskbar.configure(
+            config.enabled && config.taskbar_appearance.enabled,
+            &config.taskbar_appearance,
+        );
         let mut previous_input = InputState::default();
         let mut previous_cursor = None;
         let mut foreground_tracker = ForegroundTracker::default();
@@ -336,11 +341,14 @@ impl Engine {
                 changed = config_rx.changed() => {
                     if changed.is_ok() {
                         config = config_rx.borrow_and_update().clone();
+                        taskbar.configure(config.enabled && config.taskbar_appearance.enabled, &config.taskbar_appearance);
                     }
                 }
                 _ = shutdown_rx.recv() => break,
             }
         }
+        taskbar.configure(false, &config.taskbar_appearance);
+        drop(taskbar);
         platform::configure_topmost_pins(false);
         platform::clear_topmost_pins();
         platform::configure_window_drag_capture(

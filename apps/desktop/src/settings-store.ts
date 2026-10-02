@@ -39,6 +39,13 @@ const screenshotResultModes: ScreenshotResultMode[] = ["pin", "copy-text", "pin-
 
 export const defaultSettings: AppSettings = {
   schemaVersion: 7,
+  taskbarAppearance: {
+    enabled: false,
+    mode: "transparent",
+    opacity: 58,
+    tint: "#233A63",
+    showBorder: false
+  },
   enabled: true,
   hotzonesEnabled: true,
   edgeSize: 8,
@@ -196,6 +203,7 @@ export function normalizeSettings(stored: Partial<AppSettings> | null | undefine
       enabled: booleanValue(stored.topmostPin?.enabled, defaultSettings.topmostPin.enabled)
     },
     ocr: normalizeOcr(stored.ocr),
+    taskbarAppearance: normalizeTaskbarAppearance(stored.taskbarAppearance),
     hotzones: normalizeHotzones(stored.hotzones, hoverDelayMs, actionCooldownMs),
     monitorProfiles: Array.isArray(stored.monitorProfiles)
       ? stored.monitorProfiles
@@ -388,6 +396,23 @@ function normalizeWindowDrag(value: unknown): AppSettings["windowDrag"] {
     moveButton,
     resizeButton,
     pausedApps: stringList(raw.pausedApps)
+  };
+}
+
+function normalizeTaskbarAppearance(value: unknown): AppSettings["taskbarAppearance"] {
+  const raw = value && typeof value === "object" ? value as Partial<AppSettings["taskbarAppearance"]> : {};
+  const modes = ["transparent", "acrylic", "solid"] as const;
+  const mode = modes.includes(raw.mode as (typeof modes)[number])
+    ? raw.mode as AppSettings["taskbarAppearance"]["mode"]
+    : defaultSettings.taskbarAppearance.mode;
+  return {
+    enabled: booleanValue(raw.enabled, defaultSettings.taskbarAppearance.enabled),
+    mode,
+    opacity: integerInRange(raw.opacity, defaultSettings.taskbarAppearance.opacity, 0, 100),
+    tint: typeof raw.tint === "string" && /^#[0-9a-f]{6}$/i.test(raw.tint.trim())
+      ? raw.tint.trim().toUpperCase()
+      : defaultSettings.taskbarAppearance.tint,
+    showBorder: booleanValue(raw.showBorder, defaultSettings.taskbarAppearance.showBorder)
   };
 }
 

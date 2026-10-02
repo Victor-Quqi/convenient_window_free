@@ -71,6 +71,14 @@ npm run desktop:runtime-force-kill-smoke
 
 The normal gate verifies helper readiness, schema v7 persistence, graceful stop, and zero sidecar residue. The conflict gate creates its own lock-holding helper, requires the desktop log marker `HELPER_INSTANCE_CONFLICT`, and then stops the holder through the authenticated protocol. The force-kill gate waits for the real packaged helper, force-terminates the owning desktop process, and requires the Job Object to remove the assigned sidecar and close port `56873`. All gates require a fresh explicit temporary data root, place WebView data under that root, reject writes to the real application-data directory, and remove their temporary data unless `-KeepData` is requested for diagnosis.
 
+## Experimental Taskbar Appearance Acceptance
+
+Automatic gates cover both frontends, legacy/default-off configuration, enabled-only prototype migration, all material/color/opacity/border round-trips, material-capability discovery, native snapshot/options ABI, error/restoring states, a disabled worker, and loading the embedded DLL with its disabled export. These tests do not inject into Explorer. Frontend mock-IPC preview/apply/restore tests verify direct activation without confirmation dialogs, coherent parameter persistence, restoration and refusal to trust a material-unaware helper. They must not be presented as proof of actual taskbar rendering.
+
+Manual acceptance must record Windows build/revision, theme, DPI, and monitor layout. Explicitly opt in, verify that only the background disappears while icons/text remain clear, exercise clicks, Start/search, and auto-hide, then restore the system background. Subsequently test monitor hotplug, Explorer recreation, theme/DPI changes, repeated start/stop, and controlled termination of the owning helper. Failed initialization or restoration must remain visible. Existing user processes must not be terminated to make a smoke test pass.
+
+The native component remains pinned until Explorer exits. Component upgrades must reject mixed versions and explain that a user-initiated sign-out or Explorer restart is required; the test runner must not restart Explorer automatically. Full product upgrade/uninstall behavior is not yet accepted for this prototype.
+
 ## Installation Acceptance
 
 After building and auditing the artifacts, run:

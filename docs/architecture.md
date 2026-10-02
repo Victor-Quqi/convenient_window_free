@@ -10,6 +10,20 @@ Host integration (Svelte + preload) --------/
 
 This repository is authoritative for the standalone desktop and the helper. Host integrations consume it as a submodule and supply only their host-specific adapters.
 
+## Experimental Taskbar Appearance
+
+The Appearance navigation item opens a shared `TaskbarAppearance.svelte` panel. Global settings remain in the top-right circular gear control between the master switch and theme control. The panel previews transparent, acrylic and tinted materials, but the preview never applies a system change; activation is direct and the Explorer risk note stays in the expandable prototype notes.
+
+Schema v7 adds optional `taskbarAppearance.enabled`, `mode`, `opacity`, `tint` and `showBorder`, defaulting to a disabled transparent preset. Actual activation requires both the global master switch and this opt-in. `helper/src/platform/taskbar.rs` owns a dedicated native worker thread, while `helper/native/taskbar-appearance.cpp` is an independently implemented Windows x64 XAML Diagnostics component. Input/window state machines do not wait for Diagnostics initialization. The optional protocol-v6 `taskbar.status` event reports `{ state, available, materials, backgrounds, errorCode? }` separately from durable configuration acknowledgements. An applied state only confirms a successful background-brush write, not visual compatibility.
+
+The Windows x64 build uses MSVC and the Windows SDK to compile a static-runtime DLL, embeds it in the helper executable, and materializes a content-addressed immutable DLL in the helper data directory only after opt-in. No additional release asset or download allow-list entry is required. Other platforms retain an explicit unavailable state.
+
+Transparent mode clears the background without tint; solid mode uses a tint brush with user-selected opacity, while acrylic mode uses `AcrylicBrush` with `Backdrop` and a separate tint-opacity parameter. Legacy enabled-only configuration preserves the original transparent background and hidden border. Material capability discovery prevents an older boolean-only helper from claiming support for the new modes. Shared parameters are read as coherent bounded snapshots.
+
+The component locates background/border rectangles under `Taskbar.TaskbarFrame`, saves their original brushes, queues changes on the owning UI thread, and requests restoration on disable, normal shutdown, or controller process death. Session/user-scoped controller ownership, conservative detection of running TranslucentTB/Windhawk, attachment acknowledgement, and a target-process component-version marker guard obvious conflicts. The DLL can remain pinned in Explorer after restoration; mixing versions in the same Explorer session is rejected. The application never automatically elevates, stops other tools, or restarts Explorer.
+
+This is a disabled-by-default technical prototype. Native compilation and the disabled ABI path are tested; real transparency/acrylic rendering, icon clarity, multi-monitor/auto-hide behavior, Explorer restart, and abnormal-exit restoration still require explicit runtime acceptance. Theme brush reinitialization is observed, but visual compatibility must not be inferred from successful API calls.
+
 ## Source Layout
 
 - `apps/desktop/`: reusable Svelte UI, typed host bridge, and Tauri 2 host.
