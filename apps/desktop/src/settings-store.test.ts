@@ -16,6 +16,35 @@ vi.mock("./host-bridge", () => ({
 }));
 
 describe("normalizeSettings", () => {
+  it("keeps taskbar transparency off for legacy and malformed configuration", () => {
+    expect(defaultSettings.taskbarAppearance.enabled).toBe(false);
+    expect(normalizeSettings({}).taskbarAppearance.enabled).toBe(false);
+    expect(normalizeSettings({ taskbarAppearance: { enabled: "true" } } as unknown as Partial<AppSettings>).taskbarAppearance.enabled).toBe(false);
+  });
+  it("round-trips explicit taskbar opt-in and opt-out", () => {
+    for (const enabled of [true, false]) {
+      const normalized = normalizeSettings({ taskbarAppearance: { enabled } } as unknown as Partial<AppSettings>);
+      expect(normalizeSettings(JSON.parse(JSON.stringify(normalized))).taskbarAppearance.enabled).toBe(enabled);
+    }
+  });
+  it("preserves the original transparent appearance when upgrading a boolean-only prototype", () => {
+    const settings = normalizeSettings({ taskbarAppearance: { enabled: true } } as unknown as Partial<AppSettings>);
+    expect(settings.taskbarAppearance).toEqual({ enabled: true, mode: "transparent", opacity: 58, tint: "#233A63", showBorder: false });
+  });
+  it("normalizes taskbar material controls", () => {
+    const normalized = normalizeSettings({
+      taskbarAppearance: { enabled: true, mode: "unknown", opacity: 180, tint: "not-a-color", showBorder: "yes" }
+    } as unknown as Partial<AppSettings>);
+    expect(normalized.taskbarAppearance).toEqual({ enabled: true, mode: "transparent", opacity: 100, tint: "#233A63", showBorder: false });
+    expect(normalizeSettings({ taskbarAppearance: { ...defaultSettings.taskbarAppearance, opacity: NaN } }).taskbarAppearance.opacity).toBe(58);
+  });
+  it("round-trips all taskbar materials, color, strength and border settings", () => {
+    for (const mode of ["transparent", "acrylic", "solid"] as const) {
+      const settings = normalizeSettings({ taskbarAppearance: { enabled: true, mode, opacity: 73, tint: " #eaf1fc ", showBorder: true } });
+      expect(settings.taskbarAppearance).toEqual({ enabled: true, mode, opacity: 73, tint: "#EAF1FC", showBorder: true });
+      expect(normalizeSettings(JSON.parse(JSON.stringify(settings))).taskbarAppearance).toEqual(settings.taskbarAppearance);
+    }
+  });
   it("matches the shared frontend/helper configuration contract fixture", () => {
     const settings = normalizeSettings(contractFixture.input as Partial<AppSettings>);
     expect({
@@ -79,7 +108,7 @@ describe("normalizeSettings", () => {
     expect(settings.edgeHide.triggerRatio).toBe(33);
     expect(settings.edgeHide.collapseDelayMs).toBe(300);
     expect(settings.edgeHide.restoreDelayMs).toBe(200);
-    expect(settings.schemaVersion).toBe(7);
+    expect(settings.schemaVersion).toBe(8);
     expect(settings.mouseGestures.gestures).toHaveLength(5);
   });
 
@@ -347,7 +376,7 @@ describe("normalizeSettings", () => {
     expect(settings.windowDrag).toMatchObject({
       enabled: true,
       moveModifiers: ["alt", "win"],
-      resizeModifiers: [],
+      resizeModifiers: ["alt"],
       moveButton: "x1"
     });
     expect(settings.topmostPin.enabled).toBe(false);
@@ -423,3 +452,29 @@ describe("saveSettings", () => {
   });
 });
 
+
+
+describe("edge hide animation preference", () => {
+  it("defaults on and preserves explicit off across normalization and old imports", () => {
+    expect(defaultSettings.edgeHide.animationEnabled).toBe(true);
+    expect(normalizeSettings({ schemaVersion: 7 }).edgeHide.animationEnabled).toBe(true);
+    const settings = structuredClone(defaultSettings);
+    settings.edgeHide.animationEnabled = false;
+    const imported = normalizeSettings(JSON.parse(JSON.stringify(settings)));
+    expect(imported.edgeHide.animationEnabled).toBe(false);
+    expect(normalizeSettings(imported).edgeHide).toEqual(imported.edgeHide);
+    (settings.edgeHide as unknown as { animationEnabled: unknown }).animationEnabled = "off";
+    expect(normalizeSettings(settings).edgeHide.animationEnabled).toBe(true);
+  });
+});
+
+
+it("keeps Alt required for missing and empty drag bindings, matching the helper contract", () => {
+  expect(normalizeSettings({}).windowDrag.moveModifiers).toEqual(["alt"]);
+  const settings = structuredClone(defaultSettings);
+  settings.windowDrag.moveModifiers = [];
+  settings.windowDrag.resizeModifiers = [];
+  const normalized = normalizeSettings(settings);
+  expect(normalized.windowDrag.moveModifiers).toEqual(["alt"]);
+  expect(normalized.windowDrag.resizeModifiers).toEqual(["alt"]);
+});

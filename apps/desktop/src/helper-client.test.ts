@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { defaultSettings } from "./settings-store";
 import { HelperClient, isSupportedHelperProtocol, SUPPORTED_HELPER_PROTOCOL } from "./helper-client";
 
 class MockWebSocket extends EventTarget {
@@ -36,10 +37,10 @@ class MockWebSocket extends EventTarget {
 describe("HelperClient", () => {
   const originalWebSocket = globalThis.WebSocket;
 
-  it("accepts the generic-host protocol and the legacy uTools protocol", () => {
-    expect(SUPPORTED_HELPER_PROTOCOL).toBe(6);
-    expect(isSupportedHelperProtocol(6)).toBe(true);
-    expect(isSupportedHelperProtocol(5)).toBe(true);
+  it("accepts only the structured-error protocol", () => {
+    expect(SUPPORTED_HELPER_PROTOCOL).toBe(7);
+    expect(isSupportedHelperProtocol(7)).toBe(true);
+    expect(isSupportedHelperProtocol(5)).toBe(false);
     expect(isSupportedHelperProtocol(4)).toBe(false);
   });
 
@@ -52,6 +53,27 @@ describe("HelperClient", () => {
   afterEach(() => {
     globalThis.WebSocket = originalWebSocket;
     vi.useRealTimers();
+  });
+
+  it("never sends configuration to old helpers and sends translated labels only in the envelope", () => {
+    let language: "zh-CN" | "en-US" = "en-US";
+    const client = new HelperClient(undefined, undefined, () => language);
+    client.sendConfig(defaultSettings);
+    client.connect();
+    const socket = MockWebSocket.instances[0];
+    for (const protocolVersion of [5, 6, 8, "7", null]) {
+      socket.receive("helper.ready", { protocolVersion });
+      expect(socket.sent).toHaveLength(0);
+    }
+    socket.receive("helper.ready", { protocolVersion: 7 });
+    const envelope = JSON.parse(socket.sent[0]).data;
+    expect(envelope.protocolVersion).toBe(7);
+    expect(envelope.config.schemaVersion).toBe(8);
+    expect(envelope.gestureLabels["gesture-up"]).toBe("Up · Copy");
+    expect(envelope.config.mouseGestures.gestures[0].name).toBeUndefined();
+    language = "zh-CN";
+    client.sendConfig(defaultSettings);
+    expect(JSON.parse(socket.sent[1]).data.gestureLabels["gesture-up"]).toBe("向上 · 复制");
   });
 
   it("does not reconnect after an intentional disconnect", () => {
@@ -96,7 +118,7 @@ describe("HelperClient", () => {
     const client = new HelperClient();
     client.connect();
     MockWebSocket.instances[0].receive("helper.ready", {
-      protocolVersion: 6,
+      protocolVersion: 7,
       platform: {
         system: "linux", architecture: "x86_64", session: "x11",
         capabilities: {
@@ -118,7 +140,7 @@ describe("HelperClient", () => {
     client.connect();
     MockWebSocket.instances[0].dispatchEvent(new Event("open"));
     expect(MockWebSocket.instances[0].sent).toHaveLength(0);
-    MockWebSocket.instances[0].receive("helper.ready", { protocolVersion: 5 });
+    MockWebSocket.instances[0].receive("helper.ready", { protocolVersion: 7 });
     expect(JSON.parse(MockWebSocket.instances[0].sent[0])).toMatchObject({
       type: "config.update",
       data: { revision: 1, config: { enabled: true } }
@@ -127,7 +149,7 @@ describe("HelperClient", () => {
     MockWebSocket.instances[0].close();
     vi.advanceTimersByTime(1500);
     MockWebSocket.instances[1].dispatchEvent(new Event("open"));
-    MockWebSocket.instances[1].receive("helper.ready", { protocolVersion: 5 });
+    MockWebSocket.instances[1].receive("helper.ready", { protocolVersion: 7 });
     expect(JSON.parse(MockWebSocket.instances[1].sent[0])).toMatchObject({
       type: "config.update",
       data: { revision: 1, config: { enabled: true } }
@@ -137,7 +159,7 @@ describe("HelperClient", () => {
   it("increments config revisions and identifies only the latest acknowledgement", () => {
     const client = new HelperClient();
     client.connect();
-    MockWebSocket.instances[0].receive("helper.ready", { protocolVersion: 5 });
+    MockWebSocket.instances[0].receive("helper.ready", { protocolVersion: 7 });
     client.sendConfig({ enabled: true } as Parameters<typeof client.sendConfig>[0]);
     client.sendConfig({ enabled: false } as Parameters<typeof client.sendConfig>[0]);
 
@@ -211,7 +233,7 @@ describe("HelperClient", () => {
     client.connect();
     const restarted = MockWebSocket.instances[1];
     restarted.dispatchEvent(new Event("open"));
-    restarted.receive("helper.ready", { protocolVersion: 5 });
+    restarted.receive("helper.ready", { protocolVersion: 7 });
 
     expect(JSON.parse(restarted.sent[0])).toMatchObject({
       type: "config.update",

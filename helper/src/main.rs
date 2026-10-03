@@ -25,21 +25,36 @@ fn config_path() -> Option<std::path::PathBuf> {
     paths::data_file("config.json")
 }
 
-fn load_config() -> Option<AppConfig> {
-    let path = config_path()?;
-    match storage::read_json_with_backup::<AppConfig>(&path) {
+fn load_config() -> Result<Option<AppConfig>> {
+    let Some(path) = config_path() else {
+        return Ok(None);
+    };
+    match storage::read_json_with_backup::<serde_json::Value>(&path) {
         Ok(Some((config, recovered))) => {
             if recovered {
                 logging::write_line("main: recovered config from backup");
             }
-            Some(config.normalized())
+            Ok(Some(decode_config(config)?))
         }
-        Ok(None) => None,
+        Ok(None) => Ok(None),
         Err(error) => {
             logging::write_line(format!("main: config load failed: {error:#}"));
-            None
+            Ok(None)
         }
     }
+}
+
+fn decode_config(value: serde_json::Value) -> Result<AppConfig> {
+    let schema = value
+        .get("schemaVersion")
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0);
+    anyhow::ensure!(
+        schema <= config::SCHEMA_VERSION as u64,
+        "Unsupported settings schema {schema}"
+    );
+    let config: AppConfig = serde_json::from_value(value).context("Invalid stored settings")?;
+    Ok(config.normalized())
 }
 
 pub fn save_config(config: &AppConfig) -> Result<()> {
@@ -123,7 +138,7 @@ async fn main() -> Result<()> {
         anyhow::bail!(CONFLICT);
     };
 
-    let mut initial_config = load_config().unwrap_or_default();
+    let mut initial_config = load_config()?.unwrap_or_default();
     platform::apply_capability_limits(&mut initial_config);
     let auth_token = auth::load_or_create_token()?;
     let (config_tx, config_rx) = watch::channel(initial_config);
@@ -177,6 +192,16 @@ async fn main() -> Result<()> {
 #[cfg(test)]
 mod runtime_tests {
     use super::*;
+
+    #[test]
+    fn future_schema_is_rejected_before_deserializing_new_fields() {
+        let error = decode_config(
+            serde_json::json!({"schemaVersion": 9, "mouseGestures": "future format"}),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("Unsupported settings schema 9"));
+    }
+
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[tokio::test]

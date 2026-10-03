@@ -1,4 +1,5 @@
 use super::{Monitor, Point};
+use crate::ipc::errors::{ErrorCode, RuntimeError};
 use anyhow::{ensure, Context, Result};
 use serde::Serialize;
 use std::collections::VecDeque;
@@ -39,7 +40,7 @@ pub struct Feedback {
     pub kind: Kind,
     pub screen: super::Rect,
     pub level: Option<Level>,
-    pub error: Option<String>,
+    pub error: Option<RuntimeError>,
     pub pending: bool,
 }
 
@@ -237,7 +238,13 @@ impl FeedbackState {
             }
             Err(error) => {
                 active.feedback.level = None;
-                active.feedback.error = Some(format!("{error:#}"));
+                active.feedback.error = Some(RuntimeError::new(
+                    match active.feedback.kind {
+                        Kind::Volume => ErrorCode::VolumeAdjustmentFailed,
+                        Kind::Brightness => ErrorCode::BrightnessAdjustmentFailed,
+                    },
+                    format!("{error:#}"),
+                ));
             }
         }
         self.dirty = true;
@@ -285,6 +292,21 @@ fn monitor_at(monitors: Vec<Monitor>, point: Point) -> Result<Monitor> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn asynchronous_errors_keep_the_operation_code() {
+        for (kind, code) in [
+            (Kind::Volume, ErrorCode::VolumeAdjustmentFailed),
+            (Kind::Brightness, ErrorCode::BrightnessAdjustmentFailed),
+        ] {
+            let mut state = FeedbackState::new();
+            let request = state.begin(kind, request(1, 0.02, 0).monitor, 0.02, Instant::now());
+            state.complete(&request, Err(anyhow::anyhow!("native failure")));
+            let error = state.take().unwrap().error.unwrap();
+            assert_eq!(error.code, code);
+            assert_eq!(error.details, "native failure");
+        }
+    }
+
     fn request(sequence: u64, delta: f32, left: i32) -> Request {
         let bounds = super::super::Rect {
             left,

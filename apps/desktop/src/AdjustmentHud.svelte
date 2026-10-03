@@ -1,5 +1,6 @@
 <script lang="ts">
   import { feedbackKindLabel, feedbackValueText, type AdjustmentFeedback } from "./adjustment-feedback";
+  import { runtimeErrorText } from "./runtime-error";
   import { translator, type Language } from "./i18n";
 
   // 这是两套宿主的共享绘制层：只吃 props，不碰任何宿主 API。
@@ -39,7 +40,7 @@
         <span>{feedbackKindLabel(feedback, ui)}</span>
         <span class="value">{feedbackValueText(feedback, ui)}</span>
       </div>
-      <div class="device">{feedback.error ?? feedback.level?.deviceName ?? ui("adjustmentReading")}</div>
+      <div class="device">{feedback.error ? runtimeErrorText(feedback.error, ui) : feedback.level?.deviceName ?? ui("adjustmentReading")}</div>
       <div class="track" class:unavailable={!feedback.level}>
         <div class="fill" style:transform={`scaleX(${level})`}></div>
       </div>

@@ -135,3 +135,11 @@ describe("window enhancement UI wiring", () => {
     expect(styles).not.toContain(".gesture-apply");
   });
 });
+
+
+it("auto-saves the localized edge animation switch without changing delays", () => {
+  expect(source).toContain('bind:checked={settings.edgeHide.animationEnabled} on:change={() => persist()}');
+  expect(source).toContain('aria-label={ui("edgeAnimation")}');
+  expect(source).toContain('settings.edgeHide.collapseDelayMs');
+  expect(source).toContain('settings.edgeHide.restoreDelayMs');
+});

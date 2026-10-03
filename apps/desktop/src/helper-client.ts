@@ -1,14 +1,16 @@
+import { gestureLabels } from "./gesture-names";
+import { translator } from "./i18n";
+import type { Language } from "./i18n";
 import type { AppSettings, HelperMessage, HelperPlatformInfo, HelperStatus } from "./types";
 import { settingsForHelper } from "./runtime-settings";
 
 type MessageHandler = (message: HelperMessage) => void;
 type StatusHandler = (status: HelperStatus) => void;
 
-export const SUPPORTED_HELPER_PROTOCOL = 6;
-export const LEGACY_HELPER_PROTOCOL = 5;
+export const SUPPORTED_HELPER_PROTOCOL = 7;
 
 export function isSupportedHelperProtocol(value: unknown): boolean {
-  return value === LEGACY_HELPER_PROTOCOL || value === SUPPORTED_HELPER_PROTOCOL;
+  return value === SUPPORTED_HELPER_PROTOCOL;
 }
 
 export class HelperClient {
@@ -27,7 +29,8 @@ export class HelperClient {
 
   constructor(
     private readonly url = "ws://127.0.0.1:56873",
-    private readonly tokenProvider: () => string | null = () => null
+    private readonly tokenProvider: () => string | null = () => null,
+    private readonly languageProvider: () => Language = () => "en-US"
   ) {}
 
   connect(): void {
@@ -187,6 +190,8 @@ export class HelperClient {
       type: "config.update",
       time: Date.now(),
       data: {
+        protocolVersion: SUPPORTED_HELPER_PROTOCOL,
+        gestureLabels: gestureLabels(this.latestSettings.mouseGestures?.gestures ?? [], translator(this.languageProvider())),
         revision: this.latestConfigRevision,
         config: this.latestSettings
       }

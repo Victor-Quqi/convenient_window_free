@@ -1,3 +1,7 @@
+use crate::config::SCHEMA_VERSION;
+use crate::ipc::errors::{ErrorCode, RuntimeError};
+
+pub const PROTOCOL_VERSION: u32 = 7;
 use crate::config::AppConfig;
 use crate::ipc::messages::HelperMessage;
 use crate::logging;
@@ -72,13 +76,12 @@ impl WebSocketServer {
                     let config_tx = self.config_tx.clone();
                     let config_update_lock = Arc::clone(&self.config_update_lock);
                     let auth_token = self.auth_token.clone();
-                    let event_tx = self.event_tx.clone();
                     let shutdown_tx = self.shutdown_tx.clone();
                     let usage = self.usage.clone();
                     let event_rx = self.event_tx.subscribe();
                     tokio::spawn(async move {
                         logging::write_line("websocket: accepted client");
-                        if let Err(error) = handle_connection(stream, &auth_token, config_tx, config_update_lock, event_tx, event_rx, shutdown_tx, usage).await {
+                        if let Err(error) = handle_connection(stream, &auth_token, config_tx, config_update_lock, event_rx, shutdown_tx, usage).await {
                             logging::write_line(format!("websocket: connection error {error:#}"));
                         }
                     });
@@ -112,7 +115,6 @@ async fn handle_connection(
     auth_token: &str,
     config_tx: watch::Sender<AppConfig>,
     config_update_lock: Arc<AsyncMutex<()>>,
-    event_tx: broadcast::Sender<HelperMessage>,
     mut event_rx: broadcast::Receiver<HelperMessage>,
     shutdown_tx: broadcast::Sender<()>,
     usage: UsageTracker,
@@ -152,7 +154,8 @@ async fn handle_connection(
                 "helper.ready",
                 serde_json::json!({
                     "version": env!("CARGO_PKG_VERSION"),
-                    "protocolVersion": 6,
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "schemaVersion": SCHEMA_VERSION,
                     "platform": crate::platform::platform_info(),
                     "ocrLanguages": ocr_languages,
                     "usage": usage.snapshot()
@@ -192,17 +195,15 @@ async fn handle_connection(
                             Ok(update) => update,
                             Err(e) => {
                                 logging::write_line(format!("websocket: config deserialize error {e}"));
-                                let _ = event_tx.send(HelperMessage::new("runtime.error", serde_json::json!({
-                                    "message": format!("invalid config: {e}")
-                                })));
+                                let error = HelperMessage::new("runtime.error", e.for_request(&incoming.id).data());
+                                writer.send(Message::Text(serde_json::to_string(&error)?.into())).await?;
                                 continue;
                             }
                         };
                         if let Err(error) = apply_config_update(&config_tx, &config_update_lock, config).await {
                             logging::write_line(format!("websocket: config save error {error:#}"));
-                            let _ = event_tx.send(HelperMessage::new("runtime.error", serde_json::json!({
-                                "message": format!("config could not be saved: {error:#}")
-                            })));
+                            let error = HelperMessage::new("runtime.error", RuntimeError::new(ErrorCode::ConfigSaveFailed, format!("{error:#}")).for_request(&incoming.id).data());
+                            writer.send(Message::Text(serde_json::to_string(&error)?.into())).await?;
                             continue;
                         }
                         let applied = HelperMessage::new("config.applied", serde_json::json!({
@@ -234,9 +235,8 @@ async fn handle_connection(
                         break;
                     }
                     _ => {
-                        let _ = event_tx.send(HelperMessage::new("runtime.error", serde_json::json!({
-                            "message": format!("unknown message type: {}", incoming.kind)
-                        })));
+                        let error = HelperMessage::new("runtime.error", RuntimeError::new(ErrorCode::UnknownMessage, incoming.kind).for_request(&incoming.id).data());
+                        writer.send(Message::Text(serde_json::to_string(&error)?.into())).await?;
                     }
                 }
             }
@@ -284,14 +284,43 @@ where
     Ok(())
 }
 
-fn parse_config_update(data: Value) -> serde_json::Result<(AppConfig, Option<u64>, bool)> {
+fn parse_config_update(data: Value) -> Result<(AppConfig, Option<u64>, bool), RuntimeError> {
+    if data.get("protocolVersion").and_then(Value::as_u64) != Some(PROTOCOL_VERSION as u64)
+        || data
+            .get("config")
+            .and_then(|v| v.get("schemaVersion"))
+            .and_then(Value::as_u64)
+            != Some(SCHEMA_VERSION as u64)
+    {
+        return Err(RuntimeError::new(
+            ErrorCode::UnsupportedSchema,
+            "Expected protocol 7 and settings schema 8",
+        ));
+    }
     let revision = data.get("revision").and_then(Value::as_u64);
-    let raw_config = data.get("config").cloned().unwrap_or(data);
-    let received = serde_json::from_value::<AppConfig>(raw_config)?;
-    let before = serde_json::to_value(&received)?;
+    let raw_config = data.get("config").cloned().unwrap_or(Value::Null);
+    let invalid =
+        |error: serde_json::Error| RuntimeError::new(ErrorCode::InvalidConfig, error.to_string());
+    let received = serde_json::from_value::<AppConfig>(raw_config).map_err(invalid)?;
+    let before = serde_json::to_value(&received).map_err(invalid)?;
     let mut config = received.normalized();
     crate::platform::apply_capability_limits(&mut config);
-    let adjusted = serde_json::to_value(&config)? != before;
+    let adjusted = serde_json::to_value(&config).map_err(invalid)? != before;
+    if let Some(labels) = data.get("gestureLabels").and_then(Value::as_object) {
+        for gesture in &config.mouse_gestures.gestures {
+            if let Some(label) = labels.get(&gesture.id).and_then(Value::as_str) {
+                let label: String = label
+                    .trim()
+                    .chars()
+                    .filter(|ch| !ch.is_control())
+                    .take(80)
+                    .collect();
+                if !label.is_empty() {
+                    config.gesture_labels.insert(gesture.id.clone(), label);
+                }
+            }
+        }
+    }
     Ok((config, revision, adjusted))
 }
 
@@ -322,6 +351,42 @@ mod tests {
     use std::time::Duration;
 
     #[test]
+    fn incompatible_config_is_rejected_before_normalization() {
+        for data in [
+            serde_json::json!({"schemaVersion": 7}),
+            serde_json::json!({"config": {"schemaVersion": 8}}),
+            serde_json::json!({"protocolVersion": 6, "config": {"schemaVersion": 8}}),
+            serde_json::json!({"protocolVersion": 7, "config": {"schemaVersion": 7}}),
+            serde_json::json!({"protocolVersion": 7, "config": {"schemaVersion": 9}}),
+        ] {
+            assert_eq!(
+                parse_config_update(data).unwrap_err().code,
+                ErrorCode::UnsupportedSchema
+            );
+        }
+    }
+
+    #[test]
+    fn translated_labels_are_bounded_and_never_persisted() {
+        let (config, _, _) = parse_config_update(serde_json::json!({
+            "protocolVersion": 7,
+            "config": {"schemaVersion": 8},
+            "gestureLabels": {"gesture-up": " Up · Copy\n", "unknown": "ignored"}
+        }))
+        .unwrap();
+        assert_eq!(config.gesture_labels.len(), 1);
+        assert_eq!(
+            config.gesture_label(&config.mouse_gestures.gestures[0]),
+            Some("Up · Copy")
+        );
+        let serialized = serde_json::to_value(&config).unwrap();
+        assert!(serialized.get("gestureLabels").is_none());
+        assert!(serialized["mouseGestures"]["gestures"][0]
+            .get("name")
+            .is_none());
+    }
+
+    #[test]
     fn token_comparison_rejects_mismatches() {
         assert!(constant_time_eq("abc123", "abc123"));
         assert!(!constant_time_eq("abc123", "abc124"));
@@ -331,8 +396,9 @@ mod tests {
     #[test]
     fn config_update_envelope_keeps_revision_and_reports_normalization() {
         let (config, revision, adjusted) = parse_config_update(serde_json::json!({
+            "protocolVersion": 7,
             "revision": 7,
-            "config": { "enabled": true, "edgeSize": 999 }
+            "config": { "schemaVersion": 8, "enabled": true, "edgeSize": 999 }
         }))
         .unwrap();
 
@@ -344,6 +410,7 @@ mod tests {
         crate::platform::apply_capability_limits(&mut normalized_config);
         let normalized = serde_json::to_value(normalized_config).unwrap();
         let (_, revision, adjusted) = parse_config_update(serde_json::json!({
+            "protocolVersion": 7,
             "revision": 8,
             "config": normalized
         }))

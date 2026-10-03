@@ -1,4 +1,7 @@
 <script lang="ts">
+  import TaskbarAppearance from "./TaskbarAppearance.svelte";
+  import { gestureDisplayName } from "./gesture-names";
+  import { runtimeErrorKey } from "./runtime-error";
   import { onMount } from "svelte";
   import { fly } from "svelte/transition";
   import { HelperClient, isSupportedHelperProtocol, SUPPORTED_HELPER_PROTOCOL } from "./helper-client";
@@ -22,15 +25,23 @@
   import type {
     ActionKind, AppSettings, DisplayInfo, Edge, HelperPlatformInfo, HelperStatus, HotzoneAction,
     GesturePoint, GestureTemplate, HotzoneId, HotzoneSetting, ModifierKey,
-    OcrLanguage, TriggerAction, TriggerKind
+    OcrLanguage, TaskbarAppearanceSettings, TaskbarAppearanceStatus, TriggerAction, TriggerKind
   } from "./types";
 
-  type Mode = "power" | "hotzones" | "edge-hide" | "gestures" | "more";
+  type Mode = "power" | "hotzones" | "edge-hide" | "gestures" | "more" | "beautification";
+  let taskbarStatus: TaskbarAppearanceStatus | null = null;
+  function updateTaskbarAppearance(patch: Partial<TaskbarAppearanceSettings>): void {
+    settings = {
+      ...settings,
+      taskbarAppearance: { ...settings.taskbarAppearance, ...patch }
+    };
+    persist();
+  }
   type ConnectionTestState = "idle" | "testing" | "success" | "failed";
   type ActionPreset = { label: string; labelEn: string; group: string; groupEn: string; kind: ActionKind; value?: string };
   type FeatureTutorial = "edge-hide";
   const host = getHostBridge();
-  const helper = new HelperClient("ws://127.0.0.1:56873", () => host.getHelperToken());
+  const helper = new HelperClient("ws://127.0.0.1:56873", () => host.getHelperToken(), () => language);
   const fallbackDisplay: DisplayInfo = {
     id: "display:0:0:1920:1080", primary: true,
     bounds: { left: 0, top: 0, right: 1920, bottom: 1080 },
@@ -208,6 +219,8 @@
   $: english = language === "en-US";
   let ui = translator("zh-CN");
   $: ui = translator(language);
+  $: void host.setLanguage?.(language).catch(error => console.error("Native language update failed", error));
+  $: if (typeof document !== "undefined") document.documentElement.lang = language;
   function initLanguage(): void {
     let stored: string | null = null;
     try { stored = localStorage.getItem(LANGUAGE_KEY); } catch { /* 忽略读取失败 */ }
@@ -216,7 +229,8 @@
   }
   function setLanguage(event: Event): void {
     language = normalizeLanguage((event.currentTarget as HTMLSelectElement).value);
-    try { localStorage.setItem(LANGUAGE_KEY, language); } catch { /* 忽略隐私模式写入失败 */ }
+    try { localStorage.setItem(LANGUAGE_KEY, language); } catch { /* Ignore unavailable storage. */ }
+    helper.sendConfig(settings);
   }
 
   // 状态栏文案与 uTools 插件保持同一套字典键和同一套映射写法。
@@ -238,7 +252,7 @@
     gestureVariantAdded: "gestureVariantAdded", gestureVariantDeleted: "gestureVariantDeleted", variantAdded: "variantAdded", variantDeleted: "variantDeleted", edgeUpdated: "edgeUpdated"
   };
   function statusText(status: UiStatusKey | string, useEnglish = english): string {
-    const key = statusKeys[status as UiStatusKey];
+    const key = statusKeys[status as UiStatusKey] ?? (Object.hasOwn(zh, status) ? status as UiKey : undefined);
     return key ? (useEnglish ? en : zh)[key] : status;
   }
   $: renderedLastMessage = statusText(lastMessage, english);
@@ -259,6 +273,7 @@
         displayReady = false;
         runtimeSummary = "";
         helperPlatform = null;
+        taskbarStatus = null;
         const wasReady = helperWasReady;
         helperWasReady = false;
         if (!stopping && !upgradingHelper && settings.enabled && !helperError) {
@@ -277,7 +292,7 @@
           ? data.ocrLanguages.filter((language): language is OcrLanguage => language === "auto" || language === "zh-Hans" || language === "en")
           : null;
         if (!isSupportedHelperProtocol(data?.protocolVersion)) {
-          lastMessage = format(ui("statusHelperProtocol"), { min: 5, max: SUPPORTED_HELPER_PROTOCOL });
+          lastMessage = format(ui("statusHelperProtocol"), { min: SUPPORTED_HELPER_PROTOCOL, max: SUPPORTED_HELPER_PROTOCOL });
           helperError = lastMessage;
           helperRecoveryFailed = true;
           helper.stop();
@@ -288,6 +303,8 @@
           helperError = "";
           markHelperReady();
         }
+      } else if (message.type === "taskbar.status") {
+        taskbarStatus = message.data as typeof taskbarStatus;
       } else if (message.type === "config.applied") {
         const data = message.data as { revision?: unknown; adjusted?: unknown } | null;
         if (helper.isLatestConfigRevision(data?.revision)) {
@@ -309,22 +326,27 @@
           runtimeSummary = `${displays.length}${statusText("displaysDetected")}`;
         }
         if (data.foreground) foregroundApp = data.foreground;
-        if (data.message) lastMessage = data.message;
+        const status = message.data as { code?: string; params?: { title?: string; topmost?: boolean } };
+        if (status.code === "gesture_not_recognized") lastMessage = "gestureNotRecognized";
+        if (status.code === "window_topmost_changed") {
+          lastMessage = format(ui(status.params?.topmost ? "windowPinned" : "windowUnpinned"), { title: status.params?.title || ui("unnamedWindow") });
+        }
       } else if (message.type === "action.triggered") {
         const data = message.data as { source?: string; kind?: string };
         lastAction = [data.source, data.kind].filter(Boolean).join(" · ") || "actionTriggered";
       } else if (message.type === "gesture.recognized") {
-        const data = message.data as { name?: string; capturePath?: unknown };
+        const data = message.data as { id?: string; name?: string; capturePath?: unknown };
+        const recognized = settings.mouseGestures.gestures.find(gesture => gesture.id === data.id);
+        const name = gestureName(recognized ?? { id: data.id ?? "", name: data.name } as GestureTemplate);
         lastAction = typeof data.capturePath === "string" && data.capturePath.length
-          ? `${data.name || ui("regionScreenshot")} · ${data.capturePath}`
-          : data.name || ui("gestureRecognition");
+          ? `${name} · ${data.capturePath}`
+          : name;
       } else if (message.type === "ocr.completed") {
         const data = message.data as { characters?: number };
         lastAction = ui("ocrCopiedShort");
         lastMessage = format(ui("statusOcrCopiedCount"), { count: Math.max(0, Number(data.characters) || 0) });
       } else if (message.type === "runtime.error") {
-        const data = message.data as { message?: string };
-        lastMessage = data.message ?? "helperErrorTitle";
+        lastMessage = runtimeErrorKey(message.data);
         helperError = lastMessage;
       } else if (message.type === "helper.pong") {
         if (connectionTestState === "testing") {
@@ -658,17 +680,8 @@
     return preset ? (english ? preset.labelEn : preset.label) : ui("customAction");
   }
 
-  // 内置手势的名字存在配置里（与 uTools 插件同源），英文界面按 id 翻译，自定义手势保留用户原文。
-  function gestureName(gesture: GestureTemplate): string {
-    if (!english || !gesture.builtin) return gesture.name;
-    const names: Record<string, string> = {
-      "gesture-up": "Up · Copy",
-      "gesture-down": "Down · Paste",
-      "gesture-l": "L · Close",
-      "gesture-circle": "Circle · Topmost",
-      "gesture-rectangle": "Region capture"
-    };
-    return names[gesture.id] ?? gesture.name;
+  function gestureName(gesture: GestureTemplate, translate = ui): string {
+    return gestureDisplayName(gesture, translate);
   }
 
   function presetIndex(action: HotzoneAction): number {
@@ -835,7 +848,10 @@
   }
 
   function renameGesture(event: Event): void {
-    currentGesture().name = (event.currentTarget as HTMLInputElement).value.slice(0, 40);
+    const name = Array.from((event.currentTarget as HTMLInputElement).value.trim()).slice(0, 40).join("");
+    const gesture = currentGesture();
+    if (!name && !gesture.builtin) return;
+    gesture.name = name || undefined;
     persist();
   }
 
@@ -844,7 +860,7 @@
     const copy: GestureTemplate = {
       ...source,
       id: `gesture-${globalThis.crypto?.randomUUID?.() ?? Date.now()}`,
-      name: format(ui("gestureCopyName"), { name: source.name }).slice(0, 40),
+      name: format(ui("gestureCopyName"), { name: gestureName(source) }).slice(0, 40),
       builtin: false,
       action: { ...source.action },
       modifierActions: (source.modifierActions ?? []).map((item) => ({ modifiers: [...item.modifiers], action: { ...item.action } })),
@@ -857,7 +873,7 @@
 
   function deleteGesture(): void {
     const gesture = currentGesture();
-    if (gesture.builtin || !window.confirm(format(ui("gestureDeleteConfirm"), { name: gesture.name }))) return;
+    if (gesture.builtin || !window.confirm(format(ui("gestureDeleteConfirm"), { name: gestureName(gesture) }))) return;
     settings.mouseGestures.gestures = settings.mouseGestures.gestures.filter((item) => item.id !== gesture.id);
     selectGesture(settings.mouseGestures.gestures[0]?.id ?? "");
     gestureConflict = "";
@@ -923,7 +939,7 @@
       if (gesture.id === target.id || !gesture.enabled) continue;
       for (const other of gesture.samples) {
         const score = gestureSimilarity(sample, other);
-        if (!best || score > best.score) best = { name: gesture.name, score };
+        if (!best || score > best.score) best = { name: gestureName(gesture), score };
       }
     }
     return best && best.score >= 0.88 ? format(ui("gestureSimilarity"), { name: best.name, score: Math.round(best.score * 100) }) : "";
@@ -1116,6 +1132,9 @@
     <div class="brand"><img src="app-icon.png" alt="" /><strong>{ui("brandName")}</strong></div>
     <div class:connected={helperStatus === "connected"} class="connection"><i></i>{helperStatus === "connected" ? ui("connected") : helperStatus === "connecting" ? ui("connecting") : ui("disconnected")}<span>{displayReady ? (runtimeSummary || ui("statusRuntimeIdle")) : helperStatus === "connecting" ? ui("connecting") : ui("displayPreview")}</span></div>
     <label class="master">{ui("masterState")} <input checked={settings.enabled} disabled={starting || stopping} on:change={togglePower} type="checkbox" /><span></span></label>
+    <button aria-label={ui("settingsLabel")} title={ui("settingsLabel")} class="theme-toggle settings-toggle" class:active={mode === "more"} aria-expanded={mode === "more"} on:click={() => toggleMode("more")} type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"><path d="m9.4 3-.5 2.1-1.8 1-2.1-.6-2.2 3.8 1.6 1.5v2.2l-1.6 1.5L5 18.3l2.1-.6 1.8 1 .5 2.1h4.4l.5-2.1 1.8-1 2.1.6 2.2-3.8-1.6-1.5v-2.2l1.6-1.5-2.2-3.8-2.1.6-1.8-1-.5-2.1z"/><circle cx="11.6" cy="12" r="3.1"/></svg>
+    </button>
     <button aria-label={theme === "dark" ? ui("themeLight") : ui("themeDark")} class="theme-toggle" on:click={toggleTheme} title={theme === "dark" ? ui("themeLight") : ui("themeDark")} type="button">
       <svg class="icon-sun" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8" viewBox="0 0 24 24"><circle cx="12" cy="12" r="4.2" /><path d="M12 2.5v2.4M12 19.1v2.4M2.5 12h2.4M19.1 12h2.4M5 5l1.7 1.7M17.3 17.3 19 19M19 5l-1.7 1.7M6.7 17.3 5 19" /></svg>
       <svg class="icon-moon" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8" viewBox="0 0 24 24"><path d="M20.4 13.2A8.4 8.4 0 1 1 10.8 3.6a6.8 6.8 0 0 0 9.6 9.6z" /></svg>
@@ -1150,14 +1169,14 @@
         <button class:active={mode === "hotzones"} on:click={() => toggleMode("hotzones")} type="button"><span class="nav-icon corner-icon"></span><b>{ui("hotzones")}</b></button>
         <button class:active={mode === "edge-hide"} on:click={() => toggleMode("edge-hide")} type="button"><span class="nav-icon edge-icon"></span><b>{ui("edgeHide")}</b></button>
         <button class:active={mode === "gestures"} on:click={() => toggleMode("gestures")} type="button"><span class="nav-icon gesture-icon"></span><b>{ui("gestures")}</b></button>
-        <button class:active={mode === "more"} on:click={() => toggleMode("more")} type="button"><span class="nav-icon more-icon"></span><b>{ui("more")}</b></button>
+        <button class:active={mode === "beautification"} on:click={() => toggleMode("beautification")} type="button"><svg class="nav-beauty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" aria-hidden="true"><path d="m4.5 19.5 10-10a1.4 1.4 0 0 1 2 2l-10 10a1.4 1.4 0 0 1-2-2ZM12 12l2 2M8 3l.8 2.2L11 6l-2.2.8L8 9l-.8-2.2L5 6l2.2-.8ZM19 3v4m-2-2h4M20 16v4m-2-2h4"/></svg><b>{ui("beautification")}</b></button>
       </nav>
     </section>
 
     {#if mode !== null}
       <aside class:gesture-drawer={mode === "gestures"} class="drawer" in:fly={{ x: 28, duration: 220 }}>
         <header class="drawer-head">
-          <div><span>{mode === "power" ? ui("power") : mode === "hotzones" ? ui("hotzones") : mode === "edge-hide" ? ui("edgeHide") : mode === "gestures" ? ui("gestures") : ui("moreSettings")}</span><p>{mode === "hotzones" ? `${zoneLabel(selectedZone)} · S${Math.max(0, displays.findIndex((item) => item.id === selectedDisplayId)) + 1}` : mode === "edge-hide" ? windowEnhancementTab === "edge" ? ui("edgeSubtitle") : ui("dragSubtitle") : mode === "gestures" ? ui("gestureSubtitle") : mode === "more" ? ui("moreSubtitle") : ui("powerSubtitle")}</p></div>
+          <div><span>{mode === "power" ? ui("power") : mode === "hotzones" ? ui("hotzones") : mode === "edge-hide" ? ui("edgeHide") : mode === "gestures" ? ui("gestures") : mode === "beautification" ? ui("beautification") : ui("settingsLabel")}</span><p>{mode === "hotzones" ? `${zoneLabel(selectedZone)} · S${Math.max(0, displays.findIndex((item) => item.id === selectedDisplayId)) + 1}` : mode === "edge-hide" ? windowEnhancementTab === "edge" ? ui("edgeSubtitle") : ui("dragSubtitle") : mode === "gestures" ? ui("gestureSubtitle") : mode === "more" ? ui("moreSubtitle") : mode === "beautification" ? ui("beautificationSubtitle") : ui("powerSubtitle")}</p></div>
           <button aria-label={ui("close")} class="close-drawer" on:click={closeMode} type="button">×</button>
         </header>
 
@@ -1226,6 +1245,7 @@
                 </div>
                 <div class="feature-settings-head"><span>{ui("edgeSettings")}</span><strong>{settings.edgeHide.enabled ? ui("unifiedOn") : ui("edgeEnabled")}</strong></div>
                 <div class="feature-settings-body" class:off={!settings.edgeHide.enabled} inert={!settings.edgeHide.enabled}>
+                <div class="setting-title edge-animation-setting"><div><h2>{ui("edgeAnimation")}</h2><p>{ui("edgeAnimationDetail")}</p></div><label class="mini-switch"><input aria-label={ui("edgeAnimation")} bind:checked={settings.edgeHide.animationEnabled} on:change={() => persist()} type="checkbox" /><span></span></label></div>
                 <div class="setting-title edge-preview-setting"><div><h2>{ui("snapHint")}</h2><p>{ui("snapHintDescription")}</p></div><label class="mini-switch"><input aria-label={ui("snapHint")} bind:checked={settings.edgeHide.showPreview} on:change={() => persist()} type="checkbox" /><span></span></label></div>
                 <div class="setting-title edge-restore-hint-setting"><div><h2>{ui("expansionOutline")}</h2><p>{ui("expansionOutlineDescription")}</p></div><label class="mini-switch"><input aria-label={ui("expansionOutline")} bind:checked={settings.edgeHide.showRestoreHint} on:change={() => persist()} type="checkbox" /><span></span></label></div>
                 <div class="setting-title edge-foreground-setting"><div><h2>{ui("keepExpandedWhenForeground")}</h2><p>{ui("keepExpandedWhenForegroundDescription")}</p></div><label class="mini-switch"><input aria-label={ui("keepExpandedWhenForeground")} bind:checked={settings.edgeHide.keepExpandedWhenForeground} on:change={() => persist()} type="checkbox" /><span></span></label></div>
@@ -1279,7 +1299,7 @@
                     {#each settings.mouseGestures.gestures as gesture}
                       <button class:active={gesture.id === activeGesture.id} class:screenshot={gesture.mode === "region-screenshot"} on:click={() => selectGesture(gesture.id)} type="button">
                         <svg viewBox="0 0 100 100" aria-hidden="true">{#if gesture.samples.at(-1)?.length}<path d={gesturePath(gesture.samples.at(-1) ?? [])} />{/if}</svg>
-                        <span><b>{gestureName(gesture)}</b><small>{gesture.mode === "region-screenshot" ? ui("regionScreenshot") : gesture.builtin ? ui("builtinGestures") : format(ui("sampleCount"), { count: gesture.samples.length })}</small></span>
+                        <span><b>{gestureName(gesture, ui)}</b><small>{gesture.mode === "region-screenshot" ? ui("regionScreenshot") : gesture.builtin ? ui("builtinGestures") : format(ui("sampleCount"), { count: gesture.samples.length })}</small></span>
                         <i class:off={!gesture.enabled} title={gesture.enabled ? ui("enabledState") : ui("disabledState")}></i>
                       </button>
                     {/each}
@@ -1288,7 +1308,7 @@
 
                 <section class:screenshot-editor={activeGesture.mode === "region-screenshot"} class="gesture-editor">
                   <div class="gesture-paper-head">
-                    <label><span>{ui("currentGesture")}</span><input aria-label={ui("gestureNameLabel")} value={activeGesture.name} on:input={renameGesture} /></label>
+                    <label><span>{ui("currentGesture")}</span><input aria-label={ui("gestureNameLabel")} value={gestureName(activeGesture, ui)} on:input={renameGesture} /></label>
                     <span class:special={activeGesture.mode === "region-screenshot"} class="gesture-kind">{activeGesture.mode === "region-screenshot" ? ui("screenshotMode") : format(ui("sampleCount"), { count: activeGesture.samples.length })}</span>
                   </div>
                   {#if activeGesture.mode === "region-screenshot"}
@@ -1361,7 +1381,9 @@
               </div>
               <div class="power-actions"><button class="apply" disabled={!helperInstallState.installed || settings.enabled || starting || stopping} on:click={() => setPowerEnabled(true)} type="button">{ui("openFeature")}</button><button class="quiet" disabled={starting || stopping || (!settings.enabled && helperStatus === "disconnected")} on:click={() => setPowerEnabled(false)} type="button">{ui("closeFeature")}</button><button aria-live="polite" class:failed={connectionTestState === "failed"} class:success={connectionTestState === "success"} class:testing={connectionTestState === "testing"} class="quiet connection-test" disabled={helperStatus !== "connected" || connectionTestState === "testing"} on:click={runConnectionTest} type="button"><i aria-hidden="true"></i><span>{connectionTestState === "testing" ? ui("connectionTesting") : connectionTestState === "success" ? ui("connectionOk") : connectionTestState === "failed" ? ui("connectionFailed") : ui("connectionTest")}</span></button><button class="quiet" on:click={copyDiagnostics} type="button">{ui("diagnostics")}</button></div>
               <div class="helper-meta"><span>{format(ui("helperVersion"), { version: helperInstallState.version })}</span><button on:click={() => openHelperPage("repository")} type="button">{ui("publicDownload")}</button><code>{helperInstallState.installDir ?? ui("helperInstallDirUnknown")}</code></div>
-              <div class:error={Boolean(helperError)} class="status-rail"><div><span>{ui("recentAction")}</span><strong>{lastAction || statusText("noAction")}</strong></div><div><span>{ui("currentState")}</span><strong aria-live="polite">{statusText(helperError) || renderedLastMessage}</strong></div></div>
+              <div class:error={Boolean(helperError)} class="status-rail"><div><span>{ui("recentAction")}</span><strong>{lastAction || statusText("noAction")}</strong></div><div><span>{ui("currentState")}</span><strong aria-live="polite">{statusText(helperError, english) || renderedLastMessage}</strong></div></div>
+            {:else if mode === "beautification"}
+              <TaskbarAppearance {english} appearance={settings.taskbarAppearance} connected={helperStatus === "connected"} masterEnabled={settings.enabled} status={taskbarStatus} onChange={updateTaskbarAppearance} />
             {:else}
               <div class="setting-title"><div><h2>{ui("moreGlobal")}</h2><p>{ui("moreDescription")}</p></div></div>
               <div class="language-setting"><div><h2>{ui("language")}</h2><p>{ui("languageDescription")}</p></div><select aria-label={ui("language")} bind:value={language} on:change={setLanguage}><option value="zh-CN">{ui("chinese")}</option><option value="en-US">{ui("english")}</option></select></div>
