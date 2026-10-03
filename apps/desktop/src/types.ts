@@ -159,6 +159,7 @@ export interface TopmostPinSettings {
 export interface OcrSettings {
   language: OcrLanguage;
   screenshotResult: ScreenshotResultMode;
+  pinOffset: boolean;
 }
 
 export interface HelperMessage<T = unknown> {

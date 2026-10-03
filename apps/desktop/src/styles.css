@@ -679,6 +679,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .screenshot-panel dt { color: var(--amber); font-size: 10.5px; }
 .screenshot-panel dd { margin: 2px 0 0; color: var(--muted); font-size: 10.5px; }
 .screenshot-panel p { margin: 0; color: var(--muted); font-size: 10.5px; line-height: 1.55; }
+.screenshot-panel .pin-offset-option { grid-template-columns: 1fr; }
 .gesture-global-settings { margin-top: 12px; padding: 12px 14px; }
 .gesture-controls { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; padding: 12px 0; }
 .gesture-controls label > span { display: flex; justify-content: space-between; margin-bottom: 7px; color: var(--muted); font-size: 11px; }

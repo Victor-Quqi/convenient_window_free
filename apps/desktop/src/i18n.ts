@@ -38,6 +38,8 @@ export function format(template: string, values: Record<string, string | number>
 }
 
 export const zh = {
+  pinOffset: "贴图偏移",
+  pinOffsetHint: "开启后向右下偏移 16 px；关闭后原地覆盖。均保持原始尺寸。",
   gestureNotRecognized: "手势未识别，已取消",
   gestureUp: "向上 · 复制",
   gestureDown: "向下 · 粘贴",
@@ -116,6 +118,8 @@ export const zh = {
 } as const;
 
 export const en: Record<keyof typeof zh, string> = {
+  pinOffset: "Offset pinned image",
+  pinOffsetHint: "Shift 16 px down and right when enabled; cover the captured area when disabled. Keep original dimensions in both modes.",
   gestureNotRecognized: "Gesture not recognized; cancelled.",
   gestureUp: "Up · Copy",
   gestureDown: "Down · Paste",

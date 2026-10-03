@@ -234,6 +234,7 @@ pub fn capture_and_pin(rect: Rect, _end_point: Option<Point>, ocr: &OcrConfig) -
     }
     if should_pin {
         let language = ocr.language;
+        let pin_offset = ocr.pin_offset;
         std::thread::Builder::new()
             .name("pinned-screenshot".into())
             .spawn(move || {
@@ -244,6 +245,7 @@ pub fn capture_and_pin(rect: Rect, _end_point: Option<Point>, ocr: &OcrConfig) -
                     pixels,
                     language,
                     rect,
+                    pin_offset,
                 )
             })?;
     } else {
@@ -294,10 +296,18 @@ fn run_pin_window(
     pixels: Arc<Vec<u8>>,
     ocr_language: OcrLanguage,
     capture: Rect,
+    pin_offset: bool,
 ) {
     unsafe {
-        let Some(hwnd) = create_pin_window(bitmap, width, height, pixels, ocr_language, capture)
-        else {
+        let Some(hwnd) = create_pin_window(
+            bitmap,
+            width,
+            height,
+            pixels,
+            ocr_language,
+            capture,
+            pin_offset,
+        ) else {
             return;
         };
         let _ = ShowWindow(hwnd, SW_SHOW);
@@ -317,6 +327,7 @@ fn create_pin_window(
     pixels: Arc<Vec<u8>>,
     ocr_language: OcrLanguage,
     capture: Rect,
+    pin_offset: bool,
 ) -> Option<HWND> {
     unsafe {
         let class = WNDCLASSW {
@@ -338,14 +349,15 @@ fn create_pin_window(
         });
         let state_ptr = Box::into_raw(state);
         // Capture and popup coordinates are physical pixels under per-monitor DPI awareness.
-        // The borderless client area covers the capture without an offset or initial scaling.
+        // Offset only the origin; both modes preserve the original pixel dimensions.
+        let offset = if pin_offset { 16 } else { 0 };
         let hwnd = CreateWindowExW(
             WS_EX_TOPMOST | WS_EX_TOOLWINDOW | WS_EX_LAYERED,
             CLASS_NAME,
             w!("便捷窗口 · 悬浮贴图（右键复制、保存或关闭）"),
             pin_window_style(),
-            capture.left,
-            capture.top,
+            capture.left + offset,
+            capture.top + offset,
             width,
             height,
             HWND::default(),
@@ -736,6 +748,10 @@ mod tests {
     }
 
     fn assert_native_pin_covers_capture(capture: Rect) {
+        assert_native_pin_placement(capture, false);
+    }
+
+    fn assert_native_pin_placement(capture: Rect, pin_offset: bool) {
         use windows::Win32::Graphics::Gdi::ClientToScreen;
         use windows::Win32::UI::HiDpi::{
             SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT,
@@ -784,6 +800,7 @@ mod tests {
                 Arc::new(vec![0; (capture.width() * capture.height() * 4) as usize]),
                 OcrConfig::default().language,
                 capture,
+                pin_offset,
             )
             .expect("create a real pinned image window");
             test_window.hwnd = hwnd;
@@ -794,26 +811,47 @@ mod tests {
             GetWindowRect(hwnd, &mut window).unwrap();
             GetClientRect(hwnd, &mut client).unwrap();
             assert!(ClientToScreen(hwnd, &mut origin).as_bool());
+            let offset = if pin_offset { 16 } else { 0 };
             assert_eq!(
                 window,
                 RECT {
-                    left: capture.left,
-                    top: capture.top,
-                    right: capture.right,
-                    bottom: capture.bottom,
+                    left: capture.left + offset,
+                    top: capture.top + offset,
+                    right: capture.right + offset,
+                    bottom: capture.bottom + offset,
                 }
             );
             assert_eq!(
                 origin,
                 POINT {
-                    x: capture.left,
-                    y: capture.top
+                    x: capture.left + offset,
+                    y: capture.top + offset
                 }
             );
             assert_eq!(
                 (client.right, client.bottom),
                 (capture.width(), capture.height())
             );
+        }
+    }
+
+    #[test]
+    fn default_offset_moves_origin_without_resizing_original_pixels() {
+        for capture in [
+            Rect {
+                left: 100,
+                top: 100,
+                right: 180,
+                bottom: 140,
+            },
+            Rect {
+                left: -700,
+                top: -200,
+                right: 1300,
+                bottom: 800,
+            },
+        ] {
+            assert_native_pin_placement(capture, OcrConfig::default().pin_offset);
         }
     }
 
