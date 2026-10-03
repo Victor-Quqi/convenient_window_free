@@ -886,3 +886,8 @@ body, .topbar, .drawer, .drawer-head, .mode-nav, .power-facts, .power-orb,
 @media (prefers-reduced-motion: reduce) {
   .beauty-panel *, .beauty-panel *::before, .beauty-panel *::after { transition: none !important; }
 }
+
+/* Quiet diagnostics; real failures retain their visible status text. */
+.beauty-diagnostics { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
+.beauty-diagnostics summary { cursor: pointer; }
+.beauty-diagnostics code { display: block; margin: 7px 0; user-select: text; }

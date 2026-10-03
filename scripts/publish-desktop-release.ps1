@@ -2,11 +2,13 @@ param(
   [string]$Repository = "ximizhou/convenient_window_free",
   [switch]$Promote,
   [switch]$DryRun,
+  [switch]$ReplacePreRelease,
   [switch]$RequireTrustedSignature
 )
 
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
+if ($ReplacePreRelease -and $Promote) { throw "-ReplacePreRelease cannot be combined with -Promote" }
 . (Join-Path $PSScriptRoot "hash-file.ps1")
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
@@ -172,8 +174,10 @@ if (Test-Path -LiteralPath $releaseNotesPath) {
 # 说明与状态自相矛盾。
 $statusLine = if ($Promote) {
   "- Stable release. The assets are unchanged from the accepted pre-release; nothing was rebuilt or re-uploaded."
+} elseif ($ReplacePreRelease) {
+  "- Replaceable pre-release candidate. This candidate may be refreshed while it remains a pre-release; stable promotion locks the assets."
 } else {
-  "- This pre-release is intended for download, installation, portable, and uninstall acceptance before the same immutable assets are promoted to a stable release."
+  "- This pre-release is intended for download, installation, portable, and uninstall acceptance and may be refreshed before stable promotion."
 }
 
 $notes = @"
@@ -190,7 +194,7 @@ $statusLine
 "@
 
 if ($DryRun) {
-  $operation = if ($Promote) { "promotion" } else { "pre-release" }
+  $operation = if ($Promote) { "promotion" } elseif ($ReplacePreRelease) { "pre-release replacement" } else { "pre-release" }
   Write-Output "Dry run: $Repository $tag $operation"
   $releaseFiles | Select-Object Name, Length
   return
@@ -209,6 +213,7 @@ $headers = @{
 }
 $api = "https://api.github.com/repos/$Repository"
 $release = $null
+$createdRelease = $false
 
 try {
   if ($Promote) {
@@ -230,24 +235,46 @@ try {
     return
   }
 
-  try {
-    Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "$api/releases/tags/$tag" | Out-Null
-    throw "$tag already exists; release assets will not be overwritten"
-  } catch {
-    if ($_.Exception.Message -like "$tag already exists*") { throw }
-    if (-not $_.Exception.Response -or [int]$_.Exception.Response.StatusCode -ne 404) { throw }
+  if ($ReplacePreRelease) {
+    $release = Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "$api/releases/tags/$tag"
+    if ($release.draft -or -not $release.prerelease) {
+      throw "$tag is not an active pre-release; stable assets cannot be replaced"
+    }
+    $refPayload = [System.Text.Encoding]::UTF8.GetBytes((@{ sha = $head; force = $true } | ConvertTo-Json))
+    Invoke-RestMethod -UseBasicParsing -Method Patch -Headers $headers -ContentType "application/json; charset=utf-8" -Body $refPayload -Uri "$api/git/refs/tags/$tag" | Out-Null
+    foreach ($remoteAsset in @($release.assets)) {
+      Invoke-RestMethod -UseBasicParsing -Method Delete -Headers $headers -Uri "$api/releases/assets/$($remoteAsset.id)" | Out-Null
+    }
+    $releasePayload = [System.Text.Encoding]::UTF8.GetBytes((@{
+      target_commitish = $head
+      name = "Convenient Window Desktop $($manifest.version)"
+      body = $notes
+      draft = $false
+      prerelease = $true
+      make_latest = "false"
+    } | ConvertTo-Json))
+    $release = Invoke-RestMethod -UseBasicParsing -Method Patch -Headers $headers -ContentType "application/json; charset=utf-8" -Body $releasePayload -Uri "$api/releases/$($release.id)"
+    Write-Output "Refreshing existing pre-release assets: $tag"
+  } else {
+    try {
+      Invoke-RestMethod -UseBasicParsing -Headers $headers -Uri "$api/releases/tags/$tag" | Out-Null
+      throw "$tag already exists; use -ReplacePreRelease while it is still a pre-release"
+    } catch {
+      if ($_.Exception.Message -like "$tag already exists*") { throw }
+      if (-not $_.Exception.Response -or [int]$_.Exception.Response.StatusCode -ne 404) { throw }
+    }
+    $payload = [System.Text.Encoding]::UTF8.GetBytes((@{
+      tag_name = $tag
+      target_commitish = $head
+      name = "Convenient Window Desktop $($manifest.version)"
+      body = $notes
+      draft = $false
+      prerelease = $true
+      make_latest = "false"
+    } | ConvertTo-Json))
+    $release = Invoke-RestMethod -Use BasicParsing -Method Post -Headers $headers -ContentType "application/json; charset=utf-8" -Body $payload -Uri "$api/releases"
+    $createdRelease = $true
   }
-
-  $payload = [System.Text.Encoding]::UTF8.GetBytes((@{
-    tag_name = $tag
-    target_commitish = $head
-    name = "Convenient Window Desktop $($manifest.version)"
-    body = $notes
-    draft = $false
-    prerelease = $true
-    make_latest = "false"
-  } | ConvertTo-Json))
-  $release = Invoke-RestMethod -UseBasicParsing -Method Post -Headers $headers -ContentType "application/json; charset=utf-8" -Body $payload -Uri "$api/releases"
   $uploadBase = ($release.upload_url -replace '\{\?name,label\}$', '')
   foreach ($asset in $releaseFiles) {
     $encodedName = [Uri]::EscapeDataString($asset.Name)
@@ -258,7 +285,7 @@ try {
   Assert-RemoteAssets -Release $release -ExpectedFiles $releaseFiles
   Write-Output "Published pre-release: $($release.html_url)"
 } catch {
-  if (-not $Promote -and $release -and $release.id) {
+  if ($createdRelease -and $release -and $release.id) {
     try { Invoke-RestMethod -UseBasicParsing -Method Delete -Headers $headers -Uri "$api/releases/$($release.id)" | Out-Null } catch {}
     try { Invoke-RestMethod -UseBasicParsing -Method Delete -Headers $headers -Uri "$api/git/refs/tags/$tag" | Out-Null } catch {}
   }

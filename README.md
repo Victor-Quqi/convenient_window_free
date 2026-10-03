@@ -189,7 +189,7 @@ More technical information:
 
 ## Release Integrity
 
-Public builds follow an immutable acceptance process: a clean `main` build is published once, its installer and portable archive are tested, and the same assets are promoted from Pre-release to stable without replacement. Every release includes SHA-256 checksums and an artifact manifest tied to the source commit.
+Public builds use a two-stage acceptance process: a clean `main` build is published as a replaceable Pre-release candidate, whose same-version assets may be refreshed while testing continues; after acceptance, the exact assets are promoted to stable without replacement. Every release includes SHA-256 checksums and an artifact manifest tied to the source commit. Stable assets are immutable; replacing a stable binary requires a new patch version and tag.
 
 ## License
 

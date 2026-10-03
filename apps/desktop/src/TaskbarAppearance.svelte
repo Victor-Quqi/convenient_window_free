@@ -20,7 +20,7 @@
   $: supportsMaterials = materials.every((material) => status?.materials?.includes(material.id));
   $: canApply = connected && masterEnabled && status?.available === true && supportsMaterials;
   $: applied = status?.state === "applied" && appearance.enabled && supportsMaterials;
-  $: busy = status?.state === "connecting" || status?.state === "restoring";
+  $: busy = status?.state === "connecting" || status?.state === "recovering" || status?.state === "restoring";
   $: tintEnabled = appearance.mode !== "transparent";
   $: selected = materials.find((material) => material.id === appearance.mode) ?? materials[0];
   $: previewInk = !tintEnabled || appearance.opacity < 45 || tintBrightness(appearance.tint) > 160 ? "#294471" : "#EAF1FC";
@@ -36,10 +36,11 @@
     if (!isConnected || !masterOn) return "beautyNeedHelper";
     if (!current) return "beautyPending";
     if (current.state === "restoring") return "beautyRestoring";
+    if (current.state === "recovering") return enabled ? "beautyRecovering" : "beautyRestoring";
     if (current.state === "conflict") return "beautyConflict";
     if (current.state === "unsupported") return "beautyUnsupported";
     if (current.state === "unavailable") return "beautyModule";
-    if (current.state === "error") return current.errorCode === "0x80070666" ? "beautyVersionMismatch" : "beautyError";
+    if (current.state === "error") return current.errorCode === "0x80070666" ? "beautyVersionMismatch" : enabled ? "beautyError" : "beautyRestoreError";
     if (!supported) return "beautyNeedUpdate";
     if (current.state === "connecting") return "beautyConnecting";
     if (current.state === "applied") return enabled ? "beautyApplied" : "beautyRestoring";
@@ -76,7 +77,8 @@
   </div>
   <label class="beauty-check"><span>{t.beautyBorder}</span><input type="checkbox" checked={appearance.showBorder} on:change={(event) => onChange({ showBorder: (event.currentTarget as HTMLInputElement).checked })} /><i aria-hidden="true"></i></label>
 
-  <div class="beauty-actions"><button class="apply" disabled={!canApply || busy || applied} on:click={() => onChange({ enabled: true })} type="button">{applied ? t.enabledState : appearance.enabled ? t.beautyTryAgain : t.beautyActivate}</button><button class="quiet" disabled={!appearance.enabled && !applied && !busy} on:click={() => onChange({ enabled: false })} type="button">{t.beautyRestore}</button></div>
-  <div class="beauty-status" class:success={applied} class:problem={status?.state === "error" || status?.state === "conflict" || status?.state === "unsupported"} aria-live="polite"><i></i><div><span>{t[stateKey]}</span>{#if status?.backgrounds && applied}<small>{format(t.beautyMonitors, {count: status.backgrounds})}</small>{/if}{#if status?.errorCode}<code>{status.errorCode}</code>{/if}</div></div>
+  <div class="beauty-actions"><button class="apply" disabled={!canApply || (busy && appearance.enabled) || applied} on:click={() => onChange({ enabled: true })} type="button">{applied ? t.enabledState : appearance.enabled ? t.beautyTryAgain : t.beautyActivate}</button><button class="quiet" disabled={!appearance.enabled && !applied && !busy} on:click={() => onChange({ enabled: false })} type="button">{t.beautyRestore}</button></div>
+  <div class="beauty-status" class:success={applied} class:problem={status?.state === "error" || status?.state === "conflict" || status?.state === "unsupported"} aria-live="polite"><i></i><div><span>{t[stateKey]}</span>{#if status?.backgrounds && applied}<small>{format(t.beautyMonitors, {count: status.backgrounds})}</small>{/if}</div></div>
+  {#if status?.errorCode}<details class="beauty-diagnostics"><summary>{t.beautyDiagnostics}</summary><code>{status.errorCode}</code></details>{/if}
   <details class="beauty-safety"><summary>{t.beautySafety}</summary><p>{t.beautySafetyDetail}</p><p>{t.beautyScope}</p><p>{t.beautyPreviewNote}</p></details>
 </section>
