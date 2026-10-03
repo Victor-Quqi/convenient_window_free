@@ -49,20 +49,9 @@ impl ActionDispatcher {
             ActionKind::ShowDesktop => platform::show_desktop_with_modifiers(routing_modifiers),
             ActionKind::ToggleWindowTopmost => {
                 let (title, topmost) = platform::toggle_window_topmost_at(target_point)?;
-                let message = if title.trim().is_empty() {
-                    if topmost {
-                        "窗口已置顶".to_string()
-                    } else {
-                        "窗口已取消置顶".to_string()
-                    }
-                } else if topmost {
-                    format!("已置顶：{title}")
-                } else {
-                    format!("已取消置顶：{title}")
-                };
                 let _ = self.event_tx.send(HelperMessage::new(
                     "runtime.status",
-                    json!({ "message": message }),
+                    json!({ "code": "window_topmost_changed", "params": { "title": title, "topmost": topmost } }),
                 ));
                 Ok(())
             }

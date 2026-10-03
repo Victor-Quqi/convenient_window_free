@@ -40,15 +40,14 @@ if (-not (Test-Path $env:CARGO_TARGET_X86_64_PC_WINDOWS_GNULLVM_LINKER)) {
 if (-not $SkipBuild) {
   Push-Location $helperDir
   try {
-    # cargo 把编译进度写在 stderr。在 $ErrorActionPreference = "Stop" 下，PowerShell 5.1 会把
-    # 原生命令的任何 stderr 输出包装成 NativeCommandError 并当作终止错误抛出，于是脚本会在
-    # 第一次真正编译时中断（即使 cargo 的退出码是 0）。这里临时放宽，改用退出码判断成败。
-    $previousErrorActionPreference = $ErrorActionPreference
+    # Cargo uses stderr for progress. Windows PowerShell must use the exit code
+    # instead of treating every stderr record as a terminating error.
+    $sidecarErrorPreference = $ErrorActionPreference
     $ErrorActionPreference = "Continue"
     try {
       & $cargoExe build --release
     } finally {
-      $ErrorActionPreference = $previousErrorActionPreference
+      $ErrorActionPreference = $sidecarErrorPreference
     }
     if ($LASTEXITCODE -ne 0) { throw "helper cargo build failed with exit code $LASTEXITCODE" }
   } finally {
@@ -73,8 +72,8 @@ Copy-Item -Force $unwindDll $payloadDir
 $stdDlls | ForEach-Object { Copy-Item -Force $_.FullName $payloadDir }
 
 $policy = Get-Content $assetPolicyPath -Raw | ConvertFrom-Json
-if ($policy.version -ne "0.6.0" -or $policy.platform -ne "win32-x64") {
-  throw "helper-assets.json does not declare helper 0.6.0 for win32-x64"
+if ($policy.version -ne ((Get-Content (Join-Path $repoRoot "package.json") -Raw | ConvertFrom-Json).version) -or $policy.platform -ne "win32-x64") {
+  throw "helper-assets.json does not match the workspace version or win32-x64 platform"
 }
 $payloadFiles = @(Get-ChildItem -Path $payloadDir -File |
   Where-Object { $_.Extension -in ".exe", ".dll" } |

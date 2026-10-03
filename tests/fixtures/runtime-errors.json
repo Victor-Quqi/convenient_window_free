@@ -1,0 +1,14 @@
+[
+  "invalid_config",
+  "unsupported_schema",
+  "config_save_failed",
+  "unknown_message",
+  "runtime_operation_failed",
+  "input_monitor_failed",
+  "window_operation_failed",
+  "action_failed",
+  "screen_capture_failed",
+  "ocr_failed",
+  "volume_adjustment_failed",
+  "brightness_adjustment_failed"
+]

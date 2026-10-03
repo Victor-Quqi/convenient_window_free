@@ -1,3 +1,4 @@
+use crate::config::GestureMode;
 use crate::config::{ActionKind, AppConfig, HotzoneId, HotzoneSetting, TriggerKind};
 use crate::core::actions::ActionDispatcher;
 use crate::core::edge_hide::{
@@ -7,6 +8,7 @@ use crate::core::gesture::{path_length_pixels, recognize};
 use crate::core::hotzone::{detect_hotzone, hotzone_rect};
 use crate::core::trigger::HotzoneTriggerController;
 use crate::core::window_drag::WindowDragController;
+use crate::ipc::errors::{ErrorCode, RuntimeError};
 use crate::ipc::messages::HelperMessage;
 use crate::logging;
 use crate::platform;
@@ -163,7 +165,7 @@ impl Engine {
                         let gesture_points = platform::active_gesture_points();
                         if config.mouse_gestures.show_trail && !gesture_points.is_empty() {
                             let label = recognize(&gesture_points, &config.mouse_gestures)
-                                .map(|result| result.gesture.name.as_str());
+                                .and_then(|result| config.gesture_label(result.gesture));
                             platform::update_gesture_overlay(&gesture_points, label);
                         } else {
                             platform::hide_gesture_overlay();
@@ -228,7 +230,10 @@ impl Engine {
                                 ),
                                 Ok(None) => None,
                                 Err(error) => {
-                                    self.report_runtime_error(error);
+                                    self.report_runtime_error(
+                                        ErrorCode::WindowOperationFailed,
+                                        error,
+                                    );
                                     None
                                 }
                             }
@@ -273,11 +278,18 @@ impl Engine {
                         hotzone_triggers.suspend(now);
                         previous_cursor = None;
                         platform::hide_hotzone_hints();
-                        self.report_runtime_error_data(json!({
-                            "cursor": cursor.err().map(|error| error.to_string()),
-                            "monitors": monitors.err().map(|error| error.to_string()),
-                            "foreground": foreground.err().map(|error| error.to_string()),
-                        }));
+                        self.report_runtime_error_data(
+                            RuntimeError::new(
+                                ErrorCode::InputMonitorFailed,
+                                json!({
+                                    "cursor": cursor.err().map(|error| error.to_string()),
+                                    "monitors": monitors.err().map(|error| error.to_string()),
+                                    "foreground": foreground.err().map(|error| error.to_string()),
+                                })
+                                .to_string(),
+                            )
+                            .data(),
+                        );
                     }
                 }
             } else {
@@ -305,7 +317,9 @@ impl Engine {
                 if edge_hide.has_restore_work() {
                     match platform::monitors() {
                         Ok(monitors) => cached_monitors = monitors,
-                        Err(error) => self.report_runtime_error(error),
+                        Err(error) => {
+                            self.report_runtime_error(ErrorCode::WindowOperationFailed, error)
+                        }
                     }
                     self.restore_edge_hide_if_needed(
                         &mut edge_hide,
@@ -319,7 +333,7 @@ impl Engine {
                 // 调整失败必须同时走运行错误通道：桌面提示条之外（uTools 宿主、状态栏）
                 // 只能看到 runtime.error，否则音量/亮度失败会变成静默事件。
                 if let Some(error) = feedback.error.clone() {
-                    self.report_runtime_error(anyhow::anyhow!(error));
+                    self.report_runtime_error_data(error.data());
                 }
                 // 序列化失败只影响这一条事件，不能终止引擎循环。
                 if let Ok(data) = serde_json::to_value(feedback) {
@@ -362,7 +376,7 @@ impl Engine {
         if edge_hide.has_restore_work() {
             match platform::monitors() {
                 Ok(monitors) => cached_monitors = monitors,
-                Err(error) => self.report_runtime_error(error),
+                Err(error) => self.report_runtime_error(ErrorCode::WindowOperationFailed, error),
             }
             self.restore_edge_hide_if_needed(
                 &mut edge_hide,
@@ -389,7 +403,7 @@ impl Engine {
                     ));
                 }
                 platform::OcrCompletion::Failed(message) => {
-                    self.report_runtime_error(anyhow::anyhow!("文字识别失败：{message}"));
+                    self.report_runtime_error(ErrorCode::OcrFailed, anyhow::anyhow!(message));
                 }
             }
         }
@@ -406,7 +420,7 @@ impl Engine {
             platform::cancel_window_drag_capture();
             if let Some((handle, rect)) = controller.cancel() {
                 if let Err(error) = platform::set_window_rect(handle, rect) {
-                    self.report_runtime_error(error);
+                    self.report_runtime_error(ErrorCode::WindowOperationFailed, error);
                 }
             }
             return WindowDragActivity::default();
@@ -430,7 +444,7 @@ impl Engine {
                 }
                 Err(error) => {
                     platform::cancel_window_drag_capture();
-                    self.report_runtime_error(error);
+                    self.report_runtime_error(ErrorCode::WindowOperationFailed, error);
                     return WindowDragActivity::default();
                 }
             }
@@ -444,7 +458,7 @@ impl Engine {
         if let Err(error) = platform::set_window_rect(update.handle, update.rect) {
             platform::cancel_window_drag_capture();
             let _ = controller.cancel();
-            self.report_runtime_error(error);
+            self.report_runtime_error(ErrorCode::WindowOperationFailed, error);
             return WindowDragActivity::default();
         }
         if update.finished {
@@ -477,7 +491,7 @@ impl Engine {
             let length = path_length_pixels(&capture.points);
             if length < config.mouse_gestures.min_distance as f32 {
                 if let Err(error) = platform::send_trigger_click(capture.trigger) {
-                    self.report_runtime_error(error);
+                    self.report_runtime_error(ErrorCode::ActionFailed, error);
                 }
                 continue;
             }
@@ -487,7 +501,7 @@ impl Engine {
             let Some(result) = recognize(&capture.points, &config.mouse_gestures) else {
                 let _ = self.event_tx.send(HelperMessage::new(
                     "runtime.status",
-                    json!({ "message": "手势未识别，已取消" }),
+                    json!({ "code": "gesture_not_recognized" }),
                 ));
                 continue;
             };
@@ -510,7 +524,7 @@ impl Engine {
                         "gesture.recognized",
                         json!({
                             "id": result.gesture.id,
-                            "name": result.gesture.name,
+                            "name": if result.gesture.name.is_empty() { None } else { Some(&result.gesture.name) },
                             "score": result.score,
                             "region": result.region.map(|rect| json!({
                                 "left": rect.left, "top": rect.top, "right": rect.right, "bottom": rect.bottom
@@ -519,7 +533,14 @@ impl Engine {
                         }),
                     ));
                 }
-                Err(error) => self.report_runtime_error(error),
+                Err(error) => self.report_runtime_error(
+                    if result.gesture.mode == GestureMode::RegionScreenshot {
+                        ErrorCode::ScreenCaptureFailed
+                    } else {
+                        ErrorCode::ActionFailed
+                    },
+                    error,
+                ),
             }
         }
     }
@@ -605,7 +626,7 @@ impl Engine {
                     Some(cursor),
                     modifiers,
                 ) {
-                    self.report_runtime_error(error);
+                    self.report_runtime_error(ErrorCode::ActionFailed, error);
                 }
                 continue;
             }
@@ -632,15 +653,13 @@ impl Engine {
                 Some(cursor),
                 modifiers,
             ) {
-                self.report_runtime_error(error);
+                self.report_runtime_error(ErrorCode::ActionFailed, error);
             }
         }
     }
 
-    fn report_runtime_error(&self, error: anyhow::Error) {
-        self.report_runtime_error_data(json!({
-            "message": error.to_string()
-        }));
+    fn report_runtime_error(&self, code: ErrorCode, error: anyhow::Error) {
+        self.report_runtime_error_data(RuntimeError::new(code, format!("{error:#}")).data());
     }
 
     fn report_runtime_error_data(&self, data: Value) {
@@ -658,6 +677,7 @@ impl Engine {
                 .retain(|_, last| now.saturating_duration_since(*last) < Duration::from_secs(60));
             reported.insert(key, now);
         }
+        logging::write_line(format!("runtime.error: {data}"));
         let _ = self
             .event_tx
             .send(HelperMessage::new("runtime.error", data));
@@ -697,7 +717,7 @@ impl Engine {
                             }
                             Err(error) => {
                                 edge_hide.command_failed(cleanup, now);
-                                self.report_runtime_error(error);
+                                self.report_runtime_error(ErrorCode::WindowOperationFailed, error);
                                 live_states.insert(handle, edge_hide_live_state(handle));
                             }
                         }
@@ -717,7 +737,7 @@ impl Engine {
                 }
                 Err(error) => {
                     edge_hide.command_failed(command, now);
-                    self.report_runtime_error(error);
+                    self.report_runtime_error(ErrorCode::WindowOperationFailed, error);
                 }
             }
         }
@@ -748,7 +768,7 @@ impl Engine {
                 }
                 Err(error) => {
                     edge_hide.command_failed(command, now);
-                    self.report_runtime_error(error);
+                    self.report_runtime_error(ErrorCode::WindowOperationFailed, error);
                 }
             }
         }

@@ -1,0 +1,221 @@
+{
+  "input": {
+    "schemaVersion": 7,
+    "mouseGestures": {
+      "gestures": [
+        {
+          "id": "gesture-up",
+          "name": "向上 · 复制",
+          "enabled": false,
+          "builtin": true,
+          "mode": "action",
+          "action": {
+            "kind": "shortcut",
+            "value": "Ctrl+K"
+          },
+          "modifierActions": [
+            {
+              "modifiers": [
+                "alt"
+              ],
+              "action": {
+                "kind": "shortcut",
+                "value": "Ctrl+Q"
+              }
+            }
+          ],
+          "samples": [
+            [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 0,
+                "y": 1
+              }
+            ]
+          ]
+        },
+        {
+          "id": "gesture-down",
+          "name": "Down · Paste",
+          "enabled": false,
+          "builtin": true,
+          "mode": "action",
+          "action": {
+            "kind": "shortcut",
+            "value": "Ctrl+K"
+          },
+          "modifierActions": [
+            {
+              "modifiers": [
+                "alt"
+              ],
+              "action": {
+                "kind": "shortcut",
+                "value": "Ctrl+Q"
+              }
+            }
+          ],
+          "samples": [
+            [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 0,
+                "y": 1
+              }
+            ]
+          ]
+        },
+        {
+          "id": "gesture-l",
+          "name": "自定义关闭动作",
+          "enabled": false,
+          "builtin": true,
+          "mode": "action",
+          "action": {
+            "kind": "shortcut",
+            "value": "Ctrl+K"
+          },
+          "modifierActions": [
+            {
+              "modifiers": [
+                "alt"
+              ],
+              "action": {
+                "kind": "shortcut",
+                "value": "Ctrl+Q"
+              }
+            }
+          ],
+          "samples": [
+            [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 0,
+                "y": 1
+              }
+            ]
+          ]
+        },
+        {
+          "id": "gesture-circle",
+          "name": "圆圈 · 显示桌面",
+          "enabled": false,
+          "builtin": true,
+          "mode": "action",
+          "action": {
+            "kind": "shortcut",
+            "value": "Ctrl+K"
+          },
+          "modifierActions": [
+            {
+              "modifiers": [
+                "alt"
+              ],
+              "action": {
+                "kind": "shortcut",
+                "value": "Ctrl+Q"
+              }
+            }
+          ],
+          "samples": [
+            [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 0,
+                "y": 1
+              }
+            ]
+          ]
+        },
+        {
+          "id": "gesture-rectangle",
+          "name": "矩形截图",
+          "enabled": false,
+          "builtin": true,
+          "mode": "action",
+          "action": {
+            "kind": "shortcut",
+            "value": "Ctrl+K"
+          },
+          "modifierActions": [
+            {
+              "modifiers": [
+                "alt"
+              ],
+              "action": {
+                "kind": "shortcut",
+                "value": "Ctrl+Q"
+              }
+            }
+          ],
+          "samples": [
+            [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 0,
+                "y": 1
+              }
+            ]
+          ]
+        },
+        {
+          "id": "custom",
+          "name": "向上 · 复制",
+          "enabled": false,
+          "builtin": true,
+          "mode": "action",
+          "action": {
+            "kind": "shortcut",
+            "value": "Ctrl+K"
+          },
+          "modifierActions": [
+            {
+              "modifiers": [
+                "alt"
+              ],
+              "action": {
+                "kind": "shortcut",
+                "value": "Ctrl+Q"
+              }
+            }
+          ],
+          "samples": [
+            [
+              {
+                "x": 0,
+                "y": 0
+              },
+              {
+                "x": 0,
+                "y": 1
+              }
+            ]
+          ]
+        }
+      ]
+    }
+  },
+  "expectedNames": {
+    "gesture-up": null,
+    "gesture-down": null,
+    "gesture-l": "自定义关闭动作",
+    "gesture-circle": null,
+    "gesture-rectangle": null,
+    "custom": "向上 · 复制"
+  }
+}
