@@ -637,6 +637,7 @@
   }
 
   function setTriggerTiming(field: "cooldownMs" | "hoverDelayMs", value: number): void {
+    if (!displayReady) return;
     const slot = ensureProfile().find((zone) => zone.id === selectedZone)!.actions.find((item) => item.trigger === activeTrigger)!;
     slot[field] = value;
     persist();
@@ -1175,6 +1176,8 @@
               </div>
               <div class="feature-settings-head"><span>{ui("hotzoneSettings")}</span><strong>{settings.hotzonesEnabled ? ui("unifiedOn") : ui("keepConfig")}</strong></div>
               <div class="feature-settings-body" class:off={!settings.hotzonesEnabled} inert={!settings.hotzonesEnabled}>
+                {#if !displayReady}<p class="empty" role="status">{ui("waitingForDisplays")}</p>{/if}
+                <div class="monitor-hotzone-settings" inert={!displayReady}>
                 <div class="trigger-tabs">
                   {#each triggerGroups as group}
                     <button class:active={group.items.includes(activeTrigger)} disabled={group.items.includes("slide-forward") && !["top", "right", "bottom", "left"].includes(selectedZone)} on:click={() => { activeTrigger = group.items[0]; selectedHotzoneModifiers = []; cancelHotzoneVariant(); }} type="button">{triggerGroupLabel(group)}</button>
@@ -1214,6 +1217,7 @@
                 {/key}
                 {/if}
                 <div class:single={activeTrigger !== "hover"} class="timing">{#if activeTrigger === "hover"}<label><span>{ui("hoverDelay")}</span><div><input use:numberSetting={{ key: `${selectedDisplayId}:${selectedZone}:${activeTrigger}`, value: currentTriggerSlot().hoverDelayMs ?? settings.hoverDelayMs, onChange: (value) => setTriggerTiming("hoverDelayMs", value) }} min="0" max="3000" type="number" /><em>ms</em></div></label>{/if}<label><span>{ui("cooldown")}</span><div><input use:numberSetting={{ key: `${selectedDisplayId}:${selectedZone}:${activeTrigger}`, value: currentTriggerSlot().cooldownMs ?? settings.actionCooldownMs, onChange: (value) => setTriggerTiming("cooldownMs", value) }} min="10" max="5000" type="number" /><em>ms</em></div></label></div>
+                </div>
                 <div class="subhead" style="margin-top:18px"><div><h2>{ui("hotzoneParameters")}</h2><p>{ui("hotzoneParametersDescription")}</p></div></div>
                 <div class="form-grid"><label><span>{ui("edgeSize")}</span><div><input use:numberSetting={{ value: settings.edgeSize, onChange: (value) => { settings.edgeSize = value; persist(); } }} min="2" max="48" type="number" /><em>px</em></div></label></div>
                 <div class="list-section"><div class="subhead"><div><h2>{ui("pausedApps")}</h2><p>{ui("foreground")}{foregroundApp || ui("noForeground")}</p></div><button class="quiet" on:click={() => addForeground("hotzones")} type="button">+ {ui("addApp")}</button></div><div class="app-list">{#each settings.pausedApps as app}<div><span>{app}</span><button aria-label={format(ui("removeApp"), { app })} on:click={() => removeApp("hotzones", app)} type="button">×</button></div>{:else}<p class="empty">{ui("noPausedApps")}</p>{/each}</div></div>
