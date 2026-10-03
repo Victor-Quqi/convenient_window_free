@@ -1,6 +1,7 @@
 use std::{env, path::PathBuf, process::Command};
 fn main() {
     println!("cargo:rerun-if-changed=native/taskbar-appearance.cpp");
+    println!("cargo:rerun-if-changed=native/taskbar-appearance-policy.h");
     println!("cargo:rerun-if-changed=native/build.ps1");
     println!("cargo:rerun-if-changed=native/taskbar-appearance.def");
     println!("cargo:rerun-if-env-changed=VSINSTALLDIR");

@@ -1,14 +1,14 @@
-//! Taskbar work is isolated from the input engine. No native library is loaded while disabled.
+//! Taskbar work is isolated from the input engine. No native library is loaded before the first opt-in.
 use crate::config::TaskbarAppearanceConfig;
 use crate::ipc::messages::HelperMessage;
 use crate::logging;
 use serde::Serialize;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
 };
 use std::thread::{self, JoinHandle};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tokio::sync::broadcast;
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -189,6 +189,11 @@ mod native {
                 }
             }
         }
+        pub fn reset(&mut self) {
+            // Retain the loaded DLL; only detach the controller mapping. The
+            // resident keeps original brushes and can adopt the next mapping.
+            unsafe { (self.close)() };
+        }
         pub fn update(
             &mut self,
             enabled: bool,
@@ -219,6 +224,7 @@ struct Request {
 struct Shared {
     request: Mutex<Request>,
     stop: AtomicBool,
+    wake: Condvar,
     status: Mutex<TaskbarAppearanceStatus>,
 }
 
@@ -235,6 +241,7 @@ impl TaskbarAppearanceWorker {
                 settings: TaskbarAppearanceConfig::default(),
             }),
             stop: AtomicBool::new(false),
+            wake: Condvar::new(),
             status: Mutex::new(TaskbarAppearanceStatus::idle()),
         });
         let state = shared.clone();
@@ -265,6 +272,7 @@ impl TaskbarAppearanceWorker {
         request.enabled = enabled;
         request.settings = settings.clone();
         request.revision = request.revision.wrapping_add(1);
+        self.shared.wake.notify_one();
     }
     #[cfg(test)]
     pub fn status(&self) -> TaskbarAppearanceStatus {
@@ -278,6 +286,7 @@ impl TaskbarAppearanceWorker {
 impl Drop for TaskbarAppearanceWorker {
     fn drop(&mut self) {
         self.shared.stop.store(true, Ordering::Release);
+        self.shared.wake.notify_one();
         // Native attachment is bounded to one second, close waits at most one second.
         if let Some(worker) = self.thread.take() {
             if worker.join().is_err() {
@@ -287,66 +296,152 @@ impl Drop for TaskbarAppearanceWorker {
     }
 }
 
+#[derive(Debug, PartialEq)]
+enum UpdateDecision {
+    Poll,
+    Reset,
+    Wait,
+}
+
+#[derive(Default)]
+struct RecoveryPolicy {
+    revision: u64,
+    attempts: usize,
+    retry_at: Option<u64>,
+    last_probe: Option<u64>,
+}
+impl RecoveryPolicy {
+    const DELAYS: [u64; 4] = [300, 900, 1800, 3600];
+    fn retryable(status: &TaskbarAppearanceStatus) -> bool {
+        status.state == "error"
+            && matches!(
+                status.error_code.as_deref(),
+                Some(
+                    "0x80070102"
+                        | "0x800705B4"
+                        | "0x80070490"
+                        | "0x8007045A"
+                        | "0x80010108"
+                        | "0x80010001"
+                        | "0x800706BA"
+                        | "0x80004005"
+                )
+            )
+    }
+    fn decide(
+        &mut self,
+        enabled: bool,
+        revision: u64,
+        now: u64,
+        status: &TaskbarAppearanceStatus,
+    ) -> UpdateDecision {
+        if !enabled || revision != self.revision {
+            self.revision = revision;
+            self.attempts = 0;
+            self.retry_at = None;
+            self.last_probe = Some(now);
+            return if enabled
+                && matches!(status.state.as_str(), "error" | "conflict" | "unsupported")
+            {
+                UpdateDecision::Reset
+            } else {
+                UpdateDecision::Poll
+            };
+        }
+        if Self::retryable(status) && self.attempts < Self::DELAYS.len() {
+            let due = *self
+                .retry_at
+                .get_or_insert(now + Self::DELAYS[self.attempts]);
+            if now < due {
+                return UpdateDecision::Wait;
+            }
+            self.attempts += 1;
+            self.retry_at = None;
+            self.last_probe = Some(now);
+            return UpdateDecision::Reset;
+        }
+        if matches!(status.state.as_str(), "error" | "conflict" | "unsupported") {
+            // Poll even terminal results, at low frequency, so an Explorer
+            // recreation or an exited competing tool can resume without Retry.
+            if self
+                .last_probe
+                .is_some_and(|last| now.saturating_sub(last) < 2000)
+            {
+                return UpdateDecision::Wait;
+            }
+            self.last_probe = Some(now);
+            return UpdateDecision::Poll;
+        }
+        self.retry_at = None;
+        if status.state == "applied" {
+            self.attempts = 0;
+        }
+        UpdateDecision::Poll
+    }
+    fn visible(
+        &self,
+        enabled: bool,
+        mut status: TaskbarAppearanceStatus,
+    ) -> TaskbarAppearanceStatus {
+        if enabled && Self::retryable(&status) && self.attempts < Self::DELAYS.len() {
+            status.state = "recovering".into();
+        }
+        status
+    }
+}
+
 fn run_worker(shared: Arc<Shared>, events: broadcast::Sender<HelperMessage>) {
     #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
     let mut controller: Option<native::Controller> = None;
-    let mut previous_revision = 0;
-    let mut last_report = std::time::Instant::now() - Duration::from_secs(1);
+    let start = Instant::now();
+    let mut recovery = RecoveryPolicy::default();
+    let mut native_status = TaskbarAppearanceStatus::idle();
+    let mut last_report = Instant::now() - Duration::from_secs(1);
     let mut reported_status = None;
-    let mut last_attempt: Option<u64> = None;
-    while !shared.stop.load(Ordering::Acquire) {
+    loop {
+        if shared.stop.load(Ordering::Acquire) {
+            break;
+        }
         let (enabled, revision, appearance) = {
             let request = shared.request.lock().unwrap_or_else(|e| e.into_inner());
             (request.enabled, request.revision, request.settings.clone())
         };
-        let mut status = shared
-            .status
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
+        let decision = recovery.decide(
+            enabled,
+            revision,
+            start.elapsed().as_millis() as u64,
+            &native_status,
+        );
         #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-        {
-            let terminal = matches!(status.state.as_str(), "error" | "unsupported" | "conflict");
-            if enabled && terminal && revision != previous_revision {
-                controller = None;
-                last_attempt = None;
-            }
-            if enabled && controller.is_none() && last_attempt != Some(revision) {
-                last_attempt = Some(revision);
+        if decision != UpdateDecision::Wait {
+            if enabled && controller.is_none() {
                 match native::Controller::new() {
                     Ok(native) => controller = Some(native),
                     Err(error) => {
                         logging::write_line(format!("taskbar: component unavailable: {error:#}"));
-                        status = TaskbarAppearanceStatus::failure(format!("{error:#}"));
+                        native_status = TaskbarAppearanceStatus::failure(format!("{error:#}"));
                     }
                 }
             }
             if let Some(native) = controller.as_mut() {
-                if !enabled || !terminal || revision != previous_revision {
-                    status = native.update(enabled, &appearance);
+                if decision == UpdateDecision::Reset {
+                    native.reset();
                 }
-                if !enabled && status.state == "inactive" {
-                    controller = None;
-                }
+                native_status = native.update(enabled, &appearance);
+                // Keep the controller while disabled after the first opt-in.
+                // It owns the saved original brushes and avoids reinjection.
             } else if !enabled {
-                status = TaskbarAppearanceStatus::idle();
+                native_status = TaskbarAppearanceStatus::idle();
             }
         }
         #[cfg(not(all(target_os = "windows", target_arch = "x86_64")))]
         {
-            status.state = "unavailable".into();
-            status.available = false;
-            let _ = (
-                &mut previous_revision,
-                &mut last_attempt,
-                revision,
-                enabled,
-                &appearance,
-            );
+            native_status.state = "unavailable".into();
+            native_status.available = false;
+            let _ = (decision, &appearance);
         }
-        previous_revision = revision;
+        let status = recovery.visible(enabled, native_status.clone());
         *shared.status.lock().unwrap_or_else(|e| e.into_inner()) = status.clone();
-        // Periodic reports also serve newly connected/reloaded UI clients.
         if reported_status.as_ref() != Some(&status)
             || last_report.elapsed() >= Duration::from_secs(1)
         {
@@ -355,11 +450,16 @@ fn run_worker(shared: Arc<Shared>, events: broadcast::Sender<HelperMessage>) {
                 serde_json::to_value(&status).unwrap_or_default(),
             ));
             reported_status = Some(status);
-            last_report = std::time::Instant::now();
+            last_report = Instant::now();
         }
-        thread::sleep(Duration::from_millis(250));
+        let request = shared.request.lock().unwrap_or_else(|e| e.into_inner());
+        if !shared.stop.load(Ordering::Acquire) && request.revision == revision {
+            let _ = shared
+                .wake
+                .wait_timeout(request, Duration::from_millis(200));
+        }
     }
-    // Dropping the controller requests restoration before releasing the hook.
+    // Drop requests restoration before releasing the hook.
 }
 
 #[cfg(test)]
@@ -389,6 +489,81 @@ mod tests {
         assert_eq!(status.state, "inactive");
         assert_eq!(status.backgrounds, 0);
         drop(controller);
+    }
+    #[test]
+    fn transient_failure_retries_with_backoff_and_can_be_cancelled() {
+        let error = decode_status(NativeSnapshot {
+            state: 6,
+            error: 0x80070102u32 as i32,
+            ..Default::default()
+        });
+        let mut policy = RecoveryPolicy::default();
+        assert_eq!(policy.decide(true, 1, 0, &error), UpdateDecision::Reset);
+        assert_eq!(policy.visible(true, error.clone()).state, "recovering");
+        assert_eq!(policy.decide(true, 1, 10, &error), UpdateDecision::Wait);
+        assert_eq!(policy.decide(true, 1, 309, &error), UpdateDecision::Wait);
+        assert_eq!(policy.decide(true, 1, 310, &error), UpdateDecision::Reset);
+        assert_eq!(policy.decide(false, 2, 311, &error), UpdateDecision::Poll);
+        assert_eq!(policy.attempts, 0);
+    }
+    #[test]
+    fn persistent_failures_stop_resetting_and_do_not_hide_real_errors() {
+        let error = decode_status(NativeSnapshot {
+            state: 6,
+            error: 0x80070490u32 as i32,
+            ..Default::default()
+        });
+        let mut policy = RecoveryPolicy::default();
+        let mut now = 0;
+        for delay in RecoveryPolicy::DELAYS {
+            assert_eq!(policy.decide(true, 0, now, &error), UpdateDecision::Wait);
+            now += delay;
+            assert_eq!(policy.decide(true, 0, now, &error), UpdateDecision::Reset);
+        }
+        assert_eq!(policy.visible(true, error.clone()).state, "error");
+        assert_eq!(
+            policy.decide(true, 0, now + 1999, &error),
+            UpdateDecision::Wait
+        );
+        assert_eq!(
+            policy.decide(true, 0, now + 2000, &error),
+            UpdateDecision::Poll
+        );
+        assert_eq!(
+            policy.decide(true, 1, now + 2001, &error),
+            UpdateDecision::Reset
+        );
+        let denied = decode_status(NativeSnapshot {
+            state: 6,
+            error: 0x80070005u32 as i32,
+            ..Default::default()
+        });
+        assert_eq!(policy.visible(true, denied).state, "error");
+    }
+    #[test]
+    fn conflict_is_rechecked_without_manual_retry_and_reenable_interrupts_restore() {
+        let conflict = decode_status(NativeSnapshot {
+            state: 4,
+            ..Default::default()
+        });
+        let mut policy = RecoveryPolicy::default();
+        assert_eq!(policy.decide(true, 0, 0, &conflict), UpdateDecision::Poll);
+        assert_eq!(
+            policy.decide(true, 0, 1999, &conflict),
+            UpdateDecision::Wait
+        );
+        assert_eq!(
+            policy.decide(true, 0, 2000, &conflict),
+            UpdateDecision::Poll
+        );
+        let restoring = decode_status(NativeSnapshot {
+            state: 3,
+            ..Default::default()
+        });
+        assert_eq!(
+            policy.decide(true, 1, 2001, &restoring),
+            UpdateDecision::Poll
+        );
     }
     #[test]
     fn native_snapshot_matches_four_u32_abi() {

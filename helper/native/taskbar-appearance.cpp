@@ -1,6 +1,7 @@
 // Independently implemented against Windows SDK XAML Diagnostics interfaces.
 // No third-party taskbar implementation is included in this component.
 #include <windows.h>
+#include "taskbar-appearance-policy.h"
 #include <sddl.h>
 #include <tlhelp32.h>
 #include <xamlom.h>
@@ -34,6 +35,7 @@ struct AppearanceOptions { DWORD mode; DWORD opacity; DWORD tint; LONG showBorde
 struct Wire { DWORD magic; DWORD owner; volatile LONG enabled; Snapshot snapshot; AppearanceOptions options; volatile LONG optionsRevision; volatile LONG attached; };
 static_assert(sizeof(AppearanceOptions) == 16);
 static_assert(sizeof(Snapshot) == 16);
+static_assert(sizeof(Wire) == 52);
 HMODULE gModule;
 UINT gAttachMessage;
 std::atomic_bool gDiagnosticsStarted{false};
@@ -133,6 +135,12 @@ media::Brush BackgroundBrush(const AppearanceOptions& options) {
 bool SameOptions(const AppearanceOptions& left, const AppearanceOptions& right) {
     return left.mode == right.mode && left.opacity == right.opacity && left.tint == right.tint && left.showBorder == right.showBorder;
 }
+bool IsCurrentRequest(const std::shared_ptr<Owner>& owner,bool active,const AppearanceOptions& options) {
+    if(!owner || (owner->wire->enabled>0)!=active) return false;
+    if(!active) return true;
+    AppearanceOptions current{};
+    return ReadOptions(owner,current) && SameOptions(current,options);
+}
 void Apply(bool active, const AppearanceOptions& options, const std::shared_ptr<Owner>& owner) {
     std::vector<std::shared_ptr<Entry>> entries;
     {std::scoped_lock lock(gEntriesLock);for(auto& [id,entry]:gEntries) if(entry->ready && !entry->removed) entries.push_back(entry);}
@@ -146,7 +154,7 @@ void Apply(bool active, const AppearanceOptions& options, const std::shared_ptr<
         auto work=[entry,active,options,owner,pending,failed,count,generation] {
             try {
                 // An obsolete queued operation must never overwrite a newer restore/apply.
-                if(generation==gGeneration.load() && !entry->removed) {
+                if(generation==gGeneration.load() && IsCurrentRequest(owner,active,options) && !entry->removed) {
                     struct ChangeGuard { bool& value; ChangeGuard(bool& v):value(v){value=true;} ~ChangeGuard(){value=false;} } guard(entry->changing);
                     if(!active) {
                         entry->rectangle.Fill(entry->original);
@@ -160,7 +168,7 @@ void Apply(bool active, const AppearanceOptions& options, const std::shared_ptr<
                     }
                 }
             } catch(...) {failed->store(winrt::to_hresult());}
-            if(--*pending==0 && generation==gGeneration.load()) {
+            if(--*pending==0 && generation==gGeneration.load() && IsCurrentRequest(owner,active,options)) {
                 auto hr=failed->load();
                 Report(owner,FAILED(hr)?6:(active?2:0),hr,count);
             }
@@ -170,7 +178,7 @@ void Apply(bool active, const AppearanceOptions& options, const std::shared_ptr<
             else if(entry->dispatcher) entry->dispatcher.RunAsync(core::CoreDispatcherPriority::Normal,work);
             else winrt::throw_hresult(E_UNEXPECTED);
         }
-        catch(...) {failed->store(winrt::to_hresult());if(--*pending==0) Report(owner,6,failed->load(),count);}
+        catch(...) {failed->store(winrt::to_hresult());if(--*pending==0 && generation==gGeneration.load() && IsCurrentRequest(owner,active,options)) Report(owner,6,failed->load(),count);}
     }
 }
 
@@ -279,7 +287,7 @@ void InitializeDiagnostics() {
         try {
             winrt::init_apartment(winrt::apartment_type::multi_threaded);
             auto xamlDll=LoadLibraryExW(L"Windows.UI.Xaml.dll",nullptr,LOAD_LIBRARY_SEARCH_SYSTEM32);
-            if(!xamlDll) {Report(CurrentOwner(),6,HRESULT_FROM_WIN32(GetLastError()));return;}
+            if(!xamlDll) {Report(CurrentOwner(),6,HRESULT_FROM_WIN32(GetLastError()));gDiagnosticsStarted=false;return;}
             auto initialize=reinterpret_cast<decltype(&InitializeXamlDiagnosticsEx)>(GetProcAddress(xamlDll,"InitializeXamlDiagnosticsEx"));
             std::wstring location(32768,L'\0');
             auto length=GetModuleFileNameW(gModule,location.data(),static_cast<DWORD>(location.size()));
@@ -299,8 +307,8 @@ void InitializeDiagnostics() {
                 }
             }
             FreeLibrary(xamlDll);
-            if(FAILED(result)) {Report(CurrentOwner(),6,result);gDiagnosticsStarted=false;}
-        } catch(...) {Report(CurrentOwner(),6,winrt::to_hresult());gDiagnosticsStarted=false;}
+            if(FAILED(result)) {auto owner=CurrentOwner();if(owner && owner->wire->enabled>0) Report(owner,6,result);gDiagnosticsStarted=false;}
+        } catch(...) {auto owner=CurrentOwner();if(owner && owner->wire->enabled>0) Report(owner,6,winrt::to_hresult());gDiagnosticsStarted=false;}
     }).detach();
 }
 void MonitorOwner() {
@@ -308,70 +316,136 @@ void MonitorOwner() {
         auto owner=CurrentOwner();
         if(!owner) {WaitForSingleObject(gOwnerChanged,INFINITE);continue;}
         LONG last=-2; auto start=GetTickCount64(); DWORD previousCount=0; AppearanceOptions previousOptions{};
+        unsigned restoreRetries=0;ULONGLONG restoreAttempt=0;
         for(;;) {
             auto current=CurrentOwner();if(current!=owner) break;
             bool dead=WaitForSingleObject(owner->process.value,200)==WAIT_OBJECT_0;
-            LONG desired=dead?0:InterlockedCompareExchange(&owner->wire->enabled,0,0);
+            if(dead) InterlockedExchange(&owner->wire->enabled,-1);
+            LONG desired=InterlockedCompareExchange(&owner->wire->enabled,0,0);
             DWORD count=0;{std::scoped_lock lock(gEntriesLock);for(auto& [id,e]:gEntries) if(e->background && e->ready && !e->removed) ++count;}
             AppearanceOptions options{};
             if(desired>0 && !ReadOptions(owner,options)) continue;
             const bool optionsChanged = !SameOptions(previousOptions,options);
+            if(desired!=last) {restoreRetries=0;restoreAttempt=GetTickCount64();}
+            if(desired<=0 && count && owner->wire->snapshot.state==3 && GetTickCount64()-restoreAttempt>5000) Report(owner,6,HRESULT_FROM_WIN32(WAIT_TIMEOUT),count);
+            const bool retryRestore=desired==0 && count && owner->wire->snapshot.state==6 && restoreRetries<4 &&
+                GetTickCount64()-restoreAttempt>=static_cast<ULONGLONG>(500u<<restoreRetries);
+            if(retryRestore) {
+                ++restoreRetries;restoreAttempt=GetTickCount64();Report(owner,3,S_OK,count);Apply(false,{},owner);
+            }
+            if(desired>0 && desired!=last && !gDiagnosticsStarted.load()) InitializeDiagnostics();
             if(desired!=last || count!=previousCount || optionsChanged) {
                 if(count) Apply(desired>0,options,owner);
-                else if(desired<=0) Report(owner,0,S_OK);
+                else Report(owner,desired>0?1:0,S_OK);
+                if(desired!=last || previousCount>0) start=GetTickCount64();
                 last=desired;previousCount=count;previousOptions=options;
             }
-            if(desired>0 && !count && GetTickCount64()-start>10000 && owner->wire->snapshot.state==1) Report(owner,5,HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
+            if(desired>0 && !count && GetTickCount64()-start>10000 && owner->wire->snapshot.state==1) Report(owner,6,HRESULT_FROM_WIN32(ERROR_NOT_FOUND));
             if(dead || desired<0) {
-                if(count) Apply(false,{},owner);
                 std::scoped_lock lock(gOwnerLock);if(gOwner==owner) gOwner.reset();break;
             }
         }
     }
 }
+// v2 is the existing wire layout, including material options. Do not change
+// the wire without a new version: a pinned resident owns the original brushes.
+extern "C" __declspec(dllexport) DWORD __cdecl CWTaskbarWireVersion() noexcept {return 2;}
+
+HRESULT AttachOwner(DWORD pid,HWND taskbar) noexcept {
+    try {
+        auto owner=std::make_shared<Owner>();
+        owner->mapping.value=OpenFileMappingW(FILE_MAP_ALL_ACCESS,FALSE,MapName(pid).c_str());
+        if(owner->mapping.value) owner->wire=static_cast<Wire*>(MapViewOfFile(owner->mapping.value,FILE_MAP_ALL_ACCESS,0,0,sizeof(Wire)));
+        if(!owner->wire || owner->wire->magic!=kMagic || owner->wire->owner!=pid) return E_INVALIDARG;
+        owner->process.value=OpenProcess(SYNCHRONIZE,FALSE,pid);
+        if(!owner->process.value) {auto hr=HRESULT_FROM_WIN32(GetLastError());Report(owner,6,hr);InterlockedExchange(&owner->wire->attached,1);return hr;}
+        auto old=CurrentOwner();
+        if(old && old->wire->owner!=pid && WaitForSingleObject(old->process.value,0)!=WAIT_OBJECT_0) {
+            auto hr=HRESULT_FROM_WIN32(ERROR_BUSY);Report(owner,4,hr);InterlockedExchange(&owner->wire->attached,1);return hr;
+        }
+        // Never unload a resident with asynchronous XAML callbacks.
+        HMODULE pinned{};
+        if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN,reinterpret_cast<LPCWSTR>(&AttachOwner),&pinned)) return HRESULT_FROM_WIN32(GetLastError());
+        if(!SetPropW(taskbar,L"ConvenientWindow.Taskbar.Module.v1",reinterpret_cast<HANDLE>(gModule))) {
+            auto hr=HRESULT_FROM_WIN32(GetLastError());Report(owner,6,hr);InterlockedExchange(&owner->wire->attached,1);return hr;
+        }
+        {std::scoped_lock lock(gOwnerLock);gOwner=owner;}
+        if(!gOwnerChanged) {
+            gOwnerChanged=CreateEventW(nullptr,FALSE,FALSE,nullptr);
+            if(!gOwnerChanged) {auto hr=HRESULT_FROM_WIN32(GetLastError());Report(owner,6,hr);InterlockedExchange(&owner->wire->attached,1);return hr;}
+            std::thread([]{try {MonitorOwner();} catch(...) {auto current=CurrentOwner();if(current){Apply(false,{},current);Report(current,6,winrt::to_hresult());}}}).detach();
+        }
+        InterlockedExchange(&owner->wire->attached,1);
+        SetEvent(gOwnerChanged);
+        if(owner->wire->enabled>0) InitializeDiagnostics();
+        return S_OK;
+    } catch(...) {return winrt::to_hresult();}
+}
+extern "C" __declspec(dllexport) HRESULT __cdecl CWTaskbarAttachOwner(DWORD pid,HWND taskbar) noexcept {return AttachOwner(pid,taskbar);}
+
+bool IsLegacyV2Module(HMODULE module) {
+    std::wstring path(32768,L'\0');
+    const auto length=GetModuleFileNameW(module,path.data(),static_cast<DWORD>(path.size()));
+    if(!length || length>=path.size()) return false;
+    path.resize(length);
+    const auto slash=path.find_last_of(L"\\/");
+    const auto leaf=std::wstring_view(path).substr(slash==std::wstring::npos?0:slash+1);
+    // The known v2 legacy controller materializes only this immutable filename.
+    return TaskbarModulePolicy::IsLegacyV2Name(leaf) &&
+        GetProcAddress(module,"CWTaskbarUpdate") && GetProcAddress(module,"CWTaskbarClose") &&
+        GetProcAddress(module,"TaskbarHook") && GetProcAddress(module,"DllGetClassObject");
+}
 extern "C" __declspec(dllexport) LRESULT CALLBACK TaskbarHook(int code,WPARAM wparam,LPARAM lparam) noexcept {
+    bool chainCalled=false;
+    LRESULT chainResult{};
     if(code>=0) {
         if(!gAttachMessage) gAttachMessage=RegisterWindowMessageW(L"ConvenientWindow.Taskbar.Attach.v2");
         auto message=reinterpret_cast<CWPSTRUCT*>(lparam);
         if(message && message->message==gAttachMessage) {
             try {
-                auto pid=static_cast<DWORD>(message->wParam);
-                auto owner=std::make_shared<Owner>();
-                owner->mapping.value=OpenFileMappingW(FILE_MAP_ALL_ACCESS,FALSE,MapName(pid).c_str());
-                if(owner->mapping.value) owner->wire=static_cast<Wire*>(MapViewOfFile(owner->mapping.value,FILE_MAP_ALL_ACCESS,0,0,sizeof(Wire)));
-                if(owner->wire && owner->wire->magic==kMagic && owner->wire->owner==pid) {
-                    auto installed=GetPropW(message->hwnd,L"ConvenientWindow.Taskbar.Module.v1");
-                    if(installed && installed!=reinterpret_cast<HANDLE>(gModule)) {
-                        Report(owner,6,HRESULT_FROM_WIN32(ERROR_PRODUCT_VERSION));
-                        InterlockedExchange(&owner->wire->attached,1);
-                        return CallNextHookEx(nullptr,code,wparam,lparam);
+                const auto pid=static_cast<DWORD>(message->wParam);
+                const auto installed=GetPropW(message->hwnd,L"ConvenientWindow.Taskbar.Module.v1");
+                auto resident=reinterpret_cast<HMODULE>(installed);
+                HMODULE verified{};
+                const bool residentLoaded=installed && GetModuleHandleExW(
+                    GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+                    reinterpret_cast<LPCWSTR>(resident),&verified) && verified==resident;
+                struct ModuleGuard {HMODULE module;~ModuleGuard(){if(module) FreeLibrary(module);}} residentReference{verified};
+                if(TaskbarModulePolicy::HasForeignModule(installed,gModule) && residentLoaded) {
+                    // Reuse the resident's watcher and saved original brushes,
+                    // not merely its marker. A second watcher would capture our
+                    // transparent brush as the supposed Windows default.
+                    using Version=DWORD(__cdecl*)();
+                    using Attach=HRESULT(__cdecl*)(DWORD,HWND);
+                    const auto version=reinterpret_cast<Version>(GetProcAddress(resident,"CWTaskbarWireVersion"));
+                    const auto attach=reinterpret_cast<Attach>(GetProcAddress(resident,"CWTaskbarAttachOwner"));
+                    if(version && version()==2 && attach) {
+                        attach(pid,message->hwnd);
+                    } else if(!version && IsLegacyV2Module(resident)) {
+                        // 0.6.3 has the same wire but only exports the hook.
+                        // Its globals refer to the resident module, so its old
+                        // version guard succeeds without injecting a watcher.
+                        using Hook=LRESULT(CALLBACK*)(int,WPARAM,LPARAM);
+                        auto hook=reinterpret_cast<Hook>(GetProcAddress(resident,"TaskbarHook"));
+                        chainResult=hook(code,wparam,lparam);chainCalled=true;
+                    } else {
+                        auto owner=std::make_shared<Owner>();
+                        owner->mapping.value=OpenFileMappingW(FILE_MAP_ALL_ACCESS,FALSE,MapName(pid).c_str());
+                        if(owner->mapping.value) owner->wire=static_cast<Wire*>(MapViewOfFile(owner->mapping.value,FILE_MAP_ALL_ACCESS,0,0,sizeof(Wire)));
+                        if(owner->wire && owner->wire->magic==kMagic && owner->wire->owner==pid) {
+                            Report(owner,6,TaskbarModulePolicy::ProductVersionConflict());InterlockedExchange(&owner->wire->attached,1);
+                        }
                     }
-                    owner->process.value=OpenProcess(SYNCHRONIZE,FALSE,pid);
-                    if(owner->process.value) {
-                        auto old=CurrentOwner();
-                        // Another live controller must never take over this injected module.
-                        if(!old || old->wire->owner==pid || WaitForSingleObject(old->process.value,0)==WAIT_OBJECT_0) {
-                            // Our detached watchers must remain executable even if Diagnostics fails.
-                            // Pin only the Explorer copy, never the helper controller copy.
-                            HMODULE pinned{};
-                            if(!GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_PIN, reinterpret_cast<LPCWSTR>(&TaskbarHook), &pinned)) return CallNextHookEx(nullptr,code,wparam,lparam);
-                            if(!SetPropW(message->hwnd,L"ConvenientWindow.Taskbar.Module.v1",reinterpret_cast<HANDLE>(gModule))) {
-                                Report(owner,6,HRESULT_FROM_WIN32(GetLastError()));
-                                InterlockedExchange(&owner->wire->attached,1);
-                                return CallNextHookEx(nullptr,code,wparam,lparam);
-                            }
-                            {std::scoped_lock lock(gOwnerLock);gOwner=owner;}
-                            if(!gOwnerChanged) {gOwnerChanged=CreateEventW(nullptr,FALSE,FALSE,nullptr);std::thread([]{try {MonitorOwner();} catch(...) {auto current=CurrentOwner();if(current){Apply(false,{},current);Report(current,6,winrt::to_hresult());}}}).detach();}
-                            InterlockedExchange(&owner->wire->attached,1);
-                            SetEvent(gOwnerChanged);InitializeDiagnostics();
-                        } else {Report(owner,4,HRESULT_FROM_WIN32(ERROR_BUSY));InterlockedExchange(&owner->wire->attached,1);}
-                    } else {Report(owner,6,HRESULT_FROM_WIN32(GetLastError()));InterlockedExchange(&owner->wire->attached,1);
-                    }
+                } else {
+                    // Clearing is safe only when the marker no longer identifies
+                    // a loaded module. A loaded incompatible watcher must stay.
+                    if(TaskbarModulePolicy::ShouldClearStaleMarker(installed,gModule,residentLoaded)) RemovePropW(message->hwnd,L"ConvenientWindow.Taskbar.Module.v1");
+                    AttachOwner(pid,message->hwnd);
                 }
             } catch(...) {}
         }
     }
-    return CallNextHookEx(nullptr,code,wparam,lparam);
+    return chainCalled?chainResult:CallNextHookEx(nullptr,code,wparam,lparam);
 }
 
 bool IsModernWindows() {
@@ -391,14 +465,16 @@ bool HasOtherTaskbarTool() {
     return false;
 }
 // Controller ABI, called only by the helper's dedicated worker thread.
-Handle gLock,gMapping;
-Wire* gWire{};HHOOK gHook{};DWORD gExplorer{};
+Handle gLock,gMapping,gExplorerProcess;
+Wire* gWire{};HHOOK gHook{};DWORD gExplorer{};HWND gTaskbar{};
+ULONGLONG gToolCheck{};bool gOtherTool{};
 void CloseController() {
     if(gWire){UnmapViewOfFile(gWire);gWire=nullptr;}
     if(gHook){UnhookWindowsHookEx(gHook);gHook=nullptr;}
     if(gMapping.value){CloseHandle(gMapping.value);gMapping.value=nullptr;}
     if(gLock.value){CloseHandle(gLock.value);gLock.value=nullptr;}
-    gExplorer=0;
+    if(gExplorerProcess.value){CloseHandle(gExplorerProcess.value);gExplorerProcess.value=nullptr;}
+    gExplorer=0;gTaskbar=nullptr;
 }
 extern "C" __declspec(dllexport) void __cdecl CWTaskbarClose() noexcept {
     if(gWire) {
@@ -417,20 +493,33 @@ extern "C" __declspec(dllexport) void __cdecl CWTaskbarUpdate(BOOL enabled,const
         if(!gAttachMessage) winrt::throw_last_error();
         HWND taskbar=FindWindowW(L"Shell_TrayWnd",nullptr);
         DWORD pid=0;DWORD thread=taskbar?GetWindowThreadProcessId(taskbar,&pid):0;
-        if(!thread){*result={enabled?1u:0u,S_OK,0,0};return;}
-        if(gWire && pid!=gExplorer) CWTaskbarClose();
+        if(!thread){
+            if(gWire && gExplorerProcess.value && WaitForSingleObject(gExplorerProcess.value,0)==WAIT_OBJECT_0) CloseController();
+            if(gWire && gWire->enabled>0) {InterlockedExchange(reinterpret_cast<volatile LONG*>(&gWire->snapshot.state),3);InterlockedExchange(&gWire->enabled,0);}
+            if(!enabled && gWire) *result=gWire->snapshot;
+            else *result={enabled?1u:0u,S_OK,0,0};
+            return;
+        }
+        if(gWire && (pid!=gExplorer || taskbar!=gTaskbar)) CWTaskbarClose();
+        // Resume automatically after a competing tool exits. Never write over it.
+        if(enabled && (!gToolCheck || GetTickCount64()-gToolCheck>=1000)) {gOtherTool=HasOtherTaskbarTool();gToolCheck=GetTickCount64();}
+        if(enabled && gOtherTool) {
+            if(gWire && gWire->enabled>0) InterlockedExchange(&gWire->enabled,0);
+            *result={4,HRESULT_FROM_WIN32(ERROR_BUSY),0,pid};return;
+        }
         if(!gWire && enabled) {
             if(!IsModernWindows()) {*result={5,HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED),0,pid};return;}
-            if(HasOtherTaskbarTool()) {*result={4,HRESULT_FROM_WIN32(ERROR_BUSY),0,pid};return;}
             auto lockName=L"Local\\ConvenientWindow.Taskbar.Owner.v1."+UserScope();
             gLock.value=CreateMutexW(nullptr,FALSE,lockName.c_str());
             if(!gLock.value) winrt::throw_last_error();
             if(GetLastError()==ERROR_ALREADY_EXISTS) {CloseController();*result={4,HRESULT_FROM_WIN32(ERROR_BUSY),0,pid};return;}
+            gExplorerProcess.value=OpenProcess(SYNCHRONIZE,FALSE,pid);
+            if(!gExplorerProcess.value) winrt::throw_last_error();
             gMapping.value=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,sizeof(Wire),MapName(GetCurrentProcessId()).c_str());
             if(!gMapping.value) winrt::throw_last_error();
             gWire=static_cast<Wire*>(MapViewOfFile(gMapping.value,FILE_MAP_ALL_ACCESS,0,0,sizeof(Wire)));
             if(!gWire) winrt::throw_last_error();
-            *gWire={kMagic,GetCurrentProcessId(),1,{1,S_OK,0,pid},requested,2,0};gExplorer=pid;
+            *gWire={kMagic,GetCurrentProcessId(),1,{1,S_OK,0,pid},requested,2,0};gExplorer=pid;gTaskbar=taskbar;
             gHook=SetWindowsHookExW(WH_CALLWNDPROC,TaskbarHook,gModule,thread);
             if(!gHook) winrt::throw_last_error();
             DWORD_PTR ignored{};
@@ -447,17 +536,24 @@ extern "C" __declspec(dllexport) void __cdecl CWTaskbarUpdate(BOOL enabled,const
                 InterlockedExchange(&gWire->options.showBorder,requested.showBorder);
                 InterlockedIncrement(&gWire->optionsRevision);
             }
-            if(!enabled) {
-                const bool detached = gWire->snapshot.state==4 || gWire->snapshot.error==HRESULT_FROM_WIN32(ERROR_PRODUCT_VERSION);
-                if(!detached && gWire->enabled>0) InterlockedExchange(reinterpret_cast<volatile LONG*>(&gWire->snapshot.state),3);
-                InterlockedExchange(&gWire->enabled,-1);
-                // No state is reported restored until the target UI queue acknowledges it.
-                for(unsigned i=0;!detached && i<50 && gWire->snapshot.state==3;++i) Sleep(20);
-                *result=gWire->snapshot;
-                if(detached) *result={0,S_OK,0,0};
-                else if(result->state==3) *result={6,HRESULT_FROM_WIN32(WAIT_TIMEOUT),result->backgrounds,pid};
-                if(result->state==0 || detached) CloseController();
-            } else *result=gWire->snapshot;
+            const bool detached=gWire->snapshot.state==4 || gWire->snapshot.error==TaskbarModulePolicy::ProductVersionConflict();
+            if(!enabled && detached) {*result={0,S_OK,0,0};CloseController();return;}
+            const LONG desired=enabled?1:0;
+            if(InterlockedCompareExchange(&gWire->enabled,0,0)!=desired) {
+                gWire->snapshot.error=S_OK;
+                InterlockedExchange(reinterpret_cast<volatile LONG*>(&gWire->snapshot.state),enabled?1:3);
+                // Disable is an asynchronous restore, not a teardown. Keep the
+                // original watcher for a quick subsequent enable. Close uses -1.
+                InterlockedExchange(&gWire->enabled,desired);
+                // Restart only the resident's owner monitor, not its watcher.
+                // This also covers legacy v2 and rapid on/off that coalesces
+                // back to the monitor's previous desired state before a tick.
+                InterlockedExchange(&gWire->attached,0);
+                DWORD_PTR ignored{};
+                if(!SendMessageTimeoutW(taskbar,gAttachMessage,GetCurrentProcessId(),0,SMTO_ABORTIFHUNG,1000,&ignored)) winrt::throw_last_error();
+                if(gWire->attached!=1) winrt::throw_hresult(HRESULT_FROM_WIN32(ERROR_DLL_INIT_FAILED));
+            }
+            *result=gWire->snapshot;
         }
     } catch(...) {auto hr=winrt::to_hresult();CWTaskbarClose();*result={6,hr,0,0};}
 }
