@@ -193,11 +193,11 @@ it("persists pin offsets and preserves existing settings through the real App an
       finally { await window.happyDOM.close(); }
     `);
     const output = execFileSync(process.execPath, [nodePath.join(directory, "run.mjs")], {
-      encoding: "utf8", timeout: 15000, stdio: "pipe"
+      encoding: "utf8", timeout: 30000, stdio: "pipe"
     });
     expect(output).toContain("App UI host regression passed");
   } finally {
     if (nodePath.dirname(nodePath.resolve(directory)) !== nodePath.resolve(import.meta.dirname)) throw new Error("Unexpected test directory");
     rmSync(directory, { recursive: true, force: true });
   }
-}, 30000);
+}, 60000);

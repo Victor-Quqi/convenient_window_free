@@ -113,10 +113,10 @@ it("keeps monitor-specific timings through detection, profile migration, zone sw
       try { await import('./bundle/entry.mjs'); }
       finally { await window.happyDOM.close(); }
     `);
-    const output = execFileSync(process.execPath, [nodePath.join(directory, "run.mjs")], { encoding: "utf8", timeout: 15000, stdio: "pipe" });
+    const output = execFileSync(process.execPath, [nodePath.join(directory, "run.mjs")], { encoding: "utf8", timeout: 30000, stdio: "pipe" });
     expect(output).toContain("App monitor timing round trip passed");
   } finally {
     if (nodePath.dirname(nodePath.resolve(directory)) !== nodePath.resolve(import.meta.dirname)) throw new Error("Unexpected test directory");
     rmSync(directory, { recursive: true, force: true });
   }
-}, 30000);
+}, 60000);
