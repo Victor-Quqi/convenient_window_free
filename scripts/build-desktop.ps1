@@ -1,5 +1,6 @@
 param(
-  [switch]$RequireTrustedSignature
+  [switch]$RequireTrustedSignature,
+  [string]$ArtifactsDir
 )
 
 $ErrorActionPreference = "Stop"
@@ -13,7 +14,13 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $desktopDir = Join-Path $repoRoot "apps\desktop"
 $tauriDir = Join-Path $desktopDir "src-tauri"
-$artifactsDir = Join-Path $repoRoot "artifacts"
+$artifactsRoot = [System.IO.Path]::GetFullPath((Join-Path $repoRoot "artifacts"))
+if (-not $ArtifactsDir) { $ArtifactsDir = $artifactsRoot }
+$artifactsDir = [System.IO.Path]::GetFullPath($ArtifactsDir)
+if ($artifactsDir -ne $artifactsRoot -and
+    -not $artifactsDir.StartsWith($artifactsRoot.TrimEnd("\") + "\", [StringComparison]::OrdinalIgnoreCase)) {
+  throw "ArtifactsDir must stay inside the repository artifacts directory"
+}
 $portableDir = Join-Path $artifactsDir "ConvenientWindow-portable"
 $thirdPartyNotices = Join-Path $repoRoot "target\THIRD-PARTY-NOTICES.txt"
 $rootPackage = [System.IO.File]::ReadAllText((Join-Path $repoRoot "package.json"), [System.Text.Encoding]::UTF8) | ConvertFrom-Json
@@ -163,7 +170,14 @@ $nsisInstaller = Get-ChildItem (Join-Path $releaseDir "bundle\nsis") -Filter "*.
 if (-not (Test-Path $appExe)) { throw "Tauri executable is missing: $appExe" }
 if (-not $nsisInstaller) { throw "NSIS installer was not produced" }
 
-if (Test-Path $artifactsDir) { Remove-Item -Recurse -Force $artifactsDir }
+if (Test-Path -LiteralPath $artifactsDir) {
+  $resolvedArtifacts = (Resolve-Path -LiteralPath $artifactsDir).Path
+  if ($resolvedArtifacts -ne $artifactsDir) { throw "Unexpected resolved artifacts directory" }
+  if ((Get-Item -LiteralPath $artifactsDir).Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+    throw "ArtifactsDir must not be a junction or symbolic link"
+  }
+  Remove-Item -LiteralPath $resolvedArtifacts -Recurse -Force
+}
 New-Item -ItemType Directory -Force -Path (Join-Path $portableDir "helper") | Out-Null
 Copy-Item -Force $appExe (Join-Path $portableDir "ConvenientWindow.exe")
 Copy-Item -Force (Join-Path $repoRoot "LICENSE") (Join-Path $portableDir "LICENSE")

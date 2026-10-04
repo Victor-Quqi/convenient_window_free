@@ -152,14 +152,7 @@ impl HelperProcess {
         let helper_path = validate_payload(payload_dir)?;
         if self.child.is_some() {
             let token = read_valid_token(&data_dir.join(TOKEN_FILE))?;
-            if self.broker.is_none() {
-                let pid = self.child.as_ref().unwrap().id();
-                self.broker = Some(crate::command_broker::CommandBroker::start(
-                    ready_socket(&token, pid)?,
-                    token.clone(),
-                    pid,
-                )?);
-            }
+            self.ensure_broker(&token)?;
             return Ok(StartResult {
                 already_running: true,
                 data_dir: path_string(data_dir),
@@ -290,7 +283,39 @@ impl HelperProcess {
         }
     }
 
+    fn ensure_broker(&mut self, token: &str) -> Result<(), String> {
+        if self
+            .broker
+            .as_ref()
+            .is_none_or(|broker| broker.is_finished())
+        {
+            self.broker = None;
+            let pid = self.child.as_ref().ok_or("Helper exited")?.id();
+            self.broker = Some(crate::command_broker::CommandBroker::start(
+                ready_socket(token, pid)?,
+                token.to_owned(),
+                pid,
+            )?);
+        }
+        Ok(())
+    }
+
     pub fn stop(&mut self, data_dir: &Path) -> Result<StopResult, String> {
+        let result = self.stop_inner(data_dir);
+        let result = retain_commands_after_failed_stop(result, || {
+            if self.running() {
+                let token = read_valid_token(&data_dir.join(TOKEN_FILE))?;
+                self.ensure_broker(&token)?;
+            }
+            Ok(())
+        });
+        if let Err(error) = &result {
+            self.last_error = Some(error.clone());
+        }
+        result
+    }
+
+    fn stop_inner(&mut self, data_dir: &Path) -> Result<StopResult, String> {
         self.refresh();
         self.broker = None;
         if self.child.is_none() {
@@ -374,6 +399,21 @@ impl HelperProcess {
             self.child_job = None;
         }
         Ok(())
+    }
+}
+
+fn retain_commands_after_failed_stop<T>(
+    result: Result<T, String>,
+    recover: impl FnOnce() -> Result<(), String>,
+) -> Result<T, String> {
+    match result {
+        Ok(result) => Ok(result),
+        Err(error) => match recover() {
+            Ok(()) => Err(error),
+            Err(recovery) => Err(format!(
+                "{error}; command broker recovery failed: {recovery}"
+            )),
+        },
     }
 }
 
@@ -565,6 +605,30 @@ fn timestamp_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stop_failure_restores_commands_without_swallowing_the_original_error() {
+        let mut recovered = 0;
+        let result =
+            retain_commands_after_failed_stop::<()>(Err("old helper did not stop".into()), || {
+                recovered += 1;
+                Ok(())
+            });
+        assert_eq!(recovered, 1);
+        assert_eq!(result.unwrap_err(), "old helper did not stop");
+        assert_eq!(
+            retain_commands_after_failed_stop(Ok("stopped"), || panic!(
+                "successful stop must not restart the broker"
+            ))
+            .unwrap(),
+            "stopped"
+        );
+        let error = retain_commands_after_failed_stop::<()>(Err("stop denied".into()), || {
+            Err("IPC unavailable".into())
+        })
+        .unwrap_err();
+        assert!(error.contains("stop denied") && error.contains("IPC unavailable"));
+    }
 
     #[test]
     fn cancelled_and_failed_elevation_restart_once_without_elevation() {

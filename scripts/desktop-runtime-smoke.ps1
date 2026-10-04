@@ -88,7 +88,7 @@ try {
     if (-not (Test-Path $holderHelper -PathType Leaf)) { throw "Conflict holder helper is missing: $holderHelper" }
     if (Test-Path $holderRoot) { throw "Conflict holder root already exists: $holderRoot" }
     New-Item -ItemType Directory -Force -Path $holderDataRoot | Out-Null
-    $holderProcess = Start-Process -FilePath $holderHelper -ArgumentList @("--data-dir", "`"$holderDataRoot`"") -PassThru
+    $holderProcess = Start-Process -FilePath $holderHelper -ArgumentList @("--data-dir", "`"$holderDataRoot`"") -PassThru -WindowStyle Hidden
     $holderTokenPath = Join-Path $holderDataRoot "auth-token"
     $holderDeadline = [DateTime]::UtcNow.AddSeconds(5)
     while ([DateTime]::UtcNow -lt $holderDeadline) {
@@ -108,7 +108,7 @@ try {
   } else {
     $env:CONVENIENT_WINDOW_SMOKE_EXIT_MS = "7000"
   }
-  $process = Start-Process -FilePath $AppPath -PassThru
+  $process = Start-Process -FilePath $AppPath -ArgumentList "--autostart" -PassThru -WindowStyle Hidden
   $logPath = Join-Path $helperDataRoot "magic-corners-helper.log"
   if ($ForceAppKill) {
     $readyDeadline = [DateTime]::UtcNow.AddSeconds(12)
@@ -254,10 +254,22 @@ try {
     }
   }
   if ((-not $holderProcess) -or $holderProcess.HasExited) {
-    Remove-Item -Recurse -Force $holderRoot -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $holderRoot) {
+      $resolvedHolder = (Resolve-Path -LiteralPath $holderRoot).Path
+      if ($resolvedHolder -ne $holderRoot -or -not $resolvedHolder.StartsWith(([IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd("\") + "\"), [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Unexpected conflict-holder cleanup directory"
+      }
+      Remove-Item -LiteralPath $resolvedHolder -Recurse -Force
+    }
   }
   if (-not $KeepData) {
-    Remove-Item -Recurse -Force $DataRoot -ErrorAction SilentlyContinue
+    if (Test-Path -LiteralPath $DataRoot) {
+      $resolvedData = (Resolve-Path -LiteralPath $DataRoot).Path
+      if ($resolvedData -ne $DataRoot -or -not $resolvedData.StartsWith(([IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd("\") + "\"), [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Unexpected runtime cleanup directory"
+      }
+      Remove-Item -LiteralPath $resolvedData -Recurse -Force
+    }
     Write-Output "isolated data cleanup: passed"
   }
   if ($holderCleanupError) { throw $holderCleanupError }

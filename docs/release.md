@@ -7,7 +7,22 @@ The standalone desktop has two user acceptance points:
 
 ## Develop Acceptance
 
-Desktop packaging is not repeated for every uTools change. When desktop synchronization is requested, run `npm run desktop:build` and the relevant lifecycle gates, then hand off the generated `artifacts/convenient-window-<version>-windows-x64-setup.exe` with its absolute path, source commit, size, and SHA-256. This first pass is for fast product feedback; it is not release evidence and does not consume a tag.
+Desktop packaging is not repeated for every host-integration change. When desktop synchronization is requested, build the current package and relevant lifecycle gates, then hand off the exact installer with its version, source commit, size and SHA-256. Local acceptance is not release evidence and does not consume a tag.
+
+For the 0.6.4 candidate, preserve existing 0.6.3 local artifacts:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -ArtifactsDir artifacts/0.6.4
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/audit-desktop-artifacts.ps1 -ArtifactsDir artifacts/0.6.4
+```
+
+`-ArtifactsDir` is restricted to this repository's `artifacts/` tree. The expected installer is `artifacts/0.6.4/convenient-window-0.6.4-windows-x64-setup.exe`; its manifest, checksums and portable output belong in the same selected directory. Runtime and install gates must explicitly select that output; default npm scripts still target root artifacts. See [candidate acceptance](testing.md#064-local-candidate-acceptance). An expected path or an older package's result does not prove a current build.
+
+Development source and the desktop local helper policy use 0.6.4. An integration may retain its immutable, previously published 0.6.3 helper download allow-list while exercising a newly built local helper; that does not create 0.6.4 download assets. `scripts/version-audit.ps1 -DevelopmentOnly -HelperAssetsPath <published-helper-assets.json>` excludes only that explicitly supplied published manifest from source-version equality and labels it as such. This is a development source check, not release freezing or a hash/asset acceptance check. Without `-DevelopmentOnly`, the default strict version comparison is unchanged. Never pass the development switch to the final release-freeze gate or fabricate new URLs/hashes before publication.
+
+An existing 0.6.3 installation must remain intact during automatic local preparation: do not run NSIS replacement/uninstall against it. The user performs the first-stage installation/upgrade; automatic installer gates run only in isolated accounts/CI without existing product registrations or processes.
+
+0.6.3 stable assets remain immutable. This 0.6.4 local phase publishes nothing and does not advance the stable branch. The [draft notes](release-notes/0.6.4.md) describe the candidate; automated results and artifact identities must be added only after verification. UAC, mixed-DPI/multi-monitor behavior and taskbar restoration still require real-machine acceptance.
 
 ## Prepare Final Online Acceptance
 

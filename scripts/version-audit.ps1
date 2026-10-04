@@ -2,7 +2,8 @@ param(
   [string]$RepositoryRoot = (Split-Path -Parent $PSScriptRoot),
   [string]$PluginPackagePath,
   [string]$PluginManifestPath,
-  [string]$HelperAssetsPath
+  [string]$HelperAssetsPath,
+  [switch]$DevelopmentOnly
 )
 
 $ErrorActionPreference = "Stop"
@@ -35,7 +36,14 @@ $values["desktop helper assets"] = Read-JsonVersion (Join-Path $root 'apps/deskt
 $values["helper cargo"] = Read-CargoVersion (Join-Path $root 'helper/Cargo.toml') 'helper Cargo.toml'
 if ($PluginPackagePath) { $values["plugin package"] = Read-JsonVersion $PluginPackagePath 'plugin package' }
 if ($PluginManifestPath) { $values["plugin manifest"] = Read-JsonVersion $PluginManifestPath 'plugin manifest' }
-if ($HelperAssetsPath) { $values["helper assets"] = Read-JsonVersion $HelperAssetsPath 'helper assets' }
+if ($HelperAssetsPath) {
+  $publishedHelperVersion = Read-JsonVersion $HelperAssetsPath 'helper assets'
+  if ($DevelopmentOnly) {
+    Write-Output "published helper assets: $publishedHelperVersion (immutable; not a development download candidate)"
+  } else {
+    $values["helper assets"] = $publishedHelperVersion
+  }
+}
 
 $unique = @($values.Values | Sort-Object -Unique)
 if ($unique.Count -ne 1) {
@@ -45,3 +53,5 @@ if ($unique.Count -ne 1) {
 $values.GetEnumerator() | ForEach-Object { Write-Output ("{0}: {1}" -f $_.Key, $_.Value) }
 Write-Output ("version audit: passed ({0})" -f $unique[0])
 
+
+if ($DevelopmentOnly) { Write-Output 'Development source audit only; this is not a release-freeze gate.' }

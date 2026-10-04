@@ -1,5 +1,6 @@
 param([Parameter(Mandatory = $true)][string]$HelperPath)
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'read-text-file-with-retry.ps1')
 $HelperPath = (Resolve-Path -LiteralPath $HelperPath).Path
 $payloadDir = Split-Path -Parent $HelperPath
 if (-not (Test-Path -LiteralPath (Join-Path $payloadDir 'libunwind.dll')) -or @(Get-ChildItem -LiteralPath $payloadDir -Filter 'std-*.dll' -File).Count -eq 0) {
@@ -27,13 +28,13 @@ try {
       $log = Join-Path $dataDir 'magic-corners-helper.log'
       do {
         if ($helper.HasExited) { throw "Helper exited before readiness in $scenario" }
-        if ((Test-Path -LiteralPath $log) -and [IO.File]::ReadAllText($log).Contains('websocket: listening')) { break }
+        if ((Test-Path -LiteralPath $log) -and (Read-TextFileWithRetry -Path $log).Contains('websocket: listening')) { break }
         Start-Sleep -Milliseconds 100
       } while ([DateTime]::UtcNow -lt $deadline)
-      if (-not (Test-Path -LiteralPath $log) -or -not [IO.File]::ReadAllText($log).Contains('websocket: listening')) { throw 'Helper never became ready' }
+      if (-not (Test-Path -LiteralPath $log) -or -not (Read-TextFileWithRetry -Path $log).Contains('websocket: listening')) { throw 'Helper never became ready' }
       if ($scenario -eq 'owner-exit') { Stop-Process -Id $owner.Id -Force } else { [void]$stopEvent.Set() }
       if (-not $helper.WaitForExit(6000) -or $helper.ExitCode -ne 0) { throw "Helper did not exit cleanly after $scenario" }
-      if (-not [IO.File]::ReadAllText($log).Contains('main: desktop owner exited or requested stop')) { throw 'Owner monitor did not request shutdown' }
+      if (-not (Read-TextFileWithRetry -Path $log).Contains('main: desktop owner exited or requested stop')) { throw 'Owner monitor did not request shutdown' }
     }
     Write-Output "$scenario`: passed"
     if (-not $owner.HasExited) { Stop-Process -Id $owner.Id -Force }

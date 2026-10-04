@@ -65,9 +65,10 @@ it("mounts the Svelte action with ranges, saves each current value, and switches
       await window.happyDOM.close();
       console.log('Svelte numeric integration passed');
     `);
-    const output = execFileSync(process.execPath, ["--conditions=browser", nodePath.join(directory, "run.mjs")], { encoding: "utf8" });
+    const output = execFileSync(process.execPath, ["--conditions=browser", nodePath.join(directory, "run.mjs")], { encoding: "utf8", timeout: 15000 });
     expect(output).toContain("Svelte numeric integration passed");
   } finally {
+    if (nodePath.dirname(nodePath.resolve(directory)) !== nodePath.resolve(import.meta.dirname)) throw new Error("Unexpected test directory");
     rmSync(directory, { recursive: true, force: true });
   }
-});
+}, 25000);

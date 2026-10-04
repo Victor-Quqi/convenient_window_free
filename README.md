@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | English
 
-Convenient Window is a desktop utility for hot zones, window control, global mouse gestures, screenshots, and topmost-window control. Version 0.5.9 is the current Windows x64 release baseline; macOS and Linux X11 platform boundaries remain in the codebase but are not release-verified.
+Convenient Window is a desktop utility for hot zones, window control, global mouse gestures, screenshots, and topmost-window control. Version 0.6.3 is the stable Windows x64 release baseline; macOS and Linux X11 platform boundaries remain in the codebase but are not release-verified.
 
 **Turn screen edges and mouse gestures into faster window controls.**
 
@@ -23,9 +23,21 @@ Download the Windows installer or portable archive from the [latest stable relea
 
 Release assets are currently unsigned. Windows may show an unknown-publisher or Microsoft Defender SmartScreen warning. Checksums and an artifact manifest are included with each release so the downloaded files can be verified.
 
+## 0.6.4 Development Candidate
+
+The development source integrates PRs [#21](https://github.com/ximizhou/convenient_window_free/pull/21), [#22](https://github.com/ximizhou/convenient_window_free/pull/22), [#23](https://github.com/ximizhou/convenient_window_free/pull/23), [#24](https://github.com/ximizhou/convenient_window_free/pull/24), and [#25](https://github.com/ximizhou/convenient_window_free/pull/25) on the complete 0.6.3 baseline. This is a local candidate, not a published release; 0.6.3 stable assets remain immutable.
+
+- Pins follow both their window position and stacking order without covering unrelated higher windows.
+- Pinned screenshots start at original pixel size. `ocr.pinOffset` defaults to true (16 px down/right); turning it off covers the captured area. Large or edge-adjacent images may extend beyond the screen instead of being automatically resized.
+- Number inputs preserve incomplete drafts until blur/Enter, and monitor-specific hot-zone edits wait for real display identities.
+- Early helper shutdown signals remain queued for the original engine subscription.
+- Windows administrator mode elevates only the helper for the current session; configured commands remain in the ordinary-permission host. Failed state queries display unknown rather than a cached permission label.
+
+Administrator mode does not support protected processes. Scheduled elevated login/startup is not part of this candidate (the second phase of [issue #20](https://github.com/ximizhou/convenient_window_free/issues/20)). Host adapters require their own runtime acceptance. Do not run competing hosts on the fixed helper port `56873`. See [candidate notes](docs/release-notes/0.6.4.md), [manual tests](docs/testing.md#064-local-candidate-acceptance), and [local packaging](docs/release.md#develop-acceptance). Automated results and artifact identities must be recorded for the actual candidate; UAC, multi-monitor/DPI, and taskbar recovery still require real-machine checks.
+
 ## Features
 
-Development source adds an **Appearance** (slim wand-and-sparkle) entry and moves global settings to a circular top-right gear. Taskbar material is an off-by-default Windows 11 x64 technical prototype with transparent, acrylic and tinted modes plus opacity and border controls. Activation is direct; the Explorer risk note remains inside the panel. The illustrated preview is not proof of actual rendering; initial transparency has received positive local acceptance feedback, while new materials, icon clarity, and cross-environment recovery still require acceptance and are not features of the published stable `0.6.2` release.
+Development source adds an **Appearance** (slim wand-and-sparkle) entry and moves global settings to a circular top-right gear. Taskbar material is an off-by-default Windows 11 x64 technical prototype with transparent, acrylic and tinted modes plus opacity and border controls. Activation is direct; the Explorer risk note remains inside the panel. The illustrated preview is not proof of actual rendering; initial transparency has received positive local acceptance feedback, while material compatibility, icon clarity, and cross-environment recovery still require per-environment acceptance. The prototype was included in 0.6.3; it remains off by default and does not imply universal compatibility.
 
 - **Hot zones**: configure the four corners and four edges of each monitor independently, with hover, mouse-button, wheel, and edge-movement triggers.
 - **Window edge hiding**: move windows partly off-screen and restore them from a visible edge strip, with multi-window and multi-monitor support. The restore outline and hide/restore animation can be disabled independently without disabling edge restoration.
@@ -130,7 +142,11 @@ Build the Svelte frontend, Rust helper sidecar, Tauri application, per-user NSIS
 npm run desktop:build
 ```
 
+For the 0.6.4 local candidate, preserve existing 0.6.3 outputs with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -ArtifactsDir artifacts/0.6.4`. The path must stay inside this repository's `artifacts/` directory. The expected installer is `artifacts/0.6.4/convenient-window-0.6.4-windows-x64-setup.exe`; a path alone is not build evidence. Use explicit paths for the matching audit/runtime/install gates in [Testing](docs/testing.md#064-local-candidate-acceptance), because the default npm smoke commands below still target root `artifacts/`.
+
 Run the packaged lifecycle and artifact checks:
+
+Installer automation requires an isolated account/CI with no existing product installation. Keep an installed 0.6.3 intact during local candidate preparation; give the setup to the user for actual installation/upgrade acceptance instead of automatically replacing or uninstalling it.
 
 ```powershell
 npm run desktop:runtime-smoke
@@ -168,7 +184,7 @@ Native Linux X11 checks (the display must be available; CI starts Xvfb):
 
 ```bash
 sudo apt-get install -y pkg-config libx11-dev libxtst-dev libxi-dev libxinerama-dev libxrandr-dev libxss-dev libwayland-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb
-Xvfb :99 -screen 0 1920x1080x24 &
+Xvfb :99 -screen 0 1920x1080x24 -noreset &
 export DISPLAY=:99
 export XDG_SESSION_TYPE=x11
 npm ci --prefix apps/desktop

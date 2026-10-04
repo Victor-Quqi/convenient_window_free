@@ -1,10 +1,12 @@
 #include <windows.h>
 #include <sddl.h>
+#include <aclapi.h>
 #include <cassert>
 #include <iostream>
 #include <string>
 #include <vector>
 #include "../taskbar-appearance-policy.h"
+#include "../taskbar-shared-security.h"
 
 struct Snapshot {DWORD state;HRESULT error;DWORD backgrounds;DWORD explorer;};
 struct Options {DWORD mode;DWORD opacity;DWORD tint;LONG showBorder;};
@@ -41,9 +43,44 @@ extern "C" __declspec(dllexport) LRESULT CALLBACK TaskbarHook(int,WPARAM,LPARAM 
 }
 BOOL WINAPI DllMain(HINSTANCE instance,DWORD reason,LPVOID) {if(reason==DLL_PROCESS_ATTACH) module=instance;return TRUE;}
 #else
+void VerifySharedSecurity() {
+    HANDLE token{}; assert(OpenProcessToken(GetCurrentProcess(),TOKEN_QUERY|TOKEN_DUPLICATE,&token));
+    DWORD size{}; GetTokenInformation(token,TokenUser,nullptr,0,&size);
+    std::vector<BYTE> bytes(size); assert(GetTokenInformation(token,TokenUser,bytes.data(),size,&size));
+    auto user=reinterpret_cast<TOKEN_USER*>(bytes.data())->User.Sid;
+    LPWSTR userText{}; assert(ConvertSidToStringSidW(user,&userText));
+    TaskbarModulePolicy::UserScopedMediumSecurity security(userText); LocalFree(userText); assert(security.valid());
+    BOOL present{},defaulted{}; PACL acl{};
+    assert(GetSecurityDescriptorDacl(security.get()->lpSecurityDescriptor,&present,&acl,&defaulted));
+    assert(present && acl && acl->AceCount==2);
+    for(DWORD index=0;index<acl->AceCount;++index) {
+        void* raw{};assert(GetAce(acl,index,&raw));auto ace=static_cast<ACCESS_ALLOWED_ACE*>(raw);
+        assert(ace->Header.AceType==ACCESS_ALLOWED_ACE_TYPE);
+        auto sid=reinterpret_cast<PSID>(&ace->SidStart);
+        assert(EqualSid(sid,user) || IsWellKnownSid(sid,WinLocalSystemSid));
+    }
+    const auto name=L"Local\\ConvenientWindow.Taskbar.SecurityTest."+std::to_wstring(GetCurrentProcessId());
+    HANDLE mapping=CreateFileMappingW(INVALID_HANDLE_VALUE,security.get(),PAGE_READWRITE,0,64,name.c_str());assert(mapping);
+    HANDLE opened=OpenFileMappingW(FILE_MAP_WRITE,FALSE,name.c_str());assert(opened);CloseHandle(opened);
+    PSECURITY_DESCRIPTOR actual{};PACL sacl{};
+    assert(GetSecurityInfo(mapping,SE_KERNEL_OBJECT,LABEL_SECURITY_INFORMATION,nullptr,nullptr,nullptr,&sacl,&actual)==ERROR_SUCCESS);
+    assert(sacl && sacl->AceCount==1);void* raw{};assert(GetAce(sacl,0,&raw));
+    auto label=static_cast<SYSTEM_MANDATORY_LABEL_ACE*>(raw);auto sid=reinterpret_cast<PSID>(&label->SidStart);
+    assert(label->Header.AceType==SYSTEM_MANDATORY_LABEL_ACE_TYPE);
+    assert(label->Mask==SYSTEM_MANDATORY_LABEL_NO_WRITE_UP);
+    assert(*GetSidSubAuthority(sid,0)==SECURITY_MANDATORY_MEDIUM_RID);LocalFree(actual);
+    HANDLE lowToken{};PSID lowSid{};
+    assert(DuplicateTokenEx(token,TOKEN_QUERY|TOKEN_IMPERSONATE|TOKEN_ADJUST_DEFAULT,nullptr,SecurityImpersonation,TokenImpersonation,&lowToken));
+    assert(ConvertStringSidToSidW(L"S-1-16-4096",&lowSid));TOKEN_MANDATORY_LABEL low{{lowSid,SE_GROUP_INTEGRITY}};
+    assert(SetTokenInformation(lowToken,TokenIntegrityLevel,&low,sizeof(low)+GetLengthSid(lowSid)));
+    assert(ImpersonateLoggedOnUser(lowToken));HANDLE denied=OpenFileMappingW(FILE_MAP_WRITE,FALSE,name.c_str());const auto error=GetLastError();
+    assert(RevertToSelf());if(denied) CloseHandle(denied);assert(!denied && error==ERROR_ACCESS_DENIED);
+    LocalFree(lowSid);CloseHandle(lowToken);CloseHandle(token);CloseHandle(mapping);
+}
 int wmain(int argc,wchar_t** argv) {
     if(argc==2 && std::wstring_view(argv[1])==L"owner") {Sleep(5000);return 0;}
     if(argc<3) {std::cerr<<"usage: native-test current-dll resident-dll [stale]\n";return 2;}
+    VerifySharedSecurity();
     auto current=LoadLibraryW(argv[1]);auto resident=LoadLibraryW(argv[2]);
     assert(current && resident && current!=resident);
     const auto mode=argc>3?std::wstring_view(argv[3]):L"reuse";

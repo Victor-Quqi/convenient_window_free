@@ -124,7 +124,7 @@
   let mode: Mode | null = null;
   let helperStatus: HelperStatus = "disconnected";
   const administratorModeSupported = host.getPrivilegeState?.().supported ?? false;
-  let helperElevated = host.getPrivilegeState?.().elevated ?? false;
+  let helperElevated: boolean | null = null;
   let switchingPrivilege = false;
   let privilegeNotice = "";
   let helperPlatform: HelperPlatformInfo | null = null;
@@ -272,10 +272,11 @@
     syncGestureActionDraft();
     const offStatus = helper.onStatus((status) => {
       helperStatus = status;
+      if (status !== "connected") helperElevated = null;
       if (status === "connected") lastMessage = "helperSync";
       if (status === "disconnected" && connectionTestState === "testing") finishConnectionTest(false, "connectionLost");
       if (status === "disconnected") {
-        helperElevated = false;
+        helperElevated = null;
         displayReady = false;
         runtimeSummary = "";
         helperPlatform = null;
@@ -293,8 +294,7 @@
     });
     const offMessage = helper.onMessage((message) => {
       if (message.type === "helper.ready") {
-        const data = message.data as { version?: unknown; protocolVersion?: unknown; ocrLanguages?: unknown; platform?: HelperPlatformInfo; elevated?: boolean } | null;
-        helperElevated = data?.elevated === true;
+        const data = message.data as { version?: unknown; protocolVersion?: unknown; ocrLanguages?: unknown; platform?: HelperPlatformInfo; elevated?: unknown } | null;
         helperPlatform = helper.platformInfo ?? (data?.platform ?? null);
         availableOcrLanguages = Array.isArray(data?.ocrLanguages)
           ? data.ocrLanguages.filter((language): language is OcrLanguage => language === "auto" || language === "zh-Hans" || language === "en")
@@ -308,6 +308,7 @@
           requestHelperUpgrade(data?.version);
         } else {
           helperUpgradeAttempts = 0;
+          helperElevated = typeof data?.elevated === "boolean" ? data.elevated : null;
           helperError = "";
           markHelperReady();
         }
@@ -1023,22 +1024,28 @@
     return result.ok;
   }
   async function switchHelperPrivilege(): Promise<void> {
-    if (!host.setHelperElevation || switchingPrivilege || starting || stopping) return;
+    if (!host.setHelperElevation || switchingPrivilege || starting || stopping || upgradingHelper || recoveringHelper || !settings.enabled || helperStatus !== "connected" || helperElevated === null) return;
     const desired = !helperElevated;
     switchingPrivilege = true;
     privilegeNotice = "";
-    resetHelperRecovery();
-    if (!(await applyNow())) { switchingPrivilege = false; return; }
-    helper.disconnect();
     try {
+      // Persist before invalidating the current connection/recovery state.
+      if (!(await applyNow())) return;
+      resetHelperRecovery();
+      helper.disconnect();
       const result = await host.setHelperElevation(desired);
-      helperElevated = result.elevated;
+      helperElevated = typeof result.elevated === "boolean" ? result.elevated : null;
       if (result.ok) {
         privilegeNotice = result.warning ?? "";
         helper.sendConfig(settings);
         helper.connect();
       } else {
         helperError = result.error ?? "adminSwitchFailed";
+        // A failed replacement can leave the previous helper alive; recover its actual ready state.
+        if (helperElevated !== null) {
+          helper.sendConfig(settings);
+          helper.connect();
+        }
       }
     } catch (error) {
       helperError = error instanceof Error ? error.message : String(error);
@@ -1261,7 +1268,7 @@
                 </div>
                 {/key}
                 {/if}
-                <div class:single={activeTrigger !== "hover"} class="timing">{#if activeTrigger === "hover"}<label><span>{ui("hoverDelay")}</span><div><input use:numberSetting={{ key: `${selectedDisplayId}:${selectedZone}:${activeTrigger}`, value: currentTriggerSlot().hoverDelayMs ?? settings.hoverDelayMs, onChange: (value) => setTriggerTiming("hoverDelayMs", value) }} min="0" max="3000" type="number" /><em>ms</em></div></label>{/if}<label><span>{ui("cooldown")}</span><div><input use:numberSetting={{ key: `${selectedDisplayId}:${selectedZone}:${activeTrigger}`, value: currentTriggerSlot().cooldownMs ?? settings.actionCooldownMs, onChange: (value) => setTriggerTiming("cooldownMs", value) }} min="10" max="5000" type="number" /><em>ms</em></div></label></div>
+                <div class:single={activeTrigger !== "hover"} class="timing">{#if activeTrigger === "hover"}<label><span>{ui("hoverDelay")}</span><div><input use:numberSetting={{ key: `${displayReady}:${selectedDisplayId}:${selectedZone}:${activeTrigger}`, value: currentTriggerSlot().hoverDelayMs ?? settings.hoverDelayMs, onChange: (value) => setTriggerTiming("hoverDelayMs", value) }} min="0" max="3000" type="number" /><em>ms</em></div></label>{/if}<label><span>{ui("cooldown")}</span><div><input use:numberSetting={{ key: `${displayReady}:${selectedDisplayId}:${selectedZone}:${activeTrigger}`, value: currentTriggerSlot().cooldownMs ?? settings.actionCooldownMs, onChange: (value) => setTriggerTiming("cooldownMs", value) }} min="10" max="5000" type="number" /><em>ms</em></div></label></div>
                 </div>
                 <div class="subhead" style="margin-top:18px"><div><h2>{ui("hotzoneParameters")}</h2><p>{ui("hotzoneParametersDescription")}</p></div></div>
                 <div class="form-grid"><label><span>{ui("edgeSize")}</span><div><input use:numberSetting={{ value: settings.edgeSize, onChange: (value) => { settings.edgeSize = value; persist(); } }} min="2" max="48" type="number" /><em>px</em></div></label></div>
@@ -1415,9 +1422,9 @@
                 <div class="permission-settings">
                   <label class="permission-toggle" title={ui("adminModeDetail")}>
                     <span>{ui("adminMode")}</span>
-                    {#if switchingPrivilege}<small role="status">{ui("adminSwitching")}</small>{/if}
+                    {#if switchingPrivilege}<small role="status">{ui("adminSwitching")}</small>{:else if helperElevated === null}<small role="status">{ui("adminStateUnknown")}</small>{/if}
                     <span class="mini-switch">
-                      <input type="checkbox" role="switch" checked={helperElevated} disabled={switchingPrivilege || starting || stopping || upgradingHelper || recoveringHelper || !settings.enabled || helperStatus !== "connected"} on:change={(event) => { event.currentTarget.checked = helperElevated; void switchHelperPrivilege(); }} />
+                      <input type="checkbox" role="switch" aria-label={ui("adminMode")} checked={helperElevated === true} disabled={helperElevated === null || switchingPrivilege || starting || stopping || upgradingHelper || recoveringHelper || !settings.enabled || helperStatus !== "connected"} on:change={(event) => { event.currentTarget.checked = helperElevated === true; void switchHelperPrivilege(); }} />
                       <span aria-hidden="true"></span>
                     </span>
                   </label>

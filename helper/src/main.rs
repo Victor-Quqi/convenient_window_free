@@ -74,6 +74,17 @@ pub fn save_config(config: &AppConfig) -> Result<()> {
     Ok(())
 }
 
+async fn run_until_shutdown(
+    task: impl std::future::Future<Output = Result<()>>,
+    mut shutdown_rx: broadcast::Receiver<()>,
+) -> Result<()> {
+    tokio::select! {
+        biased;
+        _ = shutdown_rx.recv() => Ok(()),
+        result = task => result,
+    }
+}
+
 async fn supervise_runtime(
     mut server_task: JoinHandle<Result<()>>,
     mut engine_task: JoinHandle<Result<()>>,
@@ -149,14 +160,10 @@ async fn main() -> Result<()> {
     let (config_tx, config_rx) = watch::channel(initial_config);
     let (event_tx, _) = broadcast::channel::<HelperMessage>(128);
     let (shutdown_tx, _) = broadcast::channel::<()>(4);
-    desktop_owner::initialize(shutdown_tx.clone())?;
     let usage = usage::UsageTracker::load(event_tx.clone())?;
-    let mut usage_task = {
-        let usage = usage.clone();
-        let event_rx = event_tx.subscribe();
-        let shutdown_rx = shutdown_tx.subscribe();
-        tokio::spawn(async move { usage.run(event_rx, shutdown_rx).await })
-    };
+    let usage_runner = usage.clone();
+    let usage_event_rx = event_tx.subscribe();
+    let usage_shutdown_rx = shutdown_tx.subscribe();
     let mut engine = Engine::new(config_rx, event_tx.clone(), shutdown_tx.subscribe());
     let server = WebSocketServer::new(
         "127.0.0.1:56873",
@@ -167,7 +174,15 @@ async fn main() -> Result<()> {
         usage,
     );
 
-    let server_task = tokio::spawn(async move { server.run().await });
+    // All three receivers must exist before the owner monitor can broadcast.
+    // The server's own receiver is created in run(), so retain an outer one too.
+    let server_shutdown_rx = shutdown_tx.subscribe();
+    desktop_owner::initialize(shutdown_tx.clone())?;
+
+    let mut usage_task =
+        tokio::spawn(async move { usage_runner.run(usage_event_rx, usage_shutdown_rx).await });
+    let server_task =
+        tokio::spawn(async move { run_until_shutdown(server.run(), server_shutdown_rx).await });
     let engine_task = tokio::spawn(async move { engine.run().await });
 
     logging::write_line("main: supervising websocket server and engine");
@@ -203,6 +218,54 @@ mod runtime_tests {
     }
 
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    #[tokio::test]
+    async fn owner_exit_before_spawn_is_delivered_to_all_runtime_tasks() {
+        let (_config_tx, config_rx) = watch::channel(AppConfig::default());
+        let (event_tx, _) = broadcast::channel(8);
+        let (shutdown_tx, engine_shutdown_rx) = broadcast::channel(4);
+        let mut usage_shutdown_rx = shutdown_tx.subscribe();
+        let server_shutdown_rx = shutdown_tx.subscribe();
+        let mut engine = Engine::new(config_rx, event_tx, engine_shutdown_rx);
+        assert_eq!(shutdown_tx.receiver_count(), 3);
+        // Simulate the owner exiting immediately after monitoring is enabled,
+        // before either task's run future has ever been polled.
+        shutdown_tx.send(()).unwrap();
+        let server_polled = Arc::new(AtomicBool::new(false));
+        let polled = Arc::clone(&server_polled);
+        let server = tokio::spawn(async move {
+            run_until_shutdown(
+                async move {
+                    polled.store(true, Ordering::SeqCst);
+                    std::future::pending::<Result<()>>().await
+                },
+                server_shutdown_rx,
+            )
+            .await
+        });
+        let engine = tokio::spawn(async move { engine.run().await });
+        tokio::time::timeout(
+            Duration::from_millis(500),
+            supervise_runtime(server, engine, shutdown_tx),
+        )
+        .await
+        .expect("early owner exit must stop the runtime without the watchdog")
+        .unwrap();
+        assert!(
+            !server_polled.load(Ordering::SeqCst),
+            "server must not bind or accept after an early shutdown"
+        );
+        assert!(usage_shutdown_rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn runtime_shutdown_wrapper_preserves_server_failures() {
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(4);
+        let error = run_until_shutdown(async { anyhow::bail!("server failed") }, shutdown_rx)
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "server failed");
+    }
 
     #[tokio::test]
     async fn engine_failure_stops_the_server_and_returns_an_error() {

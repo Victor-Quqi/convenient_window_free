@@ -114,13 +114,7 @@ pub fn launch(
         nShow: SW_HIDE.0,
         ..Default::default()
     };
-    unsafe { ShellExecuteExW(&mut info) }.map_err(|error| {
-        if error.code().0 as u32 == 0x800704c7 {
-            "adminCancelled".into()
-        } else {
-            format!("adminLaunchFailed: {error}")
-        }
-    })?;
+    unsafe { ShellExecuteExW(&mut info) }.map_err(launch_error)?;
     if info.hProcess.is_invalid() {
         return Err("Admin helper process handle is unavailable".into());
     }
@@ -130,9 +124,29 @@ pub fn launch(
     })
 }
 
+fn launch_error(error: windows::core::Error) -> String {
+    if error.code().0 as u32 == 0x800704c7 {
+        "adminCancelled".into()
+    } else {
+        format!("adminLaunchFailed: {error}")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn cancelled_uac_and_denied_launch_are_distinguished_without_prompting() {
+        use windows::core::{Error, HRESULT};
+        assert_eq!(
+            launch_error(Error::from_hresult(HRESULT(0x800704c7_u32 as i32))),
+            "adminCancelled"
+        );
+        let denied = launch_error(Error::from_hresult(HRESULT(0x80070005_u32 as i32)));
+        assert!(denied.starts_with("adminLaunchFailed:"));
+        assert_ne!(denied, "adminCancelled");
+    }
+
     #[test]
     fn command_line_preserves_spaces_unicode_and_trailing_slash() {
         assert_eq!(

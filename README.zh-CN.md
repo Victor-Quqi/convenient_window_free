@@ -2,7 +2,7 @@
 
 简体中文 | [English](README.md)
 
-便捷窗口是一款跨平台桌面增强工具，提供触发角、窗口控制、全局鼠标手势和截图贴图。Windows 保留完整能力，macOS 与 Linux X11 先提供 P0 原生边界，Wayland 只做能力探测和明确降级。
+便捷窗口是一款跨平台桌面增强工具，提供触发角、窗口控制、全局鼠标手势和截图贴图。当前 Windows x64 稳定基线为 0.6.3。Windows 保留完整能力，macOS 与 Linux X11 先提供 P0 原生边界，Wayland 只做能力探测和明确降级。
 
 **把屏幕边缘和鼠标手势变成更快的窗口操作。**
 
@@ -23,9 +23,21 @@
 
 当前发布文件尚未进行代码签名，Windows 可能显示“未知发布者”或 Microsoft Defender SmartScreen 提示。每个 Release 都提供校验和与产物清单，可用于核对下载文件。
 
+## 0.6.4 开发候选
+
+开发源码在完整 0.6.3 基线上整合 PR [#21](https://github.com/ximizhou/convenient_window_free/pull/21)、[#22](https://github.com/ximizhou/convenient_window_free/pull/22)、[#23](https://github.com/ximizhou/convenient_window_free/pull/23)、[#24](https://github.com/ximizhou/convenient_window_free/pull/24) 与 [#25](https://github.com/ximizhou/convenient_window_free/pull/25)。这是本地候选，不是新 Release；0.6.3 stable 资产保持不可变。
+
+- 图钉同时跟随窗口位置与层级，不被自己的静止窗口盖住，也不盖过其他更上层窗口。
+- 贴图保持原像素尺寸；`ocr.pinOffset` 默认 true，向右下偏移 16 px，关闭后原地覆盖。大图或靠边贴图可能超出屏幕，不再自动缩放。
+- 数字输入保留未完成草稿，失焦/Enter 才规范化；热区设置等真实显示器身份到达后再编辑。
+- helper 保留 engine 的原始退出订阅，不遗漏刚启动时收到的停止要求。
+- Windows 管理员模式只在当前会话提权 helper，配置命令仍由普通宿主执行；失败查询无法确认时显示 unknown，不沿用旧权限缓存。
+
+管理员模式不支持保护进程；[issue #20](https://github.com/ximizhou/convenient_window_free/issues/20) 第二阶段的管理员计划任务/登录自动提权不在本候选范围。宿主 adapter 需要各自 runtime 验收，两宿主不能同时占用固定 56873。详见 [候选说明](docs/release-notes/0.6.4.md)、[测试清单](docs/testing.md#064-local-candidate-acceptance) 与 [本地打包](docs/release.md#develop-acceptance)。自动结果和产物身份应按实际候选记录，真人 UAC、多屏/DPI 和任务栏恢复仍需实机检查。
+
 ## 主要功能
 
-开发源码新增 **窗口美化**（细线魔法棒与星芒图标）入口，语言/配置管理改由右上角齿轮进入。任务栏材质是 Windows 11 x64 的默认关闭实验原型，支持透明、Acrylic 磨砂、纯色染色、浓度与边线设置；启用时不再弹出确认框，风险说明保留在面板内。示意预览不是实际效果证明；基础透明已有本地转测反馈，新增材质、图标清晰与跨环境恢复仍待验收，不属于 `0.6.2` 已发布稳定能力。
+开发源码新增 **窗口美化**（细线魔法棒与星芒图标）入口，语言/配置管理改由右上角齿轮进入。任务栏材质是 Windows 11 x64 的默认关闭实验原型，支持透明、Acrylic 磨砂、纯色染色、浓度与边线设置；启用时不再弹出确认框，风险说明保留在面板内。示意预览不是实际效果证明；基础透明已有本地转测反馈，材质兼容、图标清晰与跨环境恢复仍需按环境验收。原型已包含在 0.6.3 中，仍默认关闭，不代表在所有环境都可靠可用。
 
 - **触发角与热区**：每台显示器的四角和四边都能独立配置，可分别响应悬停、鼠标按键、滚轮和沿边移动。
 - **窗口贴边隐藏**：把窗口收纳到屏幕边缘，通过保留的边条重新唤回，支持多窗口和多显示器；淡白展开轮廓和收起/展开动画可独立关闭，均不影响边缘恢复。
@@ -130,7 +142,11 @@ npm run desktop:frontend
 npm run desktop:build
 ```
 
+0.6.4 本地候选使用 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -ArtifactsDir artifacts/0.6.4`，保留已有 0.6.3 输出。路径必须位于本仓库 `artifacts/` 内；预定 setup 为 `artifacts/0.6.4/convenient-window-0.6.4-windows-x64-setup.exe`，仅有路径不代表已经构建。audit、runtime 和安装门须使用 [测试文档](docs/testing.md#064-local-candidate-acceptance) 的显式目录/EXE；下列默认 npm smoke 命令仍指向根 artifacts，不代表本轮候选。
+
 运行打包后的生命周期和产物检查：
+
+自动安装门仅用于无现有产品安装的隔离账户/CI。本地准备候选时保留已安装的 0.6.3，不自动覆盖/卸载；最终 setup 交用户做实际安装/升级验收。
 
 ```powershell
 npm run desktop:runtime-smoke
@@ -168,7 +184,7 @@ Linux X11 检查（CI 使用 Xvfb；Wayland 不承诺完整等价）：
 
 ```bash
 sudo apt-get install -y pkg-config libx11-dev libxtst-dev libxi-dev libxinerama-dev libxrandr-dev libxss-dev libwayland-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb
-Xvfb :99 -screen 0 1920x1080x24 &
+Xvfb :99 -screen 0 1920x1080x24 -noreset &
 export DISPLAY=:99
 export XDG_SESSION_TYPE=x11
 npm ci --prefix apps/desktop

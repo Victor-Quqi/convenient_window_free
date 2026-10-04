@@ -23,7 +23,7 @@ mkdirSync(secondDataDir, { recursive: true });
 try {
   const first = startHelper(firstDataDir);
   const firstToken = await waitForToken(firstDataDir);
-  await waitForReady(firstToken);
+  await waitForReady(firstToken, first);
 
   const conflicting = startHelper(secondDataDir);
   const conflictExit = await waitForExit(conflicting, 5000);
@@ -40,7 +40,7 @@ try {
 
   const recovered = startHelper(secondDataDir);
   const recoveredToken = await waitForToken(secondDataDir);
-  await waitForReady(recoveredToken);
+  await waitForReady(recoveredToken, recovered);
   await stopHelper(recoveredToken);
   const recoveredExit = await waitForExit(recovered, 5000);
   if (recoveredExit !== 0) throw new Error(`recovered helper did not stop cleanly: exit ${recoveredExit}`);
@@ -99,27 +99,50 @@ async function waitForLog(dataDir) {
   return readFileSync(logPath, "utf8");
 }
 
-function waitForReady(token) {
+async function waitForReady(token, child) {
+  // Creating auth-token does not mean the listener has bound yet. Retry only
+  // while our exact child is alive; an unrelated process must not satisfy readiness.
+  const deadline = Date.now() + 5000;
+  let lastError;
+  while (Date.now() < deadline) {
+    if (child.exitCode !== null) throw new Error(`helper ${child.pid} exited before readiness: ${child.exitCode}`);
+    try {
+      const ready = await readReady(token);
+      if (ready.data?.processId !== child.pid) throw new Error("helper.ready belongs to a different process");
+      return;
+    } catch (error) { lastError = error; }
+    await new Promise(resolveWait => setTimeout(resolveWait, 80));
+  }
+  throw new Error(`helper readiness timed out: ${lastError?.message ?? "no ready message"}`);
+}
+
+function readReady(token) {
   return new Promise((resolveReady, reject) => {
     const socket = new WebSocket("ws://127.0.0.1:56873", token);
+    let ready = null;
+    let failure = null;
     const timeout = setTimeout(() => {
+      failure = new Error("helper.ready attempt timed out");
       socket.close();
-      reject(new Error("helper.ready timed out"));
-    }, 5000);
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(String(event.data));
-      if (message.type !== "helper.ready") return;
-      clearTimeout(timeout);
-      socket.close();
-      resolveReady();
+    }, 750);
+    socket.addEventListener("message", event => {
+      try {
+        const message = JSON.parse(String(event.data));
+        if (message.type !== "helper.ready") return;
+        ready = message;
+        socket.close();
+      } catch(error) { failure = error; socket.close(); }
     });
     socket.addEventListener("error", () => {
+      failure = new Error("helper readiness connection failed");
+    }, { once: true });
+    socket.addEventListener("close", () => {
       clearTimeout(timeout);
-      reject(new Error("helper readiness connection failed"));
+      if (ready && !failure) resolveReady(ready);
+      else reject(failure ?? new Error("helper connection closed before readiness"));
     }, { once: true });
   });
 }
-
 function stopHelper(token) {
   return new Promise((resolveStop, reject) => {
     const socket = new WebSocket("ws://127.0.0.1:56873", token);

@@ -2,6 +2,7 @@
 // No third-party taskbar implementation is included in this component.
 #include <windows.h>
 #include "taskbar-appearance-policy.h"
+#include "taskbar-shared-security.h"
 #include <sddl.h>
 #include <tlhelp32.h>
 #include <xamlom.h>
@@ -509,13 +510,16 @@ extern "C" __declspec(dllexport) void __cdecl CWTaskbarUpdate(BOOL enabled,const
         }
         if(!gWire && enabled) {
             if(!IsModernWindows()) {*result={5,HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED),0,pid};return;}
-            auto lockName=L"Local\\ConvenientWindow.Taskbar.Owner.v1."+UserScope();
-            gLock.value=CreateMutexW(nullptr,FALSE,lockName.c_str());
+            const auto userSid=UserScope();
+            TaskbarModulePolicy::UserScopedMediumSecurity security(userSid);
+            if(!security.valid()) winrt::throw_last_error();
+            auto lockName=L"Local\\ConvenientWindow.Taskbar.Owner.v1."+userSid;
+            gLock.value=CreateMutexW(security.get(),FALSE,lockName.c_str());
             if(!gLock.value) winrt::throw_last_error();
             if(GetLastError()==ERROR_ALREADY_EXISTS) {CloseController();*result={4,HRESULT_FROM_WIN32(ERROR_BUSY),0,pid};return;}
             gExplorerProcess.value=OpenProcess(SYNCHRONIZE,FALSE,pid);
             if(!gExplorerProcess.value) winrt::throw_last_error();
-            gMapping.value=CreateFileMappingW(INVALID_HANDLE_VALUE,nullptr,PAGE_READWRITE,0,sizeof(Wire),MapName(GetCurrentProcessId()).c_str());
+            gMapping.value=CreateFileMappingW(INVALID_HANDLE_VALUE,security.get(),PAGE_READWRITE,0,sizeof(Wire),MapName(GetCurrentProcessId()).c_str());
             if(!gMapping.value) winrt::throw_last_error();
             gWire=static_cast<Wire*>(MapViewOfFile(gMapping.value,FILE_MAP_ALL_ACCESS,0,0,sizeof(Wire)));
             if(!gWire) winrt::throw_last_error();

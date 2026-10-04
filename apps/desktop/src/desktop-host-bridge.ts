@@ -37,8 +37,8 @@ export async function createDesktopHostBridge(): Promise<HostBridge> {
   let storedLanguage: string | null = null;
   try { storedLanguage = localStorage.getItem(LANGUAGE_KEY); } catch { /* Storage may be unavailable. */ }
   let language: Language = resolveInitialLanguage(storedLanguage, navigator.language);
-  let token = status.token;
-  let elevated = status.helperElevated;
+  let token = status.helperRunning ? status.token : null;
+  let elevated: boolean | null = status.helperRunning ? status.helperElevated : false;
   let saveQueue: Promise<void> = Promise.resolve();
   let helperState: HelperInstallState = {
     installed: status.helperExists,
@@ -50,6 +50,18 @@ export async function createDesktopHostBridge(): Promise<HostBridge> {
     installDir: status.helperPath,
     error: status.helperError ?? undefined
   };
+
+  async function refreshRuntimeState(): Promise<void> {
+    try {
+      const current = await invoke<DesktopStatus>("desktop_status");
+      elevated = current.helperRunning ? current.helperElevated : false;
+      // The token file can outlive a stopped helper; never reconnect using it.
+      token = current.helperRunning ? current.token : null;
+    } catch {
+      elevated = null;
+      token = null;
+    }
+  }
 
   return {
     kind: "desktop",
@@ -71,15 +83,18 @@ export async function createDesktopHostBridge(): Promise<HostBridge> {
           dataDir: result.dataDir
         };
       } catch (error) {
+        await refreshRuntimeState();
         return { ok: false, error: errorMessage(error), helperPath: helperState.installDir };
       }
     },
     async stopHelper() {
       try {
         await invoke("stop_helper");
+        token = null;
         elevated = false;
         return { ok: true };
       } catch (error) {
+        await refreshRuntimeState();
         return { ok: false, error: errorMessage(error) };
       }
     },
@@ -89,8 +104,10 @@ export async function createDesktopHostBridge(): Promise<HostBridge> {
         const result = await invoke<StartHelperResult>("set_helper_elevation", { elevated: desired });
         token = result.token;
         elevated = result.elevated;
+        helperState = { ...helperState, installDir: result.helperPath };
         return { ok: true, elevated, warning: result.warning ?? undefined };
       } catch (error) {
+        await refreshRuntimeState();
         return { ok: false, elevated, error: errorMessage(error) };
       }
     },

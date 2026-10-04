@@ -2,14 +2,9 @@
 
 ## Required Baselines
 
-Migration work must preserve at least:
+Historical regression floors remain useful, but they are not current candidate results. Migration work originally required 71 host-integration frontend tests and 129 default helper tests (2 Windows OCR tests explicitly ignored). The archived 0.5.9 candidate reported 107 host-integration tests, 79 standalone frontend tests, 165 helper tests (2 ignored), and 13 Tauri host tests.
 
-- 71 frontend tests in the host integration.
-- 129 passing default Rust tests and 2 explicitly ignored Windows OCR tests in the shared helper.
-
-The current verified Windows baseline is 98 frontend tests in the host integration and 162 passing Rust tests with 2 OCR tests ignored. The 0.5.9 release candidate currently reports 107 host tests, 79 standalone frontend tests, 165 helper tests, and 13 Tauri host tests; native runner counts are recorded separately and must not reduce this Windows baseline.
-
-The standalone desktop baseline is 75 frontend tests across 13 files, zero Svelte check errors or warnings, and 13 Tauri host tests. The 0.5.9 release candidate reports 107 uTools tests, 79 standalone frontend tests, 165 Windows helper tests with 2 OCR tests ignored, and 13 Tauri host tests.
+The 0.6.4 source integrates PRs #21–#25 on the full 0.6.3 baseline. Record the actual candidate commit, complete automated results, ignored-test reasons, and artifact identity after the final integration run; no current totals or real-machine acceptance are asserted here. Previous release results cannot substitute for new UAC, multi-monitor/DPI, taskbar recovery, or host-adapter runtime evidence.
 
 ## Local Gates
 
@@ -34,7 +29,7 @@ The capture-exclusion assertions remain strict on the supported Windows 11 works
 
 The repository pins a Windows GNU target in `rust-toolchain` and `helper/.cargo/config.toml`, so native jobs invoke `cargo +stable` and pass their host target explicitly. Cross-compiling Linux X11 from Windows is not a substitute for a native runner because `rdev` links to system X11 libraries through `pkg-config`.
 
-The `macOS and Linux X11` workflow runs the desktop frontend checks, helper format/tests, and Tauri host tests/checks on macOS x64, macOS arm64, and Ubuntu x64. Ubuntu installs the X11/Tauri development libraries, starts Xvfb, then runs `scripts/helper-instance-smoke.mjs` against the native helper. The smoke requires helper readiness, intentional single-instance conflict with a nonzero exit and `HELPER_INSTANCE_CONFLICT`, authenticated stop, and clean recovery.
+The `macOS and Linux X11` workflow runs the desktop frontend checks, helper format/tests, and Tauri host tests/checks on macOS x64, macOS arm64, and Ubuntu x64. Ubuntu installs the X11/Tauri development libraries, starts Xvfb with `-noreset` to avoid display-reset races during lifecycle smoke, then runs `scripts/helper-instance-smoke.mjs` against the native helper. The smoke requires helper readiness, intentional single-instance conflict with a nonzero exit and `HELPER_INSTANCE_CONFLICT`, authenticated stop, and clean recovery.
 
 Native acceptance still needs one real macOS machine with Accessibility and Screen Recording enabled, plus one Linux X11 desktop (not only Xvfb), to verify hot zones, global gestures, move/resize, foreground selection, topmost, and screenshot output. Linux Wayland is intentionally limited to the capability/degradation contract.
 
@@ -81,6 +76,8 @@ The native component can remain pinned until Explorer exits. Compatible resident
 
 ## Installation Acceptance
 
+Run NSIS install/uninstall/upgrade automation only in an isolated account or CI runner with no existing installed or running product. An isolated application-data directory does not isolate HKCU installation registrations and shortcuts. On a workstation with 0.6.3 installed, do not automatically replace or uninstall it for the 0.6.4 local candidate; hand the final setup to the user for first-stage installation/upgrade acceptance.
+
 After building and auditing the artifacts, run:
 
 ```powershell
@@ -106,3 +103,39 @@ For edge hide, `animationEnabled` defaults to true. Verify explicit false surviv
 Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/helper-owner-smoke.ps1 -HelperPath apps/desktop/src-tauri/resources/helper/magic-corners-helper.exe` to verify owner-exit cleanup, the explicit stop event, and rejection of a reused/stale owner identity. Use an ordinary-permission shell with no other helper running.
 
 For interactive acceptance, start the desktop normally with an isolated data directory. In the power panel, enable administrator mode and cancel UAC: the helper must reconnect in ordinary mode with its configuration intact. Repeat and approve UAC: only the helper should be elevated. Exercise a shortcut and window movement against an elevated test window, then return to ordinary mode. Confirm a configured command launches without elevation. Repeat with the settings window hidden, then force-exit the desktop and verify no helper or listening port remains. Also check a denied elevation request, another helper occupying the fixed port, and repeated permission switches. Administrator mode improves interaction with elevated desktop windows; protected applications can impose additional restrictions.
+
+## 0.6.4 local candidate acceptance
+
+Keep an existing 0.6.3 installation intact. NSIS replacement/uninstall is not an automatic local development action; the user performs the actual candidate install/upgrade, while installer automation belongs in an isolated account/CI.
+
+This is development acceptance only: no Release, tag, stable replacement, or release-freeze claim. Preserve existing 0.6.3 outputs by selecting a separate directory for every package gate, from the repository root:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -ArtifactsDir artifacts/0.6.4
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/audit-desktop-artifacts.ps1 -ArtifactsDir artifacts/0.6.4
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-runtime-smoke.ps1 -AppPath artifacts/0.6.4/ConvenientWindow-portable/ConvenientWindow.exe
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-runtime-smoke.ps1 -AppPath artifacts/0.6.4/ConvenientWindow-portable/ConvenientWindow.exe -ExpectConflict
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-runtime-smoke.ps1 -AppPath artifacts/0.6.4/ConvenientWindow-portable/ConvenientWindow.exe -ForceAppKill
+# Isolated account/CI only; do not replace an existing 0.6.3 workstation installation
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/desktop-install-smoke.ps1 -ArtifactsDir artifacts/0.6.4
+```
+
+`-ArtifactsDir` is restricted to this repository's artifacts directory. Default npm smoke commands still select root artifacts and may exercise an older package; they are not 0.6.4 evidence unless the paths match. Audit the manifest, checksums, portable payload and `artifacts/0.6.4/convenient-window-0.6.4-windows-x64-setup.exe` before handing off. These are expected paths, not a claim that the files exist or passed. Serialize real helper/install gates; stop the current owned helper normally before changing hosts, never kill by port/name. Both hosts share the single-instance boundary and fixed port 56873.
+
+| Change | Automated regression and manual expectation |
+| --- | --- |
+| #21 pin order | Check a stationary owner raised above its pin, two overlapping topmost owners, minimize/restore and click-to-unpin. The pin stays above its own window but behind unrelated higher windows. |
+| #22 original-pixel pinning | Verify small/large captures, signed coordinates and different DPI. Offset defaults to true (16 px down/right), explicit false survives save/import/reload and covers in place. Large/edge images may extend beyond the screen; manual scaling and original-pixel OCR still work. |
+| #23 numeric drafts | Exercise DOM input and configuration readback, not only pure helpers. Valid integers persist; empty/incomplete/out-of-range drafts commit on blur/Enter, old context drafts do not leak across monitor/zone/trigger changes, and temporary displays never gain profiles. |
+| #24 early shutdown | Queue stop before engine start and repeat start/stop. Original subscription receives it, cleanup exits normally, no leaked listener or unintended recovery remains. Linux Xvfb lifecycle smoke keeps `-noreset`. |
+| #25 permissions and commands | Cover failure-state re-query/unknown, same-owner authenticated broker recovery, cancellation and no duplicate execution. Real UAC cancellation/approval, ordinary command tokens, hidden-settings commands and owner-exit cleanup require interactive acceptance. |
+
+Test both `old helper stopped / replacement failed` and `old elevated helper did not stop`; only a successful state query can confirm the actual permission state. A failed query must show unknown, not false or an old cached true. An ordinary shell/host must remain ordinary even when the helper is elevated. A complete host restart or automatic recovery must not request elevation without a new choice. Another host occupying the instance lock must remain untouched. Repeat on each host adapter; desktop tests do not prove another adapter works.
+
+Preserve 0.6.3 behavior: edge-hide animation on/off, screenshot-selection overlays, taskbar transparent/acrylic/tinted restoration, master-switch stop, tray quit and uninstall. Test negative coordinates, mixed DPI and multiple displays without automatically restarting Explorer. Administrator mode does not support protected processes; scheduled elevated login/startup is not part of issue #20's first phase. Automated totals and real UAC/multi-monitor/taskbar results remain unfilled until obtained from this candidate.
+
+### Evidence boundary for browser mocks and taskbar kernel tests
+
+A real browser with mocked host bridges, WebSocket protocol and UAC outcomes can cover numeric drafts, monitor readiness, pinOffset persistence and failed/unknown permission UI states. It is DOM/state evidence only, not real UAC, native helper elevation, another host adapter's preload/command processes, or installer acceptance. Preserve this distinction when recording candidate results.
+
+[`taskbar-appearance-native-test.cpp`](../helper/native/tests/taskbar-appearance-native-test.cpp) exercises the production security factory in `taskbar-shared-security.h`. It inspects an actual kernel mapping for a Medium mandatory label and only current-user/SYSTEM access SIDs, verifies ordinary-caller write access, and verifies that low-integrity impersonation cannot write. The helper process stays elevated when selected; Everyone is not granted access. These tests do not inject into real Explorer. Record their actual run separately from real transparent/acrylic/tinted rendering, ordinary/elevated/ordinary switches, restoration, old-component adoption and multi-monitor/DPI checks. Neither browser mocks nor kernel-object tests complete interactive acceptance.

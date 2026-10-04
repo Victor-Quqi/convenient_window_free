@@ -69,6 +69,8 @@ it("keeps monitor-specific timings through detection, profile migration, zone sw
       await Promise.resolve();
       assert.equal(saves, savesBeforeBlur, 'disconnect must not commit a focused timing draft');
       assert.equal(slot(stored.monitorProfiles[0]).cooldownMs, 900);
+      detect();
+      assert.deepEqual(timing().map(node => node.value), ['500', '900'], 'reconnecting the same monitor must discard its disconnected numeric draft');
       await unmount(component);
       document.body.replaceChildren();
       // Exercise the legacy-ID migration on the next startup as well.
@@ -108,12 +110,13 @@ it("keeps monitor-specific timings through detection, profile migration, zone sw
         return animation;
       };
       localStorage.setItem('convenient-window-language', 'en-US');
-      await import('./bundle/entry.mjs');
-      await window.happyDOM.close();
+      try { await import('./bundle/entry.mjs'); }
+      finally { await window.happyDOM.close(); }
     `);
-    const output = execFileSync(process.execPath, [nodePath.join(directory, "run.mjs")], { encoding: "utf8" });
+    const output = execFileSync(process.execPath, [nodePath.join(directory, "run.mjs")], { encoding: "utf8", timeout: 15000, stdio: "pipe" });
     expect(output).toContain("App monitor timing round trip passed");
   } finally {
+    if (nodePath.dirname(nodePath.resolve(directory)) !== nodePath.resolve(import.meta.dirname)) throw new Error("Unexpected test directory");
     rmSync(directory, { recursive: true, force: true });
   }
-}, 20000);
+}, 30000);
