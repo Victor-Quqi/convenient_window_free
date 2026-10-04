@@ -47,20 +47,23 @@ impl Engine {
         }
     }
 
-    pub async fn run(&self) -> Result<()> {
+    pub async fn run(&mut self) -> Result<()> {
         logging::write_line("engine: starting");
+        if self.shutdown_rx.try_recv().is_ok() {
+            return Ok(());
+        }
         platform::install_mouse_hook()?;
         logging::write_line("engine: mouse hook requested");
 
         let dispatcher = ActionDispatcher::new(self.event_tx.clone());
         let mut config_rx = self.config_rx.clone();
         let mut config = config_rx.borrow_and_update().clone();
-        let mut shutdown_rx = self.shutdown_rx.resubscribe();
         let taskbar = platform::TaskbarAppearanceWorker::new(self.event_tx.clone());
         taskbar.configure(
             config.enabled && config.taskbar_appearance.enabled,
             &config.taskbar_appearance,
         );
+
         let mut previous_input = InputState::default();
         let mut previous_cursor = None;
         let mut foreground_tracker = ForegroundTracker::default();
@@ -76,6 +79,9 @@ impl Engine {
         let injected_failure_at = injected_engine_failure_deadline();
 
         loop {
+            if self.shutdown_rx.try_recv().is_ok() {
+                break;
+            }
             #[cfg(debug_assertions)]
             if injected_failure_at.is_some_and(|deadline| Instant::now() >= deadline) {
                 runtime_failure = Some("simulated engine failure".to_string());
@@ -358,7 +364,7 @@ impl Engine {
                         taskbar.configure(config.enabled && config.taskbar_appearance.enabled, &config.taskbar_appearance);
                     }
                 }
-                _ = shutdown_rx.recv() => break,
+                _ = self.shutdown_rx.recv() => break,
             }
         }
         taskbar.configure(false, &config.taskbar_appearance);
@@ -1179,6 +1185,20 @@ fn is_continuous_adjustment_trigger(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn shutdown_before_engine_start_is_preserved() {
+        let (_config_tx, config_rx) = watch::channel(AppConfig::default());
+        let (event_tx, _) = broadcast::channel(8);
+        let (shutdown_tx, shutdown_rx) = broadcast::channel(4);
+        let mut engine = Engine::new(config_rx, event_tx, shutdown_rx);
+        shutdown_tx.send(()).unwrap();
+
+        tokio::time::timeout(Duration::from_millis(100), engine.run())
+            .await
+            .expect("a queued shutdown must not start the input hook or wait for another signal")
+            .unwrap();
+    }
     use crate::config::{
         ActionKind, HotzoneAction, HotzoneSetting, MonitorProfile, TriggerAction, TriggerKind,
     };
