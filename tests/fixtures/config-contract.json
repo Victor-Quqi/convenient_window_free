@@ -48,6 +48,7 @@
     "resizeModifiers": ["alt"],
     "topmostPinEnabled": true,
     "ocrLanguage": "auto",
-    "screenshotResult": "pin"
+    "screenshotResult": "pin",
+    "pinOffset": true
   }
 }

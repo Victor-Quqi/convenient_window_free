@@ -629,13 +629,25 @@ pub enum ScreenshotResultMode {
     PinAndCopy,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct OcrConfig {
     #[serde(default)]
     pub language: OcrLanguage,
     #[serde(default)]
     pub screenshot_result: ScreenshotResultMode,
+    #[serde(default = "default_true")]
+    pub pin_offset: bool,
+}
+
+impl Default for OcrConfig {
+    fn default() -> Self {
+        Self {
+            language: OcrLanguage::default(),
+            screenshot_result: ScreenshotResultMode::default(),
+            pin_offset: true,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1164,9 +1176,22 @@ mod tests {
             "resizeModifiers": config.window_drag.resize_modifiers,
             "topmostPinEnabled": config.topmost_pin.enabled,
             "ocrLanguage": config.ocr.language,
-            "screenshotResult": config.ocr.screenshot_result
+            "screenshotResult": config.ocr.screenshot_result,
+            "pinOffset": config.ocr.pin_offset
         });
         assert_eq!(actual, fixture["expected"]);
+    }
+
+    #[test]
+    fn pin_offset_defaults_on_and_preserves_explicit_false_after_reload() {
+        assert!(OcrConfig::default().pin_offset);
+        let legacy: OcrConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+        assert!(legacy.pin_offset);
+        let config: OcrConfig =
+            serde_json::from_value(serde_json::json!({"pinOffset": false})).unwrap();
+        let saved = serde_json::to_value(config).unwrap();
+        let reloaded: OcrConfig = serde_json::from_value(saved).unwrap();
+        assert!(!reloaded.pin_offset);
     }
 
     #[test]

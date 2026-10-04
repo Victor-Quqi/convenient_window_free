@@ -97,7 +97,8 @@ export const defaultSettings: AppSettings = {
   },
   ocr: {
     language: "auto",
-    screenshotResult: "pin"
+    screenshotResult: "pin",
+    pinOffset: true
   },
   mouseGestures: {
     enabled: false,
@@ -430,7 +431,8 @@ function normalizeOcr(value: unknown): AppSettings["ocr"] {
     language: ocrLanguages.includes(raw.language as OcrLanguage) ? raw.language as OcrLanguage : defaultSettings.ocr.language,
     screenshotResult: screenshotResultModes.includes(raw.screenshotResult as ScreenshotResultMode)
       ? raw.screenshotResult as ScreenshotResultMode
-      : defaultSettings.ocr.screenshotResult
+      : defaultSettings.ocr.screenshotResult,
+    pinOffset: typeof raw.pinOffset === "boolean" ? raw.pinOffset : defaultSettings.ocr.pinOffset
   };
 }
 

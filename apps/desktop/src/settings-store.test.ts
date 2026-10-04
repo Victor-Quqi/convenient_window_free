@@ -72,7 +72,8 @@ describe("normalizeSettings", () => {
       resizeModifiers: settings.windowDrag.resizeModifiers,
       topmostPinEnabled: settings.topmostPin.enabled,
       ocrLanguage: settings.ocr.language,
-      screenshotResult: settings.ocr.screenshotResult
+      screenshotResult: settings.ocr.screenshotResult,
+      pinOffset: settings.ocr.pinOffset
     }).toEqual(contractFixture.expected);
   });
 
@@ -367,7 +368,7 @@ describe("normalizeSettings", () => {
         moveButton: "x1"
       },
       topmostPin: { enabled: false },
-      ocr: { language: "zh-Hans", screenshotResult: "pin-and-copy" }
+      ocr: { language: "zh-Hans", screenshotResult: "pin-and-copy", pinOffset: false }
     });
 
     expect(settings.hotzones[0].actions[0].modifierActions).toEqual([
@@ -380,7 +381,7 @@ describe("normalizeSettings", () => {
       moveButton: "x1"
     });
     expect(settings.topmostPin.enabled).toBe(false);
-    expect(settings.ocr).toEqual({ language: "zh-Hans", screenshotResult: "pin-and-copy" });
+    expect(settings.ocr).toEqual({ language: "zh-Hans", screenshotResult: "pin-and-copy", pinOffset: false });
   });
 
   it("keeps edge-hide directions independent for each monitor", () => {
@@ -407,6 +408,19 @@ describe("saveSettings", () => {
   afterEach(() => {
     hostBridgeState.current = null;
     vi.unstubAllGlobals();
+  });
+
+  it("defaults pin offset on and preserves either choice after saving and reloading", async () => {
+    expect(normalizeSettings({}).ocr.pinOffset).toBe(true);
+    let stored = "";
+    vi.stubGlobal("localStorage", {
+      setItem: (_key: string, value: string) => { stored = value; }
+    });
+    for (const pinOffset of [false, true]) {
+      const settings = normalizeSettings({ ocr: { ...defaultSettings.ocr, pinOffset } });
+      await saveSettings(settings);
+      expect(normalizeSettings(JSON.parse(stored)).ocr.pinOffset).toBe(pinOffset);
+    }
   });
 
   it("rounds gesture coordinates before writing to desktop storage", () => {
