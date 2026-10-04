@@ -129,3 +129,10 @@ The product name is `Convenient Window`; the identifier `com.ximizhou.convenient
 
 
 Edge-hide animation is controlled by the optional `edgeHide.animationEnabled` preference (default true). Disabled transitions write the final geometry/topmost state once; cleanup transitions are always immediate. Trigger conditions, collapse/restore delays and the controller acknowledgement flow do not change.
+## Optional administrator helper on Windows
+
+The desktop remains at ordinary user permissions. The power panel can restart its helper with `ShellExecuteExW` and the `runas` verb. This choice lasts for the current helper session; automatic recovery starts an ordinary helper without requesting UAC. Cancellation or a failed elevated launch restarts the ordinary helper and reports the fallback. A replacement is started only after the previous process has exited.
+
+The authenticated `helper.ready` message includes `processId`, `elevated`, and `desktopManaged`. The supervisor checks the process ID before accepting readiness or issuing shutdown. An ordinary helper remains in the desktop's kill-on-close Job Object. An elevated helper monitors the desktop process handle and creation time, and listens for a per-launch stop event. Owner exit or that event requests graceful shutdown, with a bounded exit fallback if runtime cleanup stalls.
+
+Managed helpers send `desktop.command` events instead of executing configured commands. One native desktop listener handles those events, independently of the settings WebView, and launches commands with ordinary permissions. An elevated standalone helper rejects command execution. When the desktop itself was manually elevated, existing window/input features retain inherited permissions, while permission switching and command execution are refused. Launch the desktop normally to use those features.

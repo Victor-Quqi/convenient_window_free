@@ -123,6 +123,10 @@
   let settings: AppSettings = loadSettings();
   let mode: Mode | null = null;
   let helperStatus: HelperStatus = "disconnected";
+  const administratorModeSupported = host.getPrivilegeState?.().supported ?? false;
+  let helperElevated = host.getPrivilegeState?.().elevated ?? false;
+  let switchingPrivilege = false;
+  let privilegeNotice = "";
   let helperPlatform: HelperPlatformInfo | null = null;
   let displays: DisplayInfo[] = [fallbackDisplay];
   let displayReady = false;
@@ -271,15 +275,17 @@
       if (status === "connected") lastMessage = "helperSync";
       if (status === "disconnected" && connectionTestState === "testing") finishConnectionTest(false, "connectionLost");
       if (status === "disconnected") {
+        helperElevated = false;
         displayReady = false;
         runtimeSummary = "";
         helperPlatform = null;
         taskbarStatus = null;
         const wasReady = helperWasReady;
         helperWasReady = false;
-        if (!stopping && !upgradingHelper && settings.enabled && !helperError) {
+        if (!switchingPrivilege && !stopping && !upgradingHelper && settings.enabled && !helperError) {
           helperError = "helperRecoveringConnection";
         }
+        if (switchingPrivilege) return;
         if (upgradingHelper) scheduleHelperUpgradeRestart();
         else if (stopping) { stopping = false; lastMessage = "helperStopped"; }
         else if (!helperRecoveryFailed && settings.enabled && (wasReady || recoveringHelper)) scheduleHelperRecovery();
@@ -287,7 +293,8 @@
     });
     const offMessage = helper.onMessage((message) => {
       if (message.type === "helper.ready") {
-        const data = message.data as { version?: unknown; protocolVersion?: unknown; ocrLanguages?: unknown; platform?: HelperPlatformInfo } | null;
+        const data = message.data as { version?: unknown; protocolVersion?: unknown; ocrLanguages?: unknown; platform?: HelperPlatformInfo; elevated?: boolean } | null;
+        helperElevated = data?.elevated === true;
         helperPlatform = helper.platformInfo ?? (data?.platform ?? null);
         availableOcrLanguages = Array.isArray(data?.ocrLanguages)
           ? data.ocrLanguages.filter((language): language is OcrLanguage => language === "auto" || language === "zh-Hans" || language === "en")
@@ -959,7 +966,7 @@
   }
 
   function scheduleHelperRecovery(): void {
-    if (helperRecoveryTimer || helperRecoveryFailed || stopping || upgradingHelper) return;
+    if (switchingPrivilege || helperRecoveryTimer || helperRecoveryFailed || stopping || upgradingHelper) return;
     if (helperRecovery.requestRecovery() === "fail") {
       failHelperRecovery("helperRecoveryStopped");
       return;
@@ -1015,6 +1022,28 @@
     else helperError = lastMessage;
     return result.ok;
   }
+  async function switchHelperPrivilege(): Promise<void> {
+    if (!host.setHelperElevation || switchingPrivilege || starting || stopping) return;
+    const desired = !helperElevated;
+    switchingPrivilege = true;
+    privilegeNotice = "";
+    resetHelperRecovery();
+    if (!(await applyNow())) { switchingPrivilege = false; return; }
+    helper.disconnect();
+    try {
+      const result = await host.setHelperElevation(desired);
+      helperElevated = result.elevated;
+      if (result.ok) {
+        privilegeNotice = result.warning ?? "";
+        helper.sendConfig(settings);
+        helper.connect();
+      } else {
+        helperError = result.error ?? "adminSwitchFailed";
+      }
+    } catch (error) {
+      helperError = error instanceof Error ? error.message : String(error);
+    } finally { switchingPrivilege = false; }
+  }
   function openHelperPage(target: "repository" | "release"): void {
     const url = helperInstallState[target];
     if (url) host.openExternal(url);
@@ -1026,6 +1055,7 @@
     lastMessage = "helperStopping";
   }
   async function setPowerEnabled(enabled: boolean): Promise<void> {
+    if (switchingPrivilege) return;
     settings.enabled = enabled;
     if (!(await applyNow())) {
       settings.enabled = !enabled;
@@ -1129,7 +1159,7 @@
   <header class="topbar">
     <div class="brand"><img src="app-icon.png" alt="" /><strong>{ui("brandName")}</strong></div>
     <div class:connected={helperStatus === "connected"} class="connection"><i></i>{helperStatus === "connected" ? ui("connected") : helperStatus === "connecting" ? ui("connecting") : ui("disconnected")}<span>{displayReady ? (runtimeSummary || ui("statusRuntimeIdle")) : helperStatus === "connecting" ? ui("connecting") : ui("displayPreview")}</span></div>
-    <label class="master">{ui("masterState")} <input checked={settings.enabled} disabled={starting || stopping} on:change={togglePower} type="checkbox" /><span></span></label>
+    <label class="master">{ui("masterState")} <input checked={settings.enabled} disabled={starting || stopping || switchingPrivilege} on:change={togglePower} type="checkbox" /><span></span></label>
     <button aria-label={ui("settingsLabel")} title={ui("settingsLabel")} class="theme-toggle settings-toggle" class:active={mode === "more"} aria-expanded={mode === "more"} on:click={() => toggleMode("more")} type="button">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.8"><path d="m9.4 3-.5 2.1-1.8 1-2.1-.6-2.2 3.8 1.6 1.5v2.2l-1.6 1.5L5 18.3l2.1-.6 1.8 1 .5 2.1h4.4l.5-2.1 1.8-1 2.1.6 2.2-3.8-1.6-1.5v-2.2l1.6-1.5-2.2-3.8-2.1.6-1.8-1-.5-2.1z"/><circle cx="11.6" cy="12" r="3.1"/></svg>
     </button>
@@ -1381,7 +1411,20 @@
                 <div><span>{ui("masterState")}</span><strong class:on={settings.enabled}>{settings.enabled ? ui("masterOn") : ui("masterOffState")}</strong><p>{ui("masterStateDetail")}</p></div>
                 <div><span>{ui("helperSection")}</span><strong class:on={helperStatus === "connected"}>{helperStatus === "connected" ? ui("connected") : helperStatus === "connecting" ? ui("connecting") : ui("disconnected")}</strong><p>{ui("helperRole")}</p>{#if helperPlatform}<small class="platform-capabilities">{helperPlatform.system} · {helperPlatform.architecture}{helperPlatform.session ? ` · ${helperPlatform.session}` : ""} · {unavailableCapabilityText(helperPlatform)}</small>{/if}</div>
               </div>
-              <div class="power-actions"><button class="apply" disabled={!helperInstallState.installed || settings.enabled || starting || stopping} on:click={() => setPowerEnabled(true)} type="button">{ui("openFeature")}</button><button class="quiet" disabled={starting || stopping || (!settings.enabled && helperStatus === "disconnected")} on:click={() => setPowerEnabled(false)} type="button">{ui("closeFeature")}</button><button aria-live="polite" class:failed={connectionTestState === "failed"} class:success={connectionTestState === "success"} class:testing={connectionTestState === "testing"} class="quiet connection-test" disabled={helperStatus !== "connected" || connectionTestState === "testing"} on:click={runConnectionTest} type="button"><i aria-hidden="true"></i><span>{connectionTestState === "testing" ? ui("connectionTesting") : connectionTestState === "success" ? ui("connectionOk") : connectionTestState === "failed" ? ui("connectionFailed") : ui("connectionTest")}</span></button><button class="quiet" on:click={copyDiagnostics} type="button">{ui("diagnostics")}</button></div>
+              {#if administratorModeSupported}
+                <div class="permission-settings">
+                  <label class="permission-toggle" title={ui("adminModeDetail")}>
+                    <span>{ui("adminMode")}</span>
+                    {#if switchingPrivilege}<small role="status">{ui("adminSwitching")}</small>{/if}
+                    <span class="mini-switch">
+                      <input type="checkbox" role="switch" checked={helperElevated} disabled={switchingPrivilege || starting || stopping || upgradingHelper || recoveringHelper || !settings.enabled || helperStatus !== "connected"} on:change={(event) => { event.currentTarget.checked = helperElevated; void switchHelperPrivilege(); }} />
+                      <span aria-hidden="true"></span>
+                    </span>
+                  </label>
+                  {#if privilegeNotice}<p role="status">{statusText(privilegeNotice)}</p>{/if}
+                </div>
+              {/if}
+              <div class="power-actions"><button class="apply" disabled={!helperInstallState.installed || settings.enabled || starting || stopping || switchingPrivilege} on:click={() => setPowerEnabled(true)} type="button">{ui("openFeature")}</button><button class="quiet" disabled={switchingPrivilege || starting || stopping || (!settings.enabled && helperStatus === "disconnected")} on:click={() => setPowerEnabled(false)} type="button">{ui("closeFeature")}</button><button aria-live="polite" class:failed={connectionTestState === "failed"} class:success={connectionTestState === "success"} class:testing={connectionTestState === "testing"} class="quiet connection-test" disabled={helperStatus !== "connected" || connectionTestState === "testing"} on:click={runConnectionTest} type="button"><i aria-hidden="true"></i><span>{connectionTestState === "testing" ? ui("connectionTesting") : connectionTestState === "success" ? ui("connectionOk") : connectionTestState === "failed" ? ui("connectionFailed") : ui("connectionTest")}</span></button><button class="quiet" on:click={copyDiagnostics} type="button">{ui("diagnostics")}</button></div>
               <div class="helper-meta"><span>{format(ui("helperVersion"), { version: helperInstallState.version })}</span><button on:click={() => openHelperPage("repository")} type="button">{ui("publicDownload")}</button><code>{helperInstallState.installDir ?? ui("helperInstallDirUnknown")}</code></div>
               <div class:error={Boolean(helperError)} class="status-rail"><div><span>{ui("recentAction")}</span><strong>{lastAction || statusText("noAction")}</strong></div><div><span>{ui("currentState")}</span><strong aria-live="polite">{statusText(helperError, english) || renderedLastMessage}</strong></div></div>
             {:else if mode === "beautification"}

@@ -101,3 +101,8 @@ Windows upgrade acceptance uses `scripts/desktop-upgrade-smoke.ps1 -LegacyInstal
 
 
 For edge hide, `animationEnabled` defaults to true. Verify explicit false survives import and serialization, performs a single final move with no frame delays, and preserves the configured hide/restore delay and original topmost state. Animated movement keeps its interpolation path. Frontend Vitest suites cap workers at two to avoid memory pressure; parallelize only independent outputs and serialize real helper/installer integration tests.
+## Windows helper permission switching
+
+Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/helper-owner-smoke.ps1 -HelperPath apps/desktop/src-tauri/resources/helper/magic-corners-helper.exe` to verify owner-exit cleanup, the explicit stop event, and rejection of a reused/stale owner identity. Use an ordinary-permission shell with no other helper running.
+
+For interactive acceptance, start the desktop normally with an isolated data directory. In the power panel, enable administrator mode and cancel UAC: the helper must reconnect in ordinary mode with its configuration intact. Repeat and approve UAC: only the helper should be elevated. Exercise a shortcut and window movement against an elevated test window, then return to ordinary mode. Confirm a configured command launches without elevation. Repeat with the settings window hidden, then force-exit the desktop and verify no helper or listening port remains. Also check a denied elevation request, another helper occupying the fixed port, and repeated permission switches. Administrator mode improves interaction with elevated desktop windows; protected applications can impose additional restrictions.
