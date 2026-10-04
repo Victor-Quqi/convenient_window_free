@@ -1,4 +1,4 @@
-param(
+﻿param(
   [Parameter(Mandatory = $true)]
   [string]$AppPath,
   [string]$DataRoot,
@@ -38,10 +38,11 @@ function Stop-HelperGracefully {
       $true,
       $timeout.Token
     ).GetAwaiter().GetResult()
-    $closed = $socket.ReceiveAsync($receiveBuffer, $timeout.Token).GetAwaiter().GetResult()
-    if ($closed.MessageType -ne [System.Net.WebSockets.WebSocketMessageType]::Close) {
-      throw "Conflict holder helper did not acknowledge its stop request"
-    }
+    # Runtime/status broadcasts may already be queued ahead of the close frame.
+    # The shared cancellation token bounds the entire drain, including shutdown.
+    do {
+      $closed = $socket.ReceiveAsync($receiveBuffer, $timeout.Token).GetAwaiter().GetResult()
+    } while ($closed.MessageType -ne [System.Net.WebSockets.WebSocketMessageType]::Close)
     [void]$socket.CloseOutputAsync(
       [System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure,
       "",
@@ -50,6 +51,30 @@ function Stop-HelperGracefully {
   } finally {
     $socket.Dispose()
     $timeout.Dispose()
+  }
+}
+
+function Remove-IsolatedDirectory {
+  param([Parameter(Mandatory = $true)][string]$Path)
+  if (-not (Test-Path -LiteralPath $Path)) { return }
+  $resolved = (Resolve-Path -LiteralPath $Path).Path
+  $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd("\") + "\"
+  if ($resolved -ne $Path -or -not $resolved.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "Unexpected smoke cleanup directory: $Path"
+  }
+  if ((Get-Item -LiteralPath $resolved).Attributes -band [IO.FileAttributes]::ReparsePoint) {
+    throw "Smoke cleanup cannot follow a reparse point: $Path"
+  }
+  # WebView2 subprocesses can release temporary profile files shortly after the
+  # host exits. Retry this isolated directory only; never stop browser processes.
+  $deadline = [DateTime]::UtcNow.AddSeconds(10)
+  while (Test-Path -LiteralPath $resolved) {
+    try {
+      Remove-Item -LiteralPath $resolved -Recurse -Force -ErrorAction Stop
+    } catch {
+      if ([DateTime]::UtcNow -ge $deadline) { throw }
+      Start-Sleep -Milliseconds 200
+    }
   }
 }
 
@@ -255,20 +280,12 @@ try {
   }
   if ((-not $holderProcess) -or $holderProcess.HasExited) {
     if (Test-Path -LiteralPath $holderRoot) {
-      $resolvedHolder = (Resolve-Path -LiteralPath $holderRoot).Path
-      if ($resolvedHolder -ne $holderRoot -or -not $resolvedHolder.StartsWith(([IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd("\") + "\"), [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Unexpected conflict-holder cleanup directory"
-      }
-      Remove-Item -LiteralPath $resolvedHolder -Recurse -Force
+      Remove-IsolatedDirectory -Path $holderRoot
     }
   }
   if (-not $KeepData) {
     if (Test-Path -LiteralPath $DataRoot) {
-      $resolvedData = (Resolve-Path -LiteralPath $DataRoot).Path
-      if ($resolvedData -ne $DataRoot -or -not $resolvedData.StartsWith(([IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd("\") + "\"), [StringComparison]::OrdinalIgnoreCase)) {
-        throw "Unexpected runtime cleanup directory"
-      }
-      Remove-Item -LiteralPath $resolvedData -Recurse -Force
+      Remove-IsolatedDirectory -Path $DataRoot
     }
     Write-Output "isolated data cleanup: passed"
   }
