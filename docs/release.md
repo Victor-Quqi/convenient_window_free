@@ -3,7 +3,7 @@
 The standalone desktop has two user acceptance points:
 
 1. During daily `develop` work, acceptance normally stays in the host integration for faster iteration. Only when the user explicitly requests desktop synchronization, port the applicable shared behavior, preserve desktop-specific lifecycle and UI differences, build the current NSIS package, and give the user its absolute local path. Do not publish this build.
-2. Before release, freeze a clean `main`, build once with the final version, publish those exact assets as a GitHub Pre-release, and have the user download and test the public installer and portable archive. Promote the same release without replacing assets.
+2. Before release, freeze a clean `main`, build the final version, publish those exact assets as a GitHub Pre-release, and have the user download and test the public installer and portable archive. While it remains a Pre-release, an explicitly requested same-version candidate refresh may replace the complete asset set; after promotion, the release is immutable.
 
 ## Develop Acceptance
 
@@ -35,7 +35,7 @@ Create the public Pre-release:
 npm run desktop:publish:pre
 ```
 
-The command refuses to overwrite an existing tag, uploads only the NSIS installer, portable ZIP, manifest, and checksums, then anonymously downloads every asset and recomputes its SHA-256. Public asset names must remain ASCII so Windows PowerShell 5.1 and the GitHub API compare the same exact names. Test the downloaded installer, uninstall flow, and portable ZIP on Windows 11 x64. The current binaries are unsigned, so an unknown-publisher or SmartScreen warning is expected and must not be described as a trusted signature.
+The command uploads only the NSIS installer, portable ZIP, manifest, and checksums, then anonymously downloads every asset and recomputes its SHA-256. For an active Pre-release, use the explicit `-ReplacePreRelease` path to replace the complete same-version candidate; the command refuses to replace a stable release or an unknown state. Public asset names must remain ASCII so Windows PowerShell 5.1 and the GitHub API compare the same exact names. Test the downloaded installer, uninstall flow, and portable ZIP on Windows 11 x64. The current binaries are unsigned, so an unknown-publisher or SmartScreen warning is expected and must not be described as a trusted signature.
 
 If acceptance succeeds, promote the existing release in place:
 
@@ -43,4 +43,4 @@ If acceptance succeeds, promote the existing release in place:
 npm run desktop:release:promote
 ```
 
-Promotion verifies the remote asset set and hashes again, then changes only the GitHub release state from Pre-release to stable. It does not rebuild or upload files. If acceptance fails or any asset must change, keep the failed version immutable, increase the patch version, and repeat the process with a new tag.
+Promotion verifies the remote asset set and hashes again, then changes only the GitHub release state from Pre-release to stable. It does not rebuild or upload files. If acceptance fails while the release is still a Pre-release, refresh the same-version candidate with `-ReplacePreRelease`, then make users download it again. Once promoted, the release and its assets are immutable; any later binary change requires a new patch version and tag.

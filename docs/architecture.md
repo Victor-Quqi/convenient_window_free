@@ -10,6 +10,20 @@ Host integration (Svelte + preload) --------/
 
 This repository is authoritative for the standalone desktop and the helper. Host integrations consume it as a submodule and supply only their host-specific adapters.
 
+## Experimental Taskbar Appearance
+
+The Appearance navigation item opens a shared `TaskbarAppearance.svelte` panel. Global settings remain in the top-right circular gear control between the master switch and theme control. The panel previews transparent, acrylic and tinted materials, but the preview never applies a system change; activation is direct and the Explorer risk note stays in the expandable prototype notes.
+
+Schema v8 adds optional `taskbarAppearance.enabled`, `mode`, `opacity`, `tint` and `showBorder`, defaulting to a disabled transparent preset. Actual activation requires both the global master switch and this opt-in. `helper/src/platform/taskbar.rs` owns a dedicated native worker thread, while `helper/native/taskbar-appearance.cpp` is an independently implemented Windows x64 XAML Diagnostics component. Input/window state machines do not wait for Diagnostics initialization. The optional protocol-v6 `taskbar.status` event reports `{ state, available, materials, backgrounds, errorCode? }` separately from durable configuration acknowledgements. An applied state only confirms a successful background-brush write, not visual compatibility.
+
+The Windows x64 build uses MSVC and the Windows SDK to compile a static-runtime DLL, embeds it in the helper executable, and materializes a content-addressed immutable DLL in the helper data directory only after opt-in. No additional release asset or download allow-list entry is required. Other platforms retain an explicit unavailable state.
+
+Transparent mode clears the background without tint; solid mode uses a tint brush with user-selected opacity, while acrylic mode uses `AcrylicBrush` with `Backdrop` and a separate tint-opacity parameter. Legacy enabled-only configuration preserves the original transparent background and hidden border. Material capability discovery prevents an older boolean-only helper from claiming support for the new modes. Shared parameters are read as coherent bounded snapshots.
+
+The component locates background/border rectangles under `Taskbar.TaskbarFrame`, saves their original brushes, queues changes on the owning UI thread, and requests restoration on disable, normal shutdown, or controller process death. Disable is asynchronous and retains the controller for re-enable; only shutdown/rebind detaches. A compatible pinned resident can adopt a new helper's v2 mapping through its exported attach entry (or the known 0.6.3 v2 hook), preserving the same watcher and original brushes. Only a marker that no longer identifies a loaded module may be removed; a loaded incompatible component is rejected rather than creating a second watcher. The per-user mutex and resident owner-process handle guard live conflicts. Known TranslucentTB/Windhawk processes suspend application and are rechecked periodically. Explorer PID or taskbar-window recreation triggers rebind. Temporary initialization failures use four bounded backoff retries and a `recovering` status; exhausted failures remain errors, and terminal states are still probed slowly for environmental recovery. The application never automatically elevates, stops other tools, or restarts Explorer.
+
+This is a disabled-by-default technical prototype. Native compilation and the disabled ABI path are tested; real transparency/acrylic rendering, icon clarity, multi-monitor/auto-hide behavior, Explorer restart, and abnormal-exit restoration still require explicit runtime acceptance. Theme brush reinitialization is observed, but visual compatibility must not be inferred from successful API calls.
+
 ## Source Layout
 
 - `apps/desktop/`: reusable Svelte UI, typed host bridge, and Tauri 2 host.
@@ -28,6 +42,8 @@ Shared UI code depends on a typed bridge for lifecycle, configuration, token acc
 ## Configuration Ownership
 
 The shared schema v8 `edgeHide.keepExpandedWhenForeground` setting defaults to `false`, so a collapsed-or-expanded window follows the normal restore delay. When the setting is enabled, an expanded edge-hidden window stays open while it is still the active foreground window. `edgeHide.showRestoreHint` defaults to `true`; disabling it hides only the pale collapsed-window outline while preserving the pointer restore hotzone. Missing fields preserve the prior behavior, while an explicit `false` survives host normalization and helper deserialization.
+
+Edge-hide movement uses a short ease-out transition rather than an instantaneous rectangle jump; intermediate frames preserve the restored window size and the final frame reapplies its original topmost state. A transient foreground surface or a non-maximized surface covering a monitor (for example a screenshot-selection overlay) does not start the expanded-window leave timer, and a cursor inside the live expanded window clears that timer even when foreground-hold is disabled. Shutdown restoration remains immediate so lifecycle cleanup is not delayed by animation.
 
 ## Interface Language
 
@@ -110,3 +126,6 @@ The current Linux input and monitor backend requires X11. Wayland support needs 
 The package produces a per-user NSIS installer and a portable archive for the currently accepted Windows target. macOS/Linux assets stay out of release manifests until native runner and real-machine acceptance records their exact binary, size, and SHA-256. Public GitHub Releases use immutable final-version assets: a clean `main` build is published as a Pre-release for online acceptance, then promoted in place. Automatic updates and trusted commercial code signing are not implemented.
 
 The product name is `Convenient Window`; the identifier `com.ximizhou.convenientwindow`, executable name and application-data directory remain stable. Windows upgrades validate the legacy registration and keep the existing installation directory, then remove the old uninstall entry and matching shortcuts after installation succeeds. Startup migration accepts only entries targeting that same executable path, preserves Task Manager's disabled state, writes the new entry before deleting the old one, and can retry after interruption. Registry migration failure does not block application launch. These legacy identity rules remain isolated in the Windows adapter and installer hooks.
+
+
+Edge-hide animation is controlled by the optional `edgeHide.animationEnabled` preference (default true). Disabled transitions write the final geometry/topmost state once; cleanup transitions are always immediate. Trigger conditions, collapse/restore delays and the controller acknowledgement flow do not change.

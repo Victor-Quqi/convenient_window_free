@@ -25,8 +25,10 @@ Release assets are currently unsigned. Windows may show an unknown-publisher or 
 
 ## Features
 
+Development source adds an **Appearance** (slim wand-and-sparkle) entry and moves global settings to a circular top-right gear. Taskbar material is an off-by-default Windows 11 x64 technical prototype with transparent, acrylic and tinted modes plus opacity and border controls. Activation is direct; the Explorer risk note remains inside the panel. The illustrated preview is not proof of actual rendering; initial transparency has received positive local acceptance feedback, while new materials, icon clarity, and cross-environment recovery still require acceptance and are not features of the published stable `0.6.2` release.
+
 - **Hot zones**: configure the four corners and four edges of each monitor independently, with hover, mouse-button, wheel, and edge-movement triggers.
-- **Window edge hiding**: move windows partly off-screen and restore them from a visible edge strip, with multi-window and multi-monitor support. The pale restore outline can be hidden independently without disabling edge restoration.
+- **Window edge hiding**: move windows partly off-screen and restore them from a visible edge strip, with multi-window and multi-monitor support. The restore outline and hide/restore animation can be disabled independently without disabling edge restoration.
 - **Anywhere move and resize**: move or resize the active window with configurable modifier-and-mouse combinations.
 - **Topmost controls**: keep a window above others and optionally use a small on-window pin to release it quickly.
 - **Global mouse gestures**: bind gestures to shortcuts, system actions, commands, and window controls; create and manage custom gesture samples.
@@ -36,7 +38,7 @@ Release assets are currently unsigned. Windows may show an unknown-publisher or 
 - **Brightness controls**: adjust the triggering display through hot zones and gestures; see [platform requirements](docs/architecture.md#brightness-controls).
 - **Live settings**: most changes are persisted and applied immediately, without a separate save step.
 - **Light and dark themes**: follow the system appearance by default or remember a manual selection.
-- **Chinese and English interface**: the settings window follows your Windows display language by default, and the language can be switched at any time under More → General settings.
+- **Chinese and English interface**: the settings window follows your Windows display language by default, and the language can be switched at any time under Settings (gear) → General settings.
 
 ## Screenshots
 
@@ -104,6 +106,8 @@ This repository is the source of truth for:
 Host integrations consume this repository as a submodule and supply their own host adapters. They do not maintain a second copy of the helper source.
 
 ### Prerequisites
+
+Building the Windows x64 helper now also requires Visual Studio C++ Build Tools and a Windows SDK with C++/WinRT headers. The native taskbar build reuses `scripts/windows-toolchain.ps1`; if discovery cannot find an existing installation, set `VSINSTALLDIR` to that installation directory. No additional runtime download is performed for the taskbar component.
 
 - Node.js `24.14.0` as pinned by `.node-version`
 - Windows 11 x64 for the release installer, portable archive, and full Windows behavior
@@ -185,7 +189,7 @@ More technical information:
 
 ## Release Integrity
 
-Public builds follow an immutable acceptance process: a clean `main` build is published once, its installer and portable archive are tested, and the same assets are promoted from Pre-release to stable without replacement. Every release includes SHA-256 checksums and an artifact manifest tied to the source commit.
+Public builds use a two-stage acceptance process: a clean `main` build is published as a replaceable Pre-release candidate, whose same-version assets may be refreshed while testing continues; after acceptance, the exact assets are promoted to stable without replacement. Every release includes SHA-256 checksums and an artifact manifest tied to the source commit. Stable assets are immutable; replacing a stable binary requires a new patch version and tag.
 
 ## License
 

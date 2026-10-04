@@ -56,6 +56,11 @@ impl Engine {
         let mut config_rx = self.config_rx.clone();
         let mut config = config_rx.borrow_and_update().clone();
         let mut shutdown_rx = self.shutdown_rx.resubscribe();
+        let taskbar = platform::TaskbarAppearanceWorker::new(self.event_tx.clone());
+        taskbar.configure(
+            config.enabled && config.taskbar_appearance.enabled,
+            &config.taskbar_appearance,
+        );
         let mut previous_input = InputState::default();
         let mut previous_cursor = None;
         let mut foreground_tracker = ForegroundTracker::default();
@@ -350,11 +355,14 @@ impl Engine {
                 changed = config_rx.changed() => {
                     if changed.is_ok() {
                         config = config_rx.borrow_and_update().clone();
+                        taskbar.configure(config.enabled && config.taskbar_appearance.enabled, &config.taskbar_appearance);
                     }
                 }
                 _ = shutdown_rx.recv() => break,
             }
         }
+        taskbar.configure(false, &config.taskbar_appearance);
+        drop(taskbar);
         platform::configure_topmost_pins(false);
         platform::clear_topmost_pins();
         platform::configure_window_drag_capture(
@@ -703,13 +711,13 @@ impl Engine {
             input,
             |handle, _| cached_edge_hide_live_state(live_states, handle),
         ) {
-            match execute_edge_hide_command(command) {
+            match execute_edge_hide_command(command, config.edge_hide.animation_enabled) {
                 Ok((kind, rect)) => {
                     let handle = edge_hide_command_handle(command);
                     let live_state = edge_hide_live_state(handle);
                     live_states.insert(handle, live_state);
                     if let Some(cleanup) = edge_hide.command_succeeded(command, live_state, now) {
-                        match execute_edge_hide_command(cleanup) {
+                        match execute_edge_hide_command(cleanup, false) {
                             Ok(_) => {
                                 let cleanup_live_state = edge_hide_live_state(handle);
                                 edge_hide.command_succeeded(cleanup, cleanup_live_state, now);
@@ -794,18 +802,96 @@ fn engine_poll_interval(configured_ms: u64, dragging: bool) -> Duration {
     })
 }
 
-fn execute_edge_hide_command(command: EdgeHideCommand) -> Result<(&'static str, platform::Rect)> {
-    match command {
-        EdgeHideCommand::Collapse { handle, rect } => {
-            platform::set_window_rect_topmost(handle, rect, true)
-                .map(|_| ("edge-hide.collapse", rect))
-        }
+const EDGE_HIDE_ANIMATION_DURATION: Duration = Duration::from_millis(160);
+
+fn execute_edge_hide_command(
+    command: EdgeHideCommand,
+    animated: bool,
+) -> Result<(&'static str, platform::Rect)> {
+    let (handle, rect, topmost, kind) = match command {
+        EdgeHideCommand::Collapse { handle, rect } => (handle, rect, true, "edge-hide.collapse"),
         EdgeHideCommand::Restore {
             handle,
             rect,
             topmost,
-        } => platform::set_window_rect_topmost(handle, rect, topmost)
-            .map(|_| ("edge-hide.restore", rect)),
+        } => (handle, rect, topmost, "edge-hide.restore"),
+    };
+    let from = if animated {
+        platform::window_info_for_handle(handle)
+            .ok()
+            .flatten()
+            .map(|window| window.rect)
+            .unwrap_or(rect)
+    } else {
+        rect
+    };
+    animate_edge_hide_window(handle, from, rect, topmost, animated)?;
+    Ok((kind, rect))
+}
+
+fn animate_edge_hide_window(
+    handle: platform::WindowHandle,
+    from: platform::Rect,
+    to: platform::Rect,
+    topmost: bool,
+    animated: bool,
+) -> Result<()> {
+    run_edge_hide_transition(
+        from,
+        to,
+        animated,
+        |rect, final_frame| {
+            if final_frame {
+                platform::set_window_rect_topmost(handle, rect, topmost)
+            } else {
+                platform::set_window_rect(handle, rect)
+            }
+        },
+        std::thread::sleep,
+    )
+}
+
+fn run_edge_hide_transition(
+    from: platform::Rect,
+    to: platform::Rect,
+    animated: bool,
+    mut move_window: impl FnMut(platform::Rect, bool) -> Result<()>,
+    mut sleep: impl FnMut(Duration),
+) -> Result<()> {
+    if !animated || from == to {
+        return move_window(to, true);
+    }
+    let frames = (EDGE_HIDE_ANIMATION_DURATION.as_millis() / 16).clamp(4, 20) as i32;
+    let frame_duration = EDGE_HIDE_ANIMATION_DURATION / frames as u32;
+    for frame in 1..=frames {
+        let progress = frame as f64 / frames as f64;
+        let eased = 1.0 - (1.0 - progress).powi(3);
+        let final_frame = frame == frames;
+        let rect = interpolate_edge_hide_rect(from, to, eased, final_frame);
+        move_window(rect, final_frame)?;
+        if !final_frame {
+            sleep(frame_duration);
+        }
+    }
+    Ok(())
+}
+
+fn interpolate_edge_hide_rect(
+    from: platform::Rect,
+    to: platform::Rect,
+    progress: f64,
+    final_frame: bool,
+) -> platform::Rect {
+    if final_frame {
+        return to;
+    }
+    let mix =
+        |start: i32, end: i32| (start as f64 + (end - start) as f64 * progress).round() as i32;
+    platform::Rect {
+        left: mix(from.left, to.left),
+        top: mix(from.top, to.top),
+        right: mix(from.right, to.right),
+        bottom: mix(from.bottom, to.bottom),
     }
 }
 
@@ -1115,6 +1201,71 @@ mod tests {
             primary: true,
             device_id: [0; 128],
         }
+    }
+
+    #[test]
+    fn edge_hide_animation_switch_skips_all_intermediate_moves_and_waits() {
+        let from = platform::Rect {
+            left: -400,
+            top: 50,
+            right: 0,
+            bottom: 350,
+        };
+        let to = platform::Rect {
+            left: -20,
+            top: 50,
+            right: 380,
+            bottom: 350,
+        };
+        for animated in [false, true] {
+            let mut moves = Vec::new();
+            let mut sleeps = Vec::new();
+            run_edge_hide_transition(
+                from,
+                to,
+                animated,
+                |rect, final_frame| {
+                    moves.push((rect, final_frame));
+                    Ok(())
+                },
+                |duration| sleeps.push(duration),
+            )
+            .unwrap();
+            assert_eq!(moves.last(), Some(&(to, true)));
+            assert_eq!(
+                moves.iter().filter(|(_, final_frame)| *final_frame).count(),
+                1
+            );
+            if animated {
+                assert_eq!(moves.len(), 10);
+                assert_eq!(sleeps.len(), 9);
+            } else {
+                assert_eq!(moves, vec![(to, true)]);
+                assert!(sleeps.is_empty());
+            }
+        }
+    }
+
+    #[test]
+    fn edge_hide_animation_preserves_window_size_until_final_frame() {
+        let from = Rect {
+            left: 0,
+            top: 120,
+            right: 600,
+            bottom: 700,
+        };
+        let to = Rect {
+            left: -584,
+            top: 120,
+            right: 16,
+            bottom: 700,
+        };
+        let middle = interpolate_edge_hide_rect(from, to, 0.5, false);
+        assert_eq!(middle.width(), from.width());
+        assert_eq!(middle.height(), from.height());
+        assert!(middle.left < from.left);
+        assert!(middle.left > to.left);
+        assert_eq!(interpolate_edge_hide_rect(from, to, 0.1, true), to);
     }
 
     #[test]

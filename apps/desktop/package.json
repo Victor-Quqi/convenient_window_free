@@ -1,7 +1,7 @@
 {
   "name": "convenient-window-desktop",
   "private": true,
-  "version": "0.7.0",
+  "version": "0.6.3",
   "description": "Convenient Window standalone desktop app for Windows 11",
   "type": "module",
   "engines": {
@@ -12,7 +12,7 @@
     "build": "vite build",
     "preview": "vite preview --host 127.0.0.1",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run --maxWorkers=2",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
     "tauri:build": "tauri build --bundles nsis",

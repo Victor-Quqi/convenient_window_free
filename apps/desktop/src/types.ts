@@ -88,6 +88,25 @@ export interface AppSettings {
   windowDrag: WindowDragSettings;
   topmostPin: TopmostPinSettings;
   ocr: OcrSettings;
+  taskbarAppearance: TaskbarAppearanceSettings;
+}
+
+export type TaskbarAppearanceMode = "transparent" | "acrylic" | "solid";
+
+export interface TaskbarAppearanceStatus {
+  state: string;
+  errorCode?: string;
+  backgrounds?: number;
+  available?: boolean;
+  materials?: TaskbarAppearanceMode[];
+}
+
+export interface TaskbarAppearanceSettings {
+  enabled: boolean;
+  mode: TaskbarAppearanceMode;
+  opacity: number;
+  tint: string;
+  showBorder: boolean;
 }
 
 export type GestureTriggerButton = "right" | "middle" | "x1" | "x2";
@@ -122,6 +141,7 @@ export interface MouseGestureSettings {
 
 export interface EdgeHideSettings {
   enabled: boolean;
+  animationEnabled: boolean;
   showPreview: boolean;
   showRestoreHint: boolean;
   keepExpandedWhenForeground: boolean;

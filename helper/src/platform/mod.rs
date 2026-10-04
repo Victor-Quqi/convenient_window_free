@@ -29,7 +29,9 @@ pub use self::windows::*;
 pub use self::unix::*;
 
 use crate::config::AppConfig;
+pub mod taskbar;
 use serde::Serialize;
+pub use taskbar::TaskbarAppearanceWorker;
 
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
 #[serde(rename_all = "camelCase")]

@@ -30,7 +30,10 @@ pub fn lock_screen() -> Result<()> {
 
 pub fn foreground_window() -> Result<Option<WindowInfo>> {
     let hwnd = unsafe { GetForegroundWindow() };
-    window_info(hwnd)
+    // Screenshot and other capture surfaces often use WS_EX_TOOLWINDOW. They
+    // are still useful foreground signals for edge-hide, but must not become
+    // draggable/candidate windows.
+    window_info(hwnd, true)
 }
 
 pub fn window_exists(handle: WindowHandle) -> bool {
@@ -41,13 +44,14 @@ pub fn window_is_minimized(handle: WindowHandle) -> bool {
     unsafe { IsIconic(HWND(handle.0 as *mut core::ffi::c_void)).as_bool() }
 }
 
-fn window_info(hwnd: HWND) -> Result<Option<WindowInfo>> {
+fn window_info(hwnd: HWND, include_tool_window: bool) -> Result<Option<WindowInfo>> {
     if hwnd.0.is_null() || !unsafe { IsWindowVisible(hwnd).as_bool() } {
         return Ok(None);
     }
 
     let ex_style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
-    if (ex_style & WS_EX_TOOLWINDOW.0) != 0 {
+    let tool_window = (ex_style & WS_EX_TOOLWINDOW.0) != 0;
+    if tool_window && !include_tool_window {
         return Ok(None);
     }
 
@@ -70,7 +74,7 @@ fn window_info(hwnd: HWND) -> Result<Option<WindowInfo>> {
         handle: WindowHandle(hwnd.0 as isize),
         rect,
         title: window_text(hwnd),
-        transient: has_owner || class_name == "#32768",
+        transient: tool_window || has_owner || class_name == "#32768",
         class_name,
         process_name: cached_process_name(process_id),
         maximized: unsafe { IsZoomed(hwnd).as_bool() },
@@ -80,7 +84,7 @@ fn window_info(hwnd: HWND) -> Result<Option<WindowInfo>> {
 }
 
 pub fn window_info_for_handle(handle: WindowHandle) -> Result<Option<WindowInfo>> {
-    window_info(HWND(handle.0 as *mut core::ffi::c_void))
+    window_info(HWND(handle.0 as *mut core::ffi::c_void), false)
 }
 
 /// 找出鼠标下可用于拖拽的窗口。
@@ -100,7 +104,7 @@ pub fn draggable_window_at(point: Point, paused_apps: &[String]) -> Result<Optio
         unsafe {
             let _ = ShowWindow(hwnd, SW_RESTORE);
         }
-        window = match window_info(hwnd)? {
+        window = match window_info(hwnd, false)? {
             Some(window) => window,
             None => return Ok(None),
         };
@@ -128,7 +132,7 @@ fn window_at_point_for_drag(point: Point) -> Result<Option<(HWND, WindowInfo)>> 
             GA_ROOT,
         )
     };
-    Ok(window_info(hwnd)?.map(|window| (hwnd, window)))
+    Ok(window_info(hwnd, false)?.map(|window| (hwnd, window)))
 }
 
 fn is_drag_candidate(hwnd: HWND, window: &WindowInfo) -> bool {
@@ -203,7 +207,7 @@ pub fn toggle_window_topmost_at(point: Option<Point>) -> Result<(String, bool)> 
             None => GetForegroundWindow(),
         }
     };
-    let Some(window) = window_info(hwnd)? else {
+    let Some(window) = window_info(hwnd, false)? else {
         bail!("未找到可置顶的窗口");
     };
     if window.transient

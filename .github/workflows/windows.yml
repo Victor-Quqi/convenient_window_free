@@ -32,6 +32,10 @@ jobs:
         shell: pwsh
         run: npm run desktop:build
 
+      - name: Verify native taskbar ownership and legacy handoff without Explorer injection
+        shell: pwsh
+        run: ./helper/native/tests/run-native-test.ps1
+
       - name: Verify helper lock contention and recovery
         shell: pwsh
         run: node scripts/helper-instance-smoke.mjs apps/desktop/src-tauri/resources/helper/magic-corners-helper.exe
