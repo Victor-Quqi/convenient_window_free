@@ -37,6 +37,10 @@ it("persists pin offsets and preserves existing settings through the real App an
       const installState = () => ({ installed: true, development: false, version: '0.6.4', bytes: 0 });
       let elevationResult = { ok: true, elevated: true };
       const elevationRequests = [];
+      let startupState = { enabled: false, needsRepair: false };
+      let loginEnabled = false, startupChanged;
+      let finishStartup;
+      const startupRequests = [];
       let setElevation = async elevated => { elevationRequests.push(elevated); return elevationResult; };
       configureHostBridge({
         kind: 'desktop', getInitialSettings: () => structuredClone(stored),
@@ -44,6 +48,11 @@ it("persists pin offsets and preserves existing settings through the real App an
         getPrivilegeState: () => ({ supported: true, elevated: null }),
         startHelper: async () => { startCalls++; return { ok: true }; },
         setHelperElevation: elevated => setElevation(elevated),
+        getAdminStartup: async () => startupState,
+        getStartup: async () => ({ enabled: loginEnabled }),
+        setStartup: async enabled => { loginEnabled = enabled; if (!enabled) startupState = { enabled: false, needsRepair: false }; return { enabled }; },
+        onStartupChanged: async handler => { startupChanged = handler; return () => {}; },
+        setAdminStartup: enabled => { startupRequests.push(enabled); return new Promise(resolve => { finishStartup = resolve; }); },
         saveSettings: async value => { if (failSaves) throw new Error("settings-write-failure"); stored = structuredClone(value); saves++; }
       });
       const settle = async () => { for (let i = 0; i < 8; i++) { await Promise.resolve(); flushSync(); } };
@@ -69,7 +78,47 @@ it("persists pin offsets and preserves existing settings through the real App an
       component = mount(App, { target: document.body }); flushSync(); await settle(); screenshot();
       assert.equal(pin().getAttribute('aria-pressed'), 'true', 'pin offset must survive remount');
       open(0); receiveStatus('connected'); flushSync();
-      const permission = () => document.querySelector('.permission-settings input[role="switch"]');
+      const login = () => document.querySelector('.login-toggle input');
+      assert.equal(login().checked, false);
+      login().click(); await settle();
+      assert.equal(login().checked, true, 'login switch reflects the persisted state');
+      loginEnabled = false;
+      startupChanged(); await settle();
+      assert.equal(login().checked, false, 'tray changes refresh the open settings panel');
+      const startup = () => document.querySelector('.permission-startup input');
+      assert.equal(startup().checked, false);
+      const beforeStartupConnections = connectCalls;
+      startup().click(); await settle();
+      assert.deepEqual(startupRequests, [true]);
+      assert.equal(startup().disabled, true);
+      assert.equal(login().disabled, true, 'login startup cannot race administrator registration');
+      assert.equal(startup().checked, false, 'registration must not be optimistically enabled');
+      startup().dispatchEvent(new Event('change')); await settle();
+      assert.equal(startupRequests.length, 1, 'registration cannot be requested twice while UAC is pending');
+      finishStartup({ enabled: false, needsRepair: false, error: 'adminCancelled' }); await settle();
+      assert.equal(startup().checked, false);
+      assert.equal(startup().disabled, false);
+      startup().click(); await settle();
+      loginEnabled = true;
+      finishStartup({ enabled: true, needsRepair: false }); await settle();
+      assert.equal(startup().checked, true);
+      assert.equal(login().checked, true, 'administrator registration refreshes ordinary startup');
+      assert.equal(connectCalls, beforeStartupConnections, 'login preference does not replace the current helper');
+      startupState = { enabled: true, needsRepair: true };
+      window.dispatchEvent(new Event('focus')); await settle();
+      document.querySelector('.permission-startup button').click(); await settle();
+      assert.equal(startupRequests.at(-1), true, 'repair updates the existing registration');
+      finishStartup({ enabled: true, needsRepair: false }); await settle();
+      startup().click(); await settle();
+      assert.equal(startupRequests.at(-1), false);
+      finishStartup({ enabled: false, needsRepair: false }); await settle();
+      assert.equal(startup().checked, false);
+      startupState = { enabled: true, needsRepair: false };
+      startupChanged(); await settle();
+      login().click(); await settle();
+      assert.equal(login().checked, false);
+      assert.equal(startup().checked, false, 'disabling login refreshes the removed administrator task');
+      const permission = () => document.querySelector('.permission-settings input[aria-label="Administrator access"], .permission-settings input[aria-label="管理员权限"]');
       assert.ok(permission(), 'both real Apps must expose the supported helper permission control');
       assert.equal(permission().getAttribute('aria-label'), 'Administrator access');
       assert.equal(permission().disabled, true, 'a socket without a ready permission report is still unknown');

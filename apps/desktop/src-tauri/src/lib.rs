@@ -1,7 +1,12 @@
 mod adjustment_hud;
 mod command_broker;
+#[cfg(windows)]
+#[path = "../../../../shared/scheduled_owner.rs"]
+mod scheduled_owner;
 mod storage;
 mod supervisor;
+#[cfg(windows)]
+mod windows_admin_startup;
 #[cfg(windows)]
 mod windows_autostart;
 #[cfg(windows)]
@@ -21,7 +26,7 @@ use std::sync::{Arc, Mutex};
 use supervisor::{HelperProcess, StartResult, StopResult};
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::{AppHandle, Manager, RunEvent, State, WindowEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_autostart::ManagerExt;
 
 const HELPER_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -70,6 +75,8 @@ struct DesktopState {
     helper: Arc<Mutex<HelperProcess>>,
     settings_write_lock: Mutex<()>,
     shutdown_started: AtomicBool,
+    login_start_pending: AtomicBool,
+    startup_lock: Arc<Mutex<()>>,
 }
 
 #[derive(Serialize)]
@@ -139,14 +146,119 @@ async fn start_helper(state: State<'_, DesktopState>) -> Result<StartResult, Str
     let helper = Arc::clone(&state.helper);
     let payload_dir = state.paths.helper_payload_dir.clone();
     let data_dir = state.paths.helper_data_dir.clone();
+    let at_login = state.login_start_pending.swap(false, Ordering::AcqRel);
     tauri::async_runtime::spawn_blocking(move || {
-        helper
+        let mut helper = helper
             .lock()
-            .map_err(|_| "helper 进程状态锁已损坏".to_string())?
-            .start(&payload_dir, &data_dir)
+            .map_err(|_| "helper 进程状态锁已损坏".to_string())?;
+        #[cfg(windows)]
+        if at_login {
+            return helper.start_at_login(&payload_dir, &data_dir);
+        }
+        #[cfg(not(windows))]
+        let _ = at_login;
+        helper.start(&payload_dir, &data_dir)
     })
     .await
     .map_err(|error| format!("helper 启动任务失败：{error}"))?
+}
+
+#[cfg(windows)]
+#[tauri::command]
+async fn admin_startup_status(
+    state: State<'_, DesktopState>,
+) -> Result<windows_admin_startup::StartupState, String> {
+    let helper = state
+        .paths
+        .helper_payload_dir
+        .join(supervisor::helper_executable_name());
+    let data = state.paths.helper_data_dir.clone();
+    tauri::async_runtime::spawn_blocking(move || windows_admin_startup::state(&helper, &data))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[cfg(windows)]
+#[tauri::command]
+async fn set_admin_startup(
+    enabled: bool,
+    app: AppHandle,
+    state: State<'_, DesktopState>,
+) -> Result<windows_admin_startup::StartupState, String> {
+    let payload = state.paths.helper_payload_dir.clone();
+    let data = state.paths.helper_data_dir.clone();
+    let startup_lock = Arc::clone(&state.startup_lock);
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = startup_lock
+            .lock()
+            .map_err(|_| "Startup state lock is poisoned")?;
+        if enabled {
+            windows_admin_startup::enable(&payload, &data)?;
+        } else {
+            windows_admin_startup::remove(false)?;
+        }
+        windows_admin_startup::state(&payload.join(supervisor::helper_executable_name()), &data)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    refresh_startup_controls(&app);
+    result
+}
+
+#[tauri::command]
+fn startup_status(app: AppHandle) -> Result<bool, String> {
+    startup_enabled(&app)
+}
+
+fn startup_enabled(app: &AppHandle) -> Result<bool, String> {
+    #[cfg(windows)]
+    {
+        let _ = app;
+        windows_autostart::enabled_for_current_executable().map_err(|e| e.to_string())
+    }
+    #[cfg(not(windows))]
+    {
+        app.autolaunch().is_enabled().map_err(|e| e.to_string())
+    }
+}
+
+fn refresh_startup_controls(app: &AppHandle) {
+    if let Ok(enabled) = startup_enabled(app) {
+        let _ = app.state::<NativeMenu>().autostart.set_checked(enabled);
+    }
+    let _ = app.emit("startup-changed", ());
+}
+
+#[tauri::command]
+async fn set_startup(enabled: bool, app: AppHandle) -> Result<bool, String> {
+    let startup_lock = Arc::clone(&app.state::<DesktopState>().startup_lock);
+    let worker_app = app.clone();
+    let result = tauri::async_runtime::spawn_blocking(move || {
+        let _guard = startup_lock
+            .lock()
+            .map_err(|_| "Startup state lock is poisoned")?;
+        if enabled {
+            #[cfg(windows)]
+            windows_autostart::enable().map_err(|e| e.to_string())?;
+            #[cfg(not(windows))]
+            worker_app
+                .autolaunch()
+                .enable()
+                .map_err(|e| e.to_string())?;
+        } else {
+            #[cfg(windows)]
+            windows_admin_startup::remove(false)?;
+            worker_app
+                .autolaunch()
+                .disable()
+                .map_err(|e| e.to_string())?;
+        }
+        startup_enabled(&worker_app)
+    })
+    .await
+    .map_err(|e| e.to_string())?;
+    refresh_startup_controls(&app);
+    result
 }
 
 #[tauri::command]
@@ -333,7 +445,7 @@ fn set_native_labels(app: AppHandle, labels: NativeLabels) -> Result<(), String>
 
 fn create_tray(app: &AppHandle) -> tauri::Result<()> {
     let show = MenuItem::with_id(app, "show", "Open settings", true, None::<&str>)?;
-    let autostart_enabled = app.autolaunch().is_enabled().unwrap_or(false);
+    let autostart_enabled = startup_enabled(app).unwrap_or(false);
     let autostart = CheckMenuItem::with_id(
         app,
         "autostart",
@@ -354,20 +466,10 @@ fn create_tray(app: &AppHandle) -> tauri::Result<()> {
             "show" => show_main_window(app),
             "autostart" => {
                 let desired = autostart_menu.is_checked().unwrap_or(false);
-                let manager = app.autolaunch();
-                let previous = manager.is_enabled().unwrap_or(!desired);
-                let result = if desired {
-                    #[cfg(not(windows))]
-                    let result = manager.enable().map_err(|error| error.to_string());
-                    #[cfg(windows)]
-                    let result = windows_autostart::enable().map_err(|error| error.to_string());
-                    result
-                } else {
-                    manager.disable().map_err(|error| error.to_string())
-                };
-                if result.is_err() {
-                    let _ = autostart_menu.set_checked(previous);
-                }
+                let app = app.clone();
+                tauri::async_runtime::spawn(async move {
+                    let _ = set_startup(desired, app).await;
+                });
             }
             "quit" => app.exit(0),
             _ => {}
@@ -431,6 +533,16 @@ fn path_string(path: &Path) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    #[cfg(windows)]
+    if let Some(result) = windows_admin_startup::handle_cli() {
+        let code = if let Err(error) = result {
+            eprintln!("{error}");
+            1
+        } else {
+            0
+        };
+        std::process::exit(code);
+    }
     let explicit_data_dir = explicit_data_dir().expect("invalid desktop data directory override");
     let mut context = tauri::generate_context!();
     let main_window_position = context
@@ -462,6 +574,10 @@ pub fn run() {
                 helper: Arc::new(Mutex::new(HelperProcess::default())),
                 settings_write_lock: Mutex::new(()),
                 shutdown_started: AtomicBool::new(false),
+                login_start_pending: AtomicBool::new(
+                    std::env::args().any(|arg| arg == "--autostart"),
+                ),
+                startup_lock: Arc::new(Mutex::new(())),
             });
             adjustment_hud::start(app.handle())?;
             #[cfg(windows)]
@@ -504,6 +620,12 @@ pub fn run() {
             desktop_status,
             start_helper,
             set_helper_elevation,
+            startup_status,
+            set_startup,
+            #[cfg(windows)]
+            admin_startup_status,
+            #[cfg(windows)]
+            set_admin_startup,
             stop_helper,
             load_config,
             save_config,

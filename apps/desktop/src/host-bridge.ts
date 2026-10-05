@@ -1,3 +1,9 @@
+export interface AdminStartupState {
+  enabled: boolean | null;
+  needsRepair: boolean;
+  error?: string;
+}
+
 export interface HostBridge {
   readonly kind: "desktop";
   setLanguage?(language: import("./i18n").Language): Promise<void>;
@@ -7,10 +13,16 @@ export interface HostBridge {
     error?: string;
     helperPath?: string;
     dataDir?: string;
+    warning?: string;
   }>;
   stopHelper(): Promise<{ ok: boolean; error?: string }>;
   getPrivilegeState?(): { supported: boolean; elevated: boolean | null };
   setHelperElevation?(elevated: boolean): Promise<{ ok: boolean; elevated: boolean | null; warning?: string; error?: string }>;
+  getAdminStartup?(): Promise<AdminStartupState>;
+  setAdminStartup?(enabled: boolean): Promise<AdminStartupState>;
+  getStartup?(): Promise<{ enabled: boolean | null; error?: string }>;
+  setStartup?(enabled: boolean): Promise<{ enabled: boolean | null; error?: string }>;
+  onStartupChanged?(handler: () => void): Promise<() => void>;
   getHelperToken(): string | null;
   getHelperState(): HelperInstallState;
   openExternal(url: string): { ok: boolean; error?: string };

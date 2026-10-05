@@ -8,6 +8,8 @@ mod ipc;
 mod logging;
 mod paths;
 mod platform;
+#[path = "../../shared/scheduled_owner.rs"]
+mod scheduled_owner;
 mod single_instance;
 mod storage;
 mod usage;
@@ -134,6 +136,7 @@ async fn wait_for_task(name: &str, task: &mut JoinHandle<Result<()>>) -> Result<
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<()> {
+    desktop_owner::validate_scheduled_start()?;
     #[cfg(target_os = "windows")]
     unsafe {
         use windows::Win32::UI::HiDpi::{

@@ -16,6 +16,9 @@ pub struct ElevatedProcess {
 }
 
 impl ElevatedProcess {
+    pub fn from_handles(process: ProcessHandle, stop: ProcessHandle) -> Self {
+        Self { process, stop }
+    }
     pub fn id(&self) -> u32 {
         self.process.id()
     }
@@ -68,6 +71,28 @@ pub fn launch(
     data_dir: &Path,
     owner_birth: u64,
 ) -> Result<ElevatedProcess, String> {
+    let stop_name = format!(
+        "Local\\ConvenientWindow.HelperStop.{}",
+        uuid::Uuid::new_v4()
+    );
+    let stop_wide = wide(OsStr::new(&stop_name));
+    let stop = unsafe { CreateEventW(None, true, false, ptr(&stop_wide)) }
+        .map(ProcessHandle::new)
+        .map_err(|error| error.to_string())?;
+    let parameters = format!(
+        "--data-dir {} --desktop-owner {} {} --desktop-stop-event {}",
+        quote_argument(&data_dir.to_string_lossy()),
+        std::process::id(),
+        owner_birth,
+        quote_argument(&stop_name)
+    );
+    Ok(ElevatedProcess {
+        process: run_as_admin(executable, &parameters)?,
+        stop,
+    })
+}
+
+pub fn run_as_admin(executable: &Path, parameters: &str) -> Result<ProcessHandle, String> {
     // ShellExecute may invoke COM shell extensions on this worker thread.
     struct Apartment;
     impl Drop for Apartment {
@@ -81,23 +106,8 @@ pub fn launch(
         .ok()
         .map_err(|error| error.to_string())?;
     let _apartment = Apartment;
-    let stop_name = format!(
-        "Local\\ConvenientWindow.HelperStop.{}",
-        uuid::Uuid::new_v4()
-    );
-    let stop_wide = wide(OsStr::new(&stop_name));
-    let stop = unsafe { CreateEventW(None, true, false, ptr(&stop_wide)) }
-        .map(ProcessHandle::new)
-        .map_err(|error| error.to_string())?;
     let file = wide(executable.as_os_str());
-    let parameters = format!(
-        "--data-dir {} --desktop-owner {} {} --desktop-stop-event {}",
-        quote_argument(&data_dir.to_string_lossy()),
-        std::process::id(),
-        owner_birth,
-        quote_argument(&stop_name)
-    );
-    let parameters = wide(OsStr::new(&parameters));
+    let parameters = wide(OsStr::new(parameters));
     let directory = wide(
         executable
             .parent()
@@ -118,10 +128,7 @@ pub fn launch(
     if info.hProcess.is_invalid() {
         return Err("Admin helper process handle is unavailable".into());
     }
-    Ok(ElevatedProcess {
-        process: ProcessHandle::new(info.hProcess),
-        stop,
-    })
+    Ok(ProcessHandle::new(info.hProcess))
 }
 
 fn launch_error(error: windows::core::Error) -> String {

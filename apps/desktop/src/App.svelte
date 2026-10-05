@@ -18,7 +18,7 @@
   import { prepareSettingsUpdate } from "./settings-sync";
   import { numberSetting } from "./number-setting";
   import { SettingsApplyController } from "./settings-persistence";
-  import { getHostBridge } from "./host-bridge";
+  import { getHostBridge, type AdminStartupState } from "./host-bridge";
   import { defaultSettings, loadSettings, MAX_GESTURE_TEMPLATES, normalizeSettings, saveSettings } from "./settings-store";
   import { LANGUAGE_KEY, normalizeLanguage, resolveInitialLanguage, translator } from "./i18n";
   import { en, format, zh } from "./i18n";
@@ -127,6 +127,52 @@
   let helperElevated: boolean | null = null;
   let switchingPrivilege = false;
   let privilegeNotice = "";
+  let adminStartup: AdminStartupState = { enabled: null, needsRepair: false };
+  let changingAdminStartup = false;
+  let startupNotice = "";
+  let startup: { enabled: boolean | null; error?: string } = { enabled: null };
+  let changingStartup = false;
+
+  async function refreshAdminStartup(): Promise<void> {
+    if (changingAdminStartup || changingStartup) return;
+    if (host.getStartup) startup = await host.getStartup();
+    if (administratorModeSupported && host.getAdminStartup) {
+      adminStartup = await host.getAdminStartup();
+    }
+  }
+
+  async function setStartup(enabled: boolean): Promise<void> {
+    if (!host.setStartup || changingStartup || changingAdminStartup) return;
+    changingStartup = true;
+    startupNotice = "";
+    try {
+      startup = await host.setStartup(enabled);
+      startupNotice = startup.error ?? "";
+      if (administratorModeSupported && host.getAdminStartup) adminStartup = await host.getAdminStartup();
+    } finally { changingStartup = false; }
+  }
+
+  async function setAdminStartup(enabled: boolean): Promise<void> {
+    if (!host.setAdminStartup || changingAdminStartup || changingStartup) return;
+    changingAdminStartup = true;
+    startupNotice = "";
+    try {
+      adminStartup = await host.setAdminStartup(enabled);
+      startupNotice = adminStartup.error ?? "";
+      if (host.getStartup) startup = await host.getStartup();
+    } finally { changingAdminStartup = false; }
+  }
+
+  onMount(() => {
+    let disposed = false;
+    let unlisten: (() => void) | undefined;
+    void refreshAdminStartup();
+    void host.onStartupChanged?.(() => { void refreshAdminStartup(); }).then(stop => {
+      if (disposed) stop(); else unlisten = stop;
+    }).catch(() => {});
+    window.addEventListener("focus", refreshAdminStartup);
+    return () => { disposed = true; unlisten?.(); window.removeEventListener("focus", refreshAdminStartup); };
+  });
   let helperPlatform: HelperPlatformInfo | null = null;
   let displays: DisplayInfo[] = [fallbackDisplay];
   let displayReady = false;
@@ -1016,6 +1062,7 @@
 
   async function startHelper(): Promise<boolean> {
     const result = await host.startHelper();
+    privilegeNotice = result.warning ?? "";
     lastMessage = result.ok
       ? result.alreadyRunning ? "helperStarting" : "helperStartedConnecting"
       : result.error ?? "helperStartFailed";
@@ -1418,8 +1465,18 @@
                 <div><span>{ui("masterState")}</span><strong class:on={settings.enabled}>{settings.enabled ? ui("masterOn") : ui("masterOffState")}</strong><p>{ui("masterStateDetail")}</p></div>
                 <div><span>{ui("helperSection")}</span><strong class:on={helperStatus === "connected"}>{helperStatus === "connected" ? ui("connected") : helperStatus === "connecting" ? ui("connecting") : ui("disconnected")}</strong><p>{ui("helperRole")}</p>{#if helperPlatform}<small class="platform-capabilities">{helperPlatform.system} · {helperPlatform.architecture}{helperPlatform.session ? ` · ${helperPlatform.session}` : ""} · {unavailableCapabilityText(helperPlatform)}</small>{/if}</div>
               </div>
-              {#if administratorModeSupported}
+              {#if administratorModeSupported || host.getStartup}
                 <div class="permission-settings">
+                  {#if host.getStartup}
+                    <label class="permission-toggle login-toggle">
+                      <span>{ui("trayAutostart")}</span>
+                      <span class="mini-switch">
+                        <input type="checkbox" role="switch" aria-label={ui("trayAutostart")} checked={startup.enabled === true} disabled={startup.enabled === null || changingStartup || changingAdminStartup} on:change={(event) => { event.currentTarget.checked = startup.enabled === true; void setStartup(!startup.enabled); }} />
+                        <span aria-hidden="true"></span>
+                      </span>
+                    </label>
+                  {/if}
+                  {#if administratorModeSupported}
                   <label class="permission-toggle" title={ui("adminModeDetail")}>
                     <span>{ui("adminMode")}</span>
                     {#if switchingPrivilege}<small role="status">{ui("adminSwitching")}</small>{:else if helperElevated === null}<small role="status">{ui("adminStateUnknown")}</small>{/if}
@@ -1428,7 +1485,20 @@
                       <span aria-hidden="true"></span>
                     </span>
                   </label>
+                  <div class="permission-startup">
+                    <label class="permission-toggle" title={ui("adminStartupDetail")}>
+                      <span>{ui("adminStartup")}</span>
+                      {#if changingAdminStartup}<small>{ui("adminSwitching")}</small>{/if}
+                      <span class="mini-switch">
+                        <input type="checkbox" role="switch" aria-label={ui("adminStartup")} checked={adminStartup.enabled === true} disabled={adminStartup.enabled === null || changingAdminStartup || changingStartup} on:change={(event) => { event.currentTarget.checked = adminStartup.enabled === true; void setAdminStartup(!adminStartup.enabled); }} />
+                        <span></span>
+                      </span>
+                    </label>
+                    {#if adminStartup.needsRepair}<button class="quiet" disabled={changingAdminStartup || changingStartup} title={ui("adminStartupRepair")} on:click={() => setAdminStartup(true)}>{ui("adminStartupRepairAction")}</button>{/if}
+                  </div>
+                  {/if}
                   {#if privilegeNotice}<p role="status">{statusText(privilegeNotice)}</p>{/if}
+                  {#if startupNotice || startup.error || adminStartup.error}<p role="status">{statusText(startupNotice || startup.error || adminStartup.error || "")}</p>{/if}
                 </div>
               {/if}
               <div class="power-actions"><button class="apply" disabled={!helperInstallState.installed || settings.enabled || starting || stopping || switchingPrivilege} on:click={() => setPowerEnabled(true)} type="button">{ui("openFeature")}</button><button class="quiet" disabled={switchingPrivilege || starting || stopping || (!settings.enabled && helperStatus === "disconnected")} on:click={() => setPowerEnabled(false)} type="button">{ui("closeFeature")}</button><button aria-live="polite" class:failed={connectionTestState === "failed"} class:success={connectionTestState === "success"} class:testing={connectionTestState === "testing"} class="quiet connection-test" disabled={helperStatus !== "connected" || connectionTestState === "testing"} on:click={runConnectionTest} type="button"><i aria-hidden="true"></i><span>{connectionTestState === "testing" ? ui("connectionTesting") : connectionTestState === "success" ? ui("connectionOk") : connectionTestState === "failed" ? ui("connectionFailed") : ui("connectionTest")}</span></button><button class="quiet" on:click={copyDiagnostics} type="button">{ui("diagnostics")}</button></div>

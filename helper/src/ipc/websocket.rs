@@ -157,6 +157,7 @@ async fn handle_connection(
                     "processId": std::process::id(),
                     "elevated": crate::desktop_owner::elevated(),
                     "desktopManaged": crate::desktop_owner::managed(),
+                    "scheduledInstance": crate::desktop_owner::scheduled_instance(),
                     "protocolVersion": PROTOCOL_VERSION,
                     "schemaVersion": SCHEMA_VERSION,
                     "platform": crate::platform::platform_info(),

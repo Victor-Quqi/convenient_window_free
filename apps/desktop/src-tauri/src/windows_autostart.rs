@@ -95,11 +95,46 @@ pub fn migrate_current_user() -> std::io::Result<()> {
 
 /// auto-launch 0.5 omits path quotes. Write the complete command in one operation.
 pub fn enable() -> std::io::Result<()> {
-    let (run, _) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(RUN)?;
+    let user = RegKey::predef(HKEY_CURRENT_USER);
+    let (run, _) = user.create_subkey(RUN)?;
     run.set_value(
         STARTUP_NAME,
         &format!("\"{}\" --autostart", std::env::current_exe()?.display()),
-    )
+    )?;
+    match user.open_subkey_with_flags(APPROVED, KEY_WRITE) {
+        Ok(approved) => match approved.delete_value(STARTUP_NAME) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
+    }
+}
+
+pub fn enabled_for_current_executable() -> std::io::Result<bool> {
+    let user = RegKey::predef(HKEY_CURRENT_USER);
+    let run = match user.open_subkey(RUN) {
+        Ok(run) => run,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    let command: String = match run.get_value(STARTUP_NAME) {
+        Ok(command) => command,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+        Err(error) => return Err(error),
+    };
+    if !is_our_command(&command, &std::env::current_exe()?) {
+        return Ok(false);
+    }
+    match user
+        .open_subkey(APPROVED)
+        .and_then(|key| key.get_raw_value(STARTUP_NAME))
+    {
+        Ok(value) => Ok(!matches!(value.bytes.first(), Some(3 | 7))),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(true),
+        Err(error) => Err(error),
+    }
 }
 
 #[cfg(test)]

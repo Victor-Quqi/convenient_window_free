@@ -901,3 +901,6 @@ body, .topbar, .drawer, .drawer-head, .mode-nav, .power-facts, .power-orb,
 .permission-toggle input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 3px; }
 .permission-toggle input:disabled + span { opacity: .45; cursor: default; }
 .permission-settings > p { margin: 6px 0 0; }
+.permission-startup { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.permission-startup > label { flex: 1; }
+.login-toggle { margin-bottom: 10px; }

@@ -114,7 +114,37 @@ impl Default for HelperProcess {
 impl HelperProcess {
     pub fn start(&mut self, payload_dir: &Path, data_dir: &Path) -> Result<StartResult, String> {
         // Automatic recovery always starts without a UAC prompt.
-        self.start_mode(payload_dir, data_dir, false)
+        self.start_mode(payload_dir, data_dir, false, false)
+    }
+
+    #[cfg(windows)]
+    pub fn start_at_login(
+        &mut self,
+        payload_dir: &Path,
+        data_dir: &Path,
+    ) -> Result<StartResult, String> {
+        let helper = validate_payload(payload_dir)?;
+        let status = crate::windows_admin_startup::state(&helper, data_dir);
+        let attempt = match status {
+            Ok(status) if !status.enabled => return self.start(payload_dir, data_dir),
+            Ok(status) if status.needs_repair => Err("adminStartupRepair".into()),
+            Ok(_) => self.start_mode(payload_dir, data_dir, true, true),
+            Err(_) => Err("adminStartupFailed".into()),
+        };
+        match attempt {
+            Ok(result) => Ok(result),
+            Err(error) if error == "adminStartupStopFailed" => Err(error),
+            Err(error) => {
+                self.stop(data_dir)?;
+                let mut result = self.start(payload_dir, data_dir)?;
+                result.warning = Some(if error == "adminStartupRepair" {
+                    error
+                } else {
+                    "adminStartupFallback".into()
+                });
+                Ok(result)
+            }
+        }
     }
 
     pub fn elevated(&mut self) -> bool {
@@ -136,7 +166,7 @@ impl HelperProcess {
         let (mut result, warning) = start_with_fallback(elevated, |mode| {
             // Never start a replacement while a failed attempt is still alive.
             self.stop(data_dir)?;
-            self.start_mode(payload_dir, data_dir, mode)
+            self.start_mode(payload_dir, data_dir, mode, false)
         })?;
         result.warning = warning;
         Ok(result)
@@ -147,6 +177,7 @@ impl HelperProcess {
         payload_dir: &Path,
         data_dir: &Path,
         elevated: bool,
+        scheduled: bool,
     ) -> Result<StartResult, String> {
         self.refresh();
         let helper_path = validate_payload(payload_dir)?;
@@ -172,12 +203,18 @@ impl HelperProcess {
         #[cfg(windows)]
         let owner_birth = crate::windows_process::current_birth()?;
         #[cfg(not(windows))]
+        let _ = scheduled;
+        #[cfg(not(windows))]
         if elevated {
             return Err("Administrator mode is only available on Windows".into());
         }
         #[cfg(windows)]
         if elevated {
-            let process = crate::windows_elevation::launch(&helper_path, data_dir, owner_birth)?;
+            let process = if scheduled {
+                crate::windows_admin_startup::launch(&helper_path, data_dir, owner_birth)?
+            } else {
+                crate::windows_elevation::launch(&helper_path, data_dir, owner_birth)?
+            };
             // Keep ownership even when a subsequent token query fails.
             self.child = Some(ManagedChild::Elevated(process));
             self.elevated = true;
