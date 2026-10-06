@@ -2,12 +2,25 @@ import { describe, expect, it } from "vitest";
 import fixture from "../../../tests/fixtures/i18n-migration.json";
 import errorCodes from "../../../tests/fixtures/runtime-errors.json";
 import { normalizeSettings, defaultSettings } from "./settings-store";
-import { gestureDisplayName, gestureLabels } from "./gesture-names";
+import { gestureDisplayName, gestureLabels, gestureOverlayName } from "./gesture-names";
 import { runtimeErrorKeys, runtimeErrorText } from "./runtime-error";
 import { zh, en, translator } from "./i18n";
 import type { AppSettings } from "./types";
 
 describe("schema 8 and protocol 7 localization contract", () => {
+  it("keeps overlay names short and follows reassigned actions", () => {
+    const gesture = structuredClone(defaultSettings.mouseGestures.gestures[1]);
+    expect(gestureOverlayName(gesture, translator("zh-CN"))).toBe("粘贴");
+    expect(gestureOverlayName(gesture, translator("en-US"))).toBe("Paste");
+    gesture.action = { kind: "shortcut", value: "Alt+F4" };
+    expect(gestureOverlayName(gesture, translator("zh-CN"))).toBe("关闭窗口");
+    gesture.action = { kind: "shortcut", value: "Ctrl+K" };
+    expect(gestureOverlayName(gesture, translator("zh-CN"))).toBe("Ctrl+K");
+    gesture.action = { kind: "__proto__" };
+    expect(gestureOverlayName(gesture, translator("zh-CN"))).toBe("");
+    gesture.name = "整理窗口";
+    expect(gestureOverlayName(gesture, translator("zh-CN"))).toBe("整理窗口");
+  });
   it("migrates the shared legacy fixture without changing user actions, samples or names", () => {
     const migrated = normalizeSettings(fixture.input as Partial<AppSettings>);
     expect(migrated.schemaVersion).toBe(8);

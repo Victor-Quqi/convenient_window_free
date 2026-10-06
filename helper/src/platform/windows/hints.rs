@@ -1,17 +1,19 @@
-use crate::platform::{Point as AppPoint, Rect};
+use super::gesture_overlay::GestureHintManager;
+use super::input::{take_gesture_trail, GestureTrail};
+#[cfg(test)]
+use crate::platform::Point as AppPoint;
+use crate::platform::Rect;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use windows::core::w;
 use windows::Win32::Foundation::RECT;
-use windows::Win32::Foundation::{COLORREF, HANDLE, HWND, POINT, SIZE};
+use windows::Win32::Foundation::{COLORREF, HWND, POINT, SIZE};
 use windows::Win32::Graphics::Gdi::CreateCompatibleBitmap;
 use windows::Win32::Graphics::Gdi::GetDC;
 use windows::Win32::Graphics::Gdi::ReleaseDC;
 use windows::Win32::Graphics::Gdi::{
-    CreateCompatibleDC, CreateDIBSection, CreateFontW, CreatePen, CreateSolidBrush, DeleteDC,
-    DeleteObject, FillRect, Polyline, SelectObject, SetBkMode, SetTextColor, TextOutW,
-    AC_SRC_ALPHA, AC_SRC_OVER, BITMAPINFO, BITMAPINFOHEADER, BI_RGB, BLENDFUNCTION, DIB_RGB_COLORS,
-    PS_SOLID, TRANSPARENT,
+    CreateCompatibleDC, CreateFontW, CreateSolidBrush, DeleteDC, DeleteObject, FillRect,
+    SelectObject, SetBkMode, SetTextColor, TextOutW, AC_SRC_OVER, BLENDFUNCTION, TRANSPARENT,
 };
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -35,16 +37,16 @@ struct HintRequestState {
     hotzone: Option<Rect>,
     edge_hide_preview: Option<Rect>,
     strips: Vec<Rect>,
-    gesture: Vec<AppPoint>,
+    gesture: Option<GestureTrail>,
     gesture_label: Option<String>,
+    gesture_dirty: bool,
 }
 
 enum HintCommand {
     UpdateHotzone(Option<Rect>),
     UpdateEdgeHidePreview(Option<Rect>),
     UpdateStrips(Vec<Rect>),
-    UpdateGesture(Vec<AppPoint>, Option<String>),
-    HideGesture,
+    UpdateGesture,
     HideGestureAndReport(mpsc::Sender<()>),
     ShowOcrToast {
         owner: isize,
@@ -119,7 +121,10 @@ pub fn hide_hotzone_hints() {
     }
 }
 
-pub fn update_gesture_overlay(points: &[AppPoint], label: Option<&str>) {
+pub fn update_gesture_overlay(label: Option<&str>) {
+    let Some(trail) = take_gesture_trail() else {
+        return;
+    };
     let Ok(mut state) = HINT_REQUESTS
         .get_or_init(|| Mutex::new(HintRequestState::default()))
         .lock()
@@ -127,12 +132,21 @@ pub fn update_gesture_overlay(points: &[AppPoint], label: Option<&str>) {
         return;
     };
     let label = label.map(str::to_string);
-    if state.gesture == points && state.gesture_label == label {
-        return;
-    }
-    if send_hint_command(HintCommand::UpdateGesture(points.to_vec(), label.clone())) {
-        state.gesture = points.to_vec();
-        state.gesture_label = label;
+    state.append_trail(trail, label);
+    // The mailbox retains every segment if the wake-up queue is full.
+    let _ = send_hint_command(HintCommand::UpdateGesture);
+}
+
+impl HintRequestState {
+    fn append_trail(&mut self, trail: GestureTrail, label: Option<String>) {
+        let same = self.gesture.as_ref().is_some_and(|old| old.id == trail.id);
+        self.gesture_dirty |= !same || !trail.points.is_empty() || self.gesture_label != label;
+        if same {
+            self.gesture.as_mut().unwrap().points.extend(trail.points);
+        } else {
+            self.gesture = Some(trail);
+        }
+        self.gesture_label = label;
     }
 }
 
@@ -143,13 +157,13 @@ pub fn hide_gesture_overlay() {
     else {
         return;
     };
-    if state.gesture.is_empty() && state.gesture_label.is_none() {
+    if state.gesture.is_none() {
         return;
     }
-    if send_hint_command(HintCommand::HideGesture) {
-        state.gesture.clear();
-        state.gesture_label = None;
-    }
+    state.gesture = None;
+    state.gesture_label = None;
+    state.gesture_dirty = true;
+    let _ = send_hint_command(HintCommand::UpdateGesture);
 }
 
 pub fn hide_gesture_overlay_before_capture() {
@@ -157,8 +171,9 @@ pub fn hide_gesture_overlay_before_capture() {
         .get_or_init(|| Mutex::new(HintRequestState::default()))
         .lock()
     {
-        state.gesture.clear();
+        state.gesture = None;
         state.gesture_label = None;
+        state.gesture_dirty = true;
     }
     let (reply, response) = mpsc::channel();
     if hint_commands()
@@ -205,10 +220,7 @@ fn run_hint_thread(receiver: mpsc::Receiver<HintCommand>) {
                 HintCommand::UpdateHotzone(rect) => hotzone_hints.update(rect),
                 HintCommand::UpdateEdgeHidePreview(rect) => edge_hide_preview.update(rect),
                 HintCommand::UpdateStrips(strips) => strip_hints.update(&strips),
-                HintCommand::UpdateGesture(points, label) => {
-                    gesture_hint.update(&points, label.as_deref())
-                }
-                HintCommand::HideGesture => gesture_hint.hide(),
+                HintCommand::UpdateGesture => {}
                 HintCommand::HideGestureAndReport(reply) => {
                     gesture_hint.hide();
                     let _ = reply.send(());
@@ -230,6 +242,24 @@ fn run_hint_thread(receiver: mpsc::Receiver<HintCommand>) {
             },
             Err(mpsc::RecvTimeoutError::Timeout) => {}
             Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+        let pending = HINT_REQUESTS.get().and_then(|state| {
+            let mut state = state.lock().ok()?;
+            if !std::mem::take(&mut state.gesture_dirty) {
+                return None;
+            }
+            let trail = state.gesture.as_mut().map(|trail| GestureTrail {
+                id: trail.id,
+                points: std::mem::take(&mut trail.points),
+            });
+            Some((trail, state.gesture_label.clone()))
+        });
+        if let Some((trail, label)) = pending {
+            if let Some(trail) = trail {
+                gesture_hint.update(trail.id, &trail.points, label.as_deref());
+            } else {
+                gesture_hint.hide();
+            }
         }
         ocr_toast.tick();
         pump_window_messages();
@@ -309,182 +339,6 @@ impl OcrToastManager {
     }
 }
 
-struct GestureHintManager {
-    window: Option<HintWindow>,
-}
-
-impl GestureHintManager {
-    fn new() -> Self {
-        Self { window: None }
-    }
-
-    fn update(&mut self, points: &[AppPoint], label: Option<&str>) {
-        if points.len() < 2 {
-            self.hide();
-            return;
-        }
-        let margin = 28;
-        let left = points.iter().map(|point| point.x).min().unwrap_or_default() - margin;
-        let top = points.iter().map(|point| point.y).min().unwrap_or_default() - margin;
-        let right = points.iter().map(|point| point.x).max().unwrap_or_default() + margin;
-        let bottom = points.iter().map(|point| point.y).max().unwrap_or_default() + margin;
-        let rect = Rect {
-            left,
-            top,
-            right,
-            bottom,
-        };
-        let window = self.window.get_or_insert_with(HintWindow::create);
-        let hwnd = HWND(window.hwnd as *mut core::ffi::c_void);
-        unsafe {
-            let width = rect.width().max(1);
-            let height = rect.height().max(1);
-            let screen_dc = GetDC(HWND::default());
-            let dc = CreateCompatibleDC(screen_dc);
-            let bitmap_info = BITMAPINFO {
-                bmiHeader: BITMAPINFOHEADER {
-                    biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                    biWidth: width,
-                    biHeight: -height,
-                    biPlanes: 1,
-                    biBitCount: 32,
-                    biCompression: BI_RGB.0,
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-            let mut bits = std::ptr::null_mut();
-            let Ok(bitmap) = CreateDIBSection(
-                dc,
-                &bitmap_info,
-                DIB_RGB_COLORS,
-                &mut bits,
-                HANDLE::default(),
-                0,
-            ) else {
-                let _ = DeleteDC(dc);
-                ReleaseDC(HWND::default(), screen_dc);
-                return;
-            };
-            let old_bitmap = SelectObject(dc, bitmap);
-            let pixels = std::slice::from_raw_parts_mut(
-                bits.cast::<u8>(),
-                width as usize * height as usize * 4,
-            );
-            pixels.fill(0);
-
-            let pen = CreatePen(PS_SOLID, 2, COLORREF(0x00929292));
-            let old = SelectObject(dc, pen);
-            let local: Vec<POINT> = points
-                .iter()
-                .map(|point| POINT {
-                    x: point.x - rect.left,
-                    y: point.y - rect.top,
-                })
-                .collect();
-            let _ = Polyline(dc, &local);
-            SelectObject(dc, old);
-            let _ = DeleteObject(pen);
-
-            let sparkle_pen = CreatePen(PS_SOLID, 1, COLORREF(0x00E4E4E4));
-            let old = SelectObject(dc, sparkle_pen);
-            for (index, point) in local.iter().enumerate().skip(5).step_by(18) {
-                draw_sparkle(dc, *point, if index % 36 == 5 { 4 } else { 3 });
-            }
-            if let Some(point) = local.last() {
-                draw_sparkle(dc, *point, 4);
-            }
-            SelectObject(dc, old);
-            let _ = DeleteObject(sparkle_pen);
-            if let Some(label) = label {
-                let text: Vec<u16> = label.encode_utf16().collect();
-                let _ = SetBkMode(dc, TRANSPARENT);
-                let _ = SetTextColor(dc, COLORREF(0x00B6B6B6));
-                let _ = TextOutW(dc, 8, 6, &text);
-            }
-            premultiply_starlight_pixels(pixels);
-
-            let destination = POINT {
-                x: rect.left,
-                y: rect.top,
-            };
-            let size = SIZE {
-                cx: width,
-                cy: height,
-            };
-            let source = POINT { x: 0, y: 0 };
-            let blend = BLENDFUNCTION {
-                BlendOp: AC_SRC_OVER as u8,
-                BlendFlags: 0,
-                SourceConstantAlpha: 255,
-                AlphaFormat: AC_SRC_ALPHA as u8,
-            };
-            let _ = UpdateLayeredWindow(
-                hwnd,
-                screen_dc,
-                Some(&destination),
-                Some(&size),
-                dc,
-                Some(&source),
-                COLORREF(0),
-                Some(&blend),
-                ULW_ALPHA,
-            );
-            SelectObject(dc, old_bitmap);
-            let _ = DeleteObject(bitmap);
-            let _ = DeleteDC(dc);
-            ReleaseDC(HWND::default(), screen_dc);
-            let _ = ShowWindow(hwnd, SW_SHOWNA);
-        }
-    }
-
-    fn hide(&mut self) {
-        if let Some(window) = self.window {
-            window.hide();
-        }
-    }
-}
-
-unsafe fn draw_sparkle(dc: windows::Win32::Graphics::Gdi::HDC, point: POINT, radius: i32) {
-    let horizontal = [
-        POINT {
-            x: point.x - radius,
-            y: point.y,
-        },
-        POINT {
-            x: point.x + radius,
-            y: point.y,
-        },
-    ];
-    let vertical = [
-        POINT {
-            x: point.x,
-            y: point.y - radius,
-        },
-        POINT {
-            x: point.x,
-            y: point.y + radius,
-        },
-    ];
-    let _ = Polyline(dc, &horizontal);
-    let _ = Polyline(dc, &vertical);
-}
-
-fn premultiply_starlight_pixels(pixels: &mut [u8]) {
-    for pixel in pixels.chunks_exact_mut(4) {
-        let coverage = pixel[0].max(pixel[1]).max(pixel[2]) as u16;
-        if coverage == 0 {
-            pixel.fill(0);
-            continue;
-        }
-        let alpha = ((coverage * 140 + 127) / 255) as u8;
-        pixel[0] = alpha;
-        pixel[1] = ((alpha as u16 * 235 + 127) / 255) as u8;
-        pixel[2] = ((alpha as u16 * 188 + 127) / 255) as u8;
-        pixel[3] = alpha;
-    }
-}
-
 fn pump_window_messages() {
     let mut message = MSG::default();
     unsafe {
@@ -498,13 +352,13 @@ fn pump_window_messages() {
 // --- shared primitive ---
 
 #[derive(Clone, Copy)]
-struct HintWindow {
-    hwnd: isize,
+pub(super) struct HintWindow {
+    pub(super) hwnd: isize,
     owner_thread_id: u32,
 }
 
 impl HintWindow {
-    fn create() -> Self {
+    pub(super) fn create() -> Self {
         let hwnd = unsafe {
             CreateWindowExW(
                 WS_EX_LAYERED
@@ -722,7 +576,7 @@ impl HintWindow {
             let _ = ShowWindow(hwnd, SW_SHOWNA);
         }
     }
-    fn hide(&self) {
+    pub(super) fn hide(&self) {
         debug_assert_eq!(self.owner_thread_id, unsafe { GetCurrentThreadId() });
         unsafe {
             let _ = ShowWindow(HWND(self.hwnd as *mut core::ffi::c_void), SW_HIDE);
@@ -824,6 +678,48 @@ fn replace_if_changed<T: PartialEq>(current: &mut T, next: T) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gesture_mailbox_merges_pending_segments_and_replaces_previous_capture() {
+        let mut state = HintRequestState::default();
+        for x in 0..2000 {
+            state.append_trail(
+                GestureTrail {
+                    id: 1,
+                    points: vec![AppPoint { x, y: 10 }],
+                },
+                None,
+            );
+        }
+        assert!(state.gesture_dirty);
+        let trail = state.gesture.as_mut().unwrap();
+        let delivered = std::mem::take(&mut trail.points);
+        assert_eq!(delivered.len(), 2000);
+        for (x, point) in delivered.iter().enumerate() {
+            assert_eq!(point.x, x as i32);
+        }
+        state.gesture_dirty = false;
+        state.append_trail(
+            GestureTrail {
+                id: 1,
+                points: vec![],
+            },
+            None,
+        );
+        assert!(!state.gesture_dirty);
+        state.append_trail(
+            GestureTrail {
+                id: 2,
+                points: vec![AppPoint { x: 4, y: 8 }],
+            },
+            Some("复制".into()),
+        );
+        assert_eq!(
+            state.gesture.as_ref().unwrap().points,
+            vec![AppPoint { x: 4, y: 8 }]
+        );
+        assert!(state.gesture_dirty);
+    }
     use std::time::Duration;
     use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, GetWindowDisplayAffinity};
 
@@ -846,17 +742,6 @@ mod tests {
         assert!(!replace_if_changed(&mut previous, Some(rect)));
         assert!(replace_if_changed(&mut previous, None));
         assert!(!replace_if_changed(&mut previous, None));
-    }
-
-    #[test]
-    fn starlight_composition_keeps_the_background_fully_transparent() {
-        let mut pixels = [0, 0, 0, 0, 255, 255, 255, 0, 190, 190, 190, 0];
-        premultiply_starlight_pixels(&mut pixels);
-
-        assert_eq!(&pixels[0..4], &[0, 0, 0, 0]);
-        assert_eq!(pixels[7], 140);
-        assert_eq!(pixels[11], 104);
-        assert!(pixels[4] > pixels[5] && pixels[5] > pixels[6]);
     }
 
     #[test]

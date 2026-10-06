@@ -13,6 +13,7 @@ it("persists pin offsets and preserves existing settings through the real App an
       import assert from 'node:assert/strict';
       import { mount, unmount, flushSync } from 'svelte';
       import App from '../App.svelte';
+      import GestureCanvas from '../GestureCanvas.svelte';
       import { HelperClient, SUPPORTED_HELPER_PROTOCOL } from '../helper-client';
       import { defaultSettings, normalizeSettings } from '../settings-store';
       import { configureHostBridge } from '../host-bridge';
@@ -166,6 +167,26 @@ it("persists pin offsets and preserves existing settings through the real App an
       ready(true);
       await unmount(component);
       console.log('App UI host regression passed');
+      document.body.replaceChildren();
+      const samples = [];
+      const canvas = mount(GestureCanvas, { target: document.body, props: { onRecord: sample => samples.push(sample) } });
+      flushSync();
+      const svg = document.querySelector('svg');
+      let captured = false;
+      svg.setPointerCapture = () => { captured = true; };
+      svg.hasPointerCapture = () => captured;
+      svg.releasePointerCapture = () => { captured = false; };
+      svg.getBoundingClientRect = () => ({ left: 0, top: 0, width: 100, height: 100 });
+      const pointer = (type, x) => {
+        svg.dispatchEvent(new window.PointerEvent(type, { pointerId: 1, button: 0, clientX: x, clientY: 20 }));
+        flushSync();
+      };
+      pointer('pointerdown', 10); pointer('pointermove', 40); pointer('pointercancel', 70); pointer('pointerup', 70);
+      assert.equal(samples.length, 0, 'interrupted recording must never save a partial sample');
+      assert.equal(captured, false);
+      pointer('pointerdown', 10); pointer('pointermove', 40); pointer('pointerup', 70);
+      assert.equal(samples.length, 1, 'normal recording must still save after cancellation');
+      await unmount(canvas);
     `);
     await build({
       configFile: false, logLevel: "silent", plugins: [svelte()],

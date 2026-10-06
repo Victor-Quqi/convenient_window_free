@@ -38,6 +38,12 @@
     if (completed.length >= 3) onRecord(completed);
   }
 
+  function cancelRecording(event: PointerEvent): void {
+    const svg = event.currentTarget as SVGSVGElement;
+    if (svg.hasPointerCapture(event.pointerId)) svg.releasePointerCapture(event.pointerId);
+    drawing = [];
+  }
+
   function path(points: GesturePoint[]): string {
     return points.map((point, index) => `${index ? "L" : "M"} ${point.x * 100} ${point.y * 100}`).join(" ");
   }
@@ -46,7 +52,7 @@
 <svg
   class:recording
   aria-label={recording ? (english ? "Hold left mouse button to record" : "按住鼠标左键录制单笔手势") : (english ? "Gesture preview" : "手势轨迹预览")}
-  on:pointercancel={pointerUp}
+  on:pointercancel={cancelRecording}
   on:pointerdown={pointerDown}
   on:pointermove={pointerMove}
   on:pointerup={pointerUp}

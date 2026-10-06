@@ -156,7 +156,9 @@ pub fn update_hotzone_hints(_rect: Option<Rect>) {}
 pub fn update_edge_hide_preview(_rect: Option<Rect>) {}
 pub fn update_strip_hints(_strips: &[Rect]) {}
 pub fn hide_hotzone_hints() {}
-pub fn update_gesture_overlay(_points: &[Point], _label: Option<&str>) {}
+pub fn update_gesture_overlay(_label: Option<&str>) {}
+
+pub fn discard_gesture_trail() {}
 pub fn hide_gesture_overlay() {}
 pub fn hide_gesture_overlay_before_capture() {}
 pub fn show_ocr_toast(_owner: isize, _text: String, _success: bool) {}

@@ -1,4 +1,5 @@
 use crate::config::{GestureTriggerButton, MouseButton};
+use crate::core::gesture::append_gesture_point;
 use crate::platform::{GestureCapture, InputState, Point, WindowDragCapture, WindowDragMode};
 use anyhow::{bail, Result};
 use std::collections::VecDeque;
@@ -12,9 +13,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, PeekMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    HHOOK, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_MOUSE_LL, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    HHOOK, KBDLLHOOKSTRUCT, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL,
+    WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 const HOOK_NOT_STARTED: u8 = 0;
@@ -50,8 +52,31 @@ struct GestureHookState {
     active_trigger: Option<GestureTriggerButton>,
     active_modifiers: u8,
     points: Vec<Point>,
+    trail: GestureTrail,
     completed: VecDeque<GestureCapture>,
     cancelled: bool,
+    suppress_left: bool,
+    suppress_escape: bool,
+}
+
+#[derive(Default)]
+pub(super) struct GestureTrail {
+    pub id: u64,
+    pub points: Vec<Point>,
+}
+
+pub(super) fn take_gesture_trail() -> Option<GestureTrail> {
+    let mut state = gesture_state().lock().ok()?;
+    (state.active_trigger.is_some() && !state.cancelled).then(|| GestureTrail {
+        id: state.trail.id,
+        points: std::mem::take(&mut state.trail.points),
+    })
+}
+
+pub fn discard_gesture_trail() {
+    if let Ok(mut state) = gesture_state().lock() {
+        state.trail.points.clear();
+    }
 }
 
 fn gesture_state() -> &'static Mutex<GestureHookState> {
@@ -156,9 +181,18 @@ fn run_mouse_hook_thread() {
         let mut message = MSG::default();
         let _ = PeekMessageW(&mut message, HWND::default(), 0, 0, PM_NOREMOVE);
         let hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), HINSTANCE::default(), 0)?;
+        let keyboard =
+            match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), HINSTANCE::default(), 0) {
+                Ok(keyboard) => keyboard,
+                Err(error) => {
+                    let _ = UnhookWindowsHookEx(hook);
+                    return Err(error);
+                }
+            };
         HOOK_STATE.store(HOOK_HEALTHY, Ordering::Release);
         message_loop();
         let _ = UnhookWindowsHookEx(hook);
+        let _ = UnhookWindowsHookEx(keyboard);
         Ok::<(), windows::core::Error>(())
     });
     let stopping = HOOK_STATE.load(Ordering::Acquire) == HOOK_STOPPING;
@@ -185,8 +219,47 @@ fn cancel_gesture_capture() {
         if state.active_trigger.is_some() {
             state.cancelled = true;
             state.points.clear();
+            state.trail.points.clear();
         }
     }
+}
+
+fn cancel_by_user(state: &mut GestureHookState) {
+    if state.active_trigger.is_some() && !state.cancelled {
+        state.cancelled = true;
+        state.points.clear();
+        state.trail.points.clear();
+    }
+}
+
+fn handle_gesture_escape(state: &mut GestureHookState, down: bool) -> bool {
+    if down && state.active_trigger.is_some() {
+        cancel_by_user(state);
+        state.suppress_escape = true;
+    }
+    let consumed = state.suppress_escape;
+    if !down {
+        state.suppress_escape = false;
+    }
+    consumed
+}
+
+unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let hook = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+        let message = wparam.0 as u32;
+        if hook.vkCode == VK_ESCAPE.0 as u32
+            && matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP)
+        {
+            if let Ok(mut state) = gesture_state().lock() {
+                if handle_gesture_escape(&mut state, matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN))
+                {
+                    return LRESULT(1);
+                }
+            }
+        }
+    }
+    CallNextHookEx(HHOOK::default(), code, wparam, lparam)
 }
 
 pub fn configure_window_drag_capture(
@@ -308,6 +381,11 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     if code >= 0 {
         let hook = &*(lparam.0 as *const MSLLHOOKSTRUCT);
         let message = wparam.0 as u32;
+        // An ongoing gesture owns cancellation before drag and hotzone handlers.
+        let gesture_active = GESTURE_CAPTURE_ACTIVE.load(Ordering::Acquire);
+        if gesture_active && handle_gesture_message(message, hook) {
+            return LRESULT(1);
+        }
         if handle_window_drag_message(message, hook) {
             return LRESULT(1);
         }
@@ -328,7 +406,7 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
             }
             _ => {}
         }
-        if handle_gesture_message(message, hook) {
+        if !gesture_active && handle_gesture_message(message, hook) {
             return LRESULT(1);
         }
     }
@@ -494,44 +572,71 @@ fn handle_gesture_message(message: u32, hook: &MSLLHOOKSTRUCT) -> bool {
         Err(_) => return false,
     };
 
+    let consumed = handle_gesture_event(
+        &mut state,
+        message,
+        point,
+        event_trigger,
+        enabled,
+        u8_to_trigger(GESTURE_TRIGGER.load(Ordering::Acquire)),
+        current_modifier_mask(),
+    );
+    GESTURE_CAPTURE_ACTIVE.store(
+        state.active_trigger.is_some() || state.suppress_left,
+        Ordering::Release,
+    );
+    consumed
+}
+
+fn handle_gesture_event(
+    state: &mut GestureHookState,
+    message: u32,
+    point: Point,
+    event_trigger: Option<(GestureTriggerButton, bool)>,
+    enabled: bool,
+    configured_trigger: GestureTriggerButton,
+    modifiers: u8,
+) -> bool {
+    if message == WM_LBUTTONDOWN && (state.active_trigger.is_some() || state.suppress_left) {
+        cancel_by_user(state);
+        state.suppress_left = true;
+        return true;
+    }
+    if message == WM_LBUTTONUP && state.suppress_left {
+        state.suppress_left = false;
+        return true;
+    }
     if message == WM_MOUSEMOVE {
-        if state.active_trigger.is_some() {
-            let should_push = state.points.last().is_none_or(|last| {
-                let dx = last.x - point.x;
-                let dy = last.y - point.y;
-                dx * dx + dy * dy >= 4
-            });
-            if should_push && state.points.len() < 512 {
-                state.points.push(point);
+        if state.active_trigger.is_some() && !state.cancelled {
+            if state.trail.points.last() != Some(&point) {
+                state.trail.points.push(point);
             }
+            append_gesture_point(&mut state.points, point, false);
         }
         return false;
     }
-
     let Some((trigger, down)) = event_trigger else {
         return false;
     };
     if down {
-        if GESTURE_CAPTURE_ENABLED.load(Ordering::Acquire)
-            && trigger == u8_to_trigger(GESTURE_TRIGGER.load(Ordering::Acquire))
-            && state.active_trigger.is_none()
-        {
-            state.cancelled = false;
+        if enabled && trigger == configured_trigger && state.active_trigger.is_none() {
+            // Keep swallowing the trigger if the cancelling left button is held.
+            state.cancelled = state.suppress_left;
             state.active_trigger = Some(trigger);
-            state.active_modifiers = current_modifier_mask();
-            GESTURE_CAPTURE_ACTIVE.store(true, Ordering::Release);
+            state.active_modifiers = modifiers;
             state.points.clear();
-            state.points.reserve(128);
-            state.points.push(point);
+            state.trail.id = state.trail.id.wrapping_add(1);
+            state.trail.points.clear();
+            if !state.cancelled {
+                state.points.push(point);
+                state.trail.points.push(point);
+            }
             return true;
         }
-        return false;
+        return state.active_trigger == Some(trigger);
     }
-
     if state.active_trigger == Some(trigger) {
-        let capture = finish_gesture_capture(&mut state, trigger, point);
-        GESTURE_CAPTURE_ACTIVE.store(false, Ordering::Release);
-        if let Some(capture) = capture {
+        if let Some(capture) = finish_gesture_capture(state, trigger, point) {
             if state.completed.len() >= 8 {
                 state.completed.pop_front();
             }
@@ -547,10 +652,11 @@ fn finish_gesture_capture(
     trigger: GestureTriggerButton,
     point: Point,
 ) -> Option<GestureCapture> {
-    if state.points.last().copied() != Some(point) && state.points.len() < 512 {
-        state.points.push(point);
+    if !state.cancelled {
+        append_gesture_point(&mut state.points, point, true);
     }
     let points = std::mem::take(&mut state.points);
+    state.trail.points.clear();
     let modifiers = state.active_modifiers;
     let cancelled = state.cancelled;
     state.active_trigger = None;
@@ -634,6 +740,135 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gesture_visual_points_survive_recognition_compaction_and_cancel_clears_them() {
+        let mut state = GestureHookState::default();
+        let trigger = GestureTriggerButton::Right;
+        gesture_event(&mut state, trigger, WM_RBUTTONDOWN, 0);
+        let id = state.trail.id;
+        for x in 1..6000 {
+            gesture_event(&mut state, trigger, WM_MOUSEMOVE, x);
+        }
+        assert!(state.points.len() <= 512);
+        assert_eq!(state.trail.points.len(), 6000);
+        for (x, point) in state.trail.points.iter().enumerate() {
+            assert_eq!(*point, Point { x: x as i32, y: 10 });
+        }
+        let delivered = std::mem::take(&mut state.trail.points);
+        gesture_event(&mut state, trigger, WM_MOUSEMOVE, 6000);
+        assert_eq!(state.trail.points, vec![Point { x: 6000, y: 10 }]);
+        assert_eq!(delivered[5999].x, 5999);
+        gesture_event(&mut state, trigger, WM_LBUTTONDOWN, 6000);
+        assert!(state.trail.points.is_empty());
+        gesture_event(&mut state, trigger, WM_LBUTTONUP, 6000);
+        gesture_event(&mut state, trigger, WM_RBUTTONUP, 6000);
+        gesture_event(&mut state, trigger, WM_RBUTTONDOWN, 0);
+        assert_ne!(state.trail.id, id);
+        assert_eq!(state.trail.points, vec![Point { x: 0, y: 10 }]);
+    }
+
+    fn gesture_event(
+        state: &mut GestureHookState,
+        trigger: GestureTriggerButton,
+        message: u32,
+        x: i32,
+    ) -> bool {
+        let data = match trigger {
+            GestureTriggerButton::X1 => 1 << 16,
+            GestureTriggerButton::X2 => 2 << 16,
+            _ => 0,
+        };
+        handle_gesture_event(
+            state,
+            message,
+            Point { x, y: 10 },
+            trigger_for_message(message, data),
+            true,
+            trigger,
+            0,
+        )
+    }
+
+    #[test]
+    fn left_click_cancels_every_trigger_and_swallows_both_release_orders() {
+        for (trigger, down, up) in [
+            (GestureTriggerButton::Right, WM_RBUTTONDOWN, WM_RBUTTONUP),
+            (GestureTriggerButton::Middle, WM_MBUTTONDOWN, WM_MBUTTONUP),
+            (GestureTriggerButton::X1, WM_XBUTTONDOWN, WM_XBUTTONUP),
+            (GestureTriggerButton::X2, WM_XBUTTONDOWN, WM_XBUTTONUP),
+        ] {
+            for trigger_first in [true, false] {
+                let mut state = GestureHookState::default();
+                assert!(gesture_event(&mut state, trigger, down, 0));
+                gesture_event(&mut state, trigger, WM_MOUSEMOVE, 200);
+                assert!(gesture_event(&mut state, trigger, WM_LBUTTONDOWN, 200));
+                assert!(state.points.is_empty());
+                gesture_event(&mut state, trigger, WM_MOUSEMOVE, 400);
+                assert!(state.points.is_empty());
+                for release in if trigger_first {
+                    [up, WM_LBUTTONUP]
+                } else {
+                    [WM_LBUTTONUP, up]
+                } {
+                    assert!(gesture_event(&mut state, trigger, release, 400));
+                }
+                assert!(state.completed.is_empty());
+                assert!(!state.suppress_left);
+                assert!(state.active_trigger.is_none());
+                assert!(!gesture_event(&mut state, trigger, WM_LBUTTONDOWN, 400));
+                assert!(!gesture_event(&mut state, trigger, WM_LBUTTONUP, 400));
+                assert!(gesture_event(&mut state, trigger, down, 0));
+                assert!(gesture_event(&mut state, trigger, up, 200));
+                assert_eq!(state.completed.len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn trigger_repress_during_left_cancel_does_not_start_another_gesture() {
+        let mut state = GestureHookState::default();
+        for event in [
+            WM_RBUTTONDOWN,
+            WM_LBUTTONDOWN,
+            WM_RBUTTONUP,
+            WM_RBUTTONDOWN,
+            WM_LBUTTONUP,
+            WM_RBUTTONUP,
+        ] {
+            assert!(gesture_event(
+                &mut state,
+                GestureTriggerButton::Right,
+                event,
+                0
+            ));
+        }
+        assert!(state.completed.is_empty());
+    }
+
+    #[test]
+    fn escape_cancels_without_mouse_movement_and_is_consumed_until_key_up() {
+        let mut state = GestureHookState::default();
+        assert!(!handle_gesture_escape(&mut state, true));
+        gesture_event(&mut state, GestureTriggerButton::Right, WM_RBUTTONDOWN, 0);
+        assert!(handle_gesture_escape(&mut state, true));
+        gesture_event(&mut state, GestureTriggerButton::Right, WM_RBUTTONUP, 0);
+        assert!(handle_gesture_escape(&mut state, true));
+        assert!(handle_gesture_escape(&mut state, false));
+        assert!(!handle_gesture_escape(&mut state, false));
+        assert!(state.completed.is_empty());
+    }
+
+    #[test]
+    fn ordinary_trigger_click_keeps_its_capture_and_final_position() {
+        let mut state = GestureHookState::default();
+        gesture_event(&mut state, GestureTriggerButton::Right, WM_RBUTTONDOWN, 0);
+        gesture_event(&mut state, GestureTriggerButton::Right, WM_RBUTTONUP, 1);
+        assert_eq!(
+            state.completed.pop_front().unwrap().points,
+            vec![Point { x: 0, y: 10 }, Point { x: 1, y: 10 }]
+        );
+    }
+
+    #[test]
     fn blocked_window_does_not_capture_or_consume_the_configured_mouse_press() {
         let mut state = WindowDragHookState::default();
         assert!(
@@ -657,6 +892,7 @@ mod tests {
             points: vec![Point { x: 10, y: 20 }],
             completed: VecDeque::new(),
             cancelled: true,
+            ..Default::default()
         };
 
         let capture = finish_gesture_capture(

@@ -33,6 +33,19 @@ struct WindowDragActivity {
     target: Option<(platform::WindowHandle, platform::Rect)>,
 }
 
+fn gesture_overlay_label(config: &AppConfig, points: &[platform::Point]) -> Option<Option<String>> {
+    if !config.mouse_gestures.show_trail
+        || points.len() < 2
+        || path_length_pixels(points) < config.mouse_gestures.min_distance as f32
+    {
+        return None;
+    }
+    Some(
+        recognize(points, &config.mouse_gestures)
+            .and_then(|result| config.gesture_label(result.gesture).map(str::to_owned)),
+    )
+}
+
 impl Engine {
     pub fn new(
         config_rx: watch::Receiver<AppConfig>,
@@ -174,12 +187,13 @@ impl Engine {
                             config.mouse_gestures.trigger_button,
                         );
                         let gesture_points = platform::active_gesture_points();
-                        if config.mouse_gestures.show_trail && !gesture_points.is_empty() {
-                            let label = recognize(&gesture_points, &config.mouse_gestures)
-                                .and_then(|result| config.gesture_label(result.gesture));
-                            platform::update_gesture_overlay(&gesture_points, label);
+                        if let Some(label) = gesture_overlay_label(&config, &gesture_points) {
+                            platform::update_gesture_overlay(label.as_deref());
                         } else {
                             platform::hide_gesture_overlay();
+                            if !config.mouse_gestures.show_trail {
+                                platform::discard_gesture_trail();
+                            }
                         }
 
                         let hint_rect =
@@ -1185,6 +1199,52 @@ fn is_continuous_adjustment_trigger(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn gesture_overlay_stays_hidden_until_the_configured_distance() {
+        use platform::Point;
+        let mut config = AppConfig::default();
+        config.mouse_gestures.min_distance = 60;
+        for points in [
+            vec![],
+            vec![Point { x: 0, y: 0 }],
+            vec![Point { x: 0, y: 0 }, Point { x: 0, y: 59 }],
+        ] {
+            assert_eq!(gesture_overlay_label(&config, &points), None);
+        }
+        let points = [Point { x: 0, y: 0 }, Point { x: 0, y: 60 }];
+        assert_eq!(gesture_overlay_label(&config, &points), Some(None));
+        config.mouse_gestures.show_trail = false;
+        assert_eq!(gesture_overlay_label(&config, &points), None);
+    }
+
+    #[test]
+    fn gesture_overlay_shows_only_the_matched_name_and_keeps_unknown_strokes_silent() {
+        use platform::Point;
+        let mut config = AppConfig::default();
+        config
+            .gesture_labels
+            .insert("gesture-down".into(), "粘贴".into());
+        let straight = [Point { x: 0, y: 0 }, Point { x: 0, y: 100 }];
+        assert_eq!(
+            gesture_overlay_label(&config, &straight),
+            Some(Some("粘贴".into()))
+        );
+        let unknown = [
+            Point { x: 0, y: 0 },
+            Point { x: 100, y: 10 },
+            Point { x: 0, y: 20 },
+            Point { x: 100, y: 30 },
+            Point { x: 0, y: 40 },
+        ];
+        assert_eq!(gesture_overlay_label(&config, &unknown), Some(None));
+        config
+            .mouse_gestures
+            .gestures
+            .iter_mut()
+            .for_each(|gesture| gesture.enabled = false);
+        assert_eq!(gesture_overlay_label(&config, &straight), Some(None));
+    }
 
     #[tokio::test]
     async fn shutdown_before_engine_start_is_preserved() {

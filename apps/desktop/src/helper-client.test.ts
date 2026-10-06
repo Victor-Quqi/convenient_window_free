@@ -69,11 +69,12 @@ describe("HelperClient", () => {
     const envelope = JSON.parse(socket.sent[0]).data;
     expect(envelope.protocolVersion).toBe(7);
     expect(envelope.config.schemaVersion).toBe(8);
-    expect(envelope.gestureLabels["gesture-up"]).toBe("Up · Copy");
+    expect(envelope.gestureLabels["gesture-up"]).toBe("Copy");
+    expect(envelope.config.gestureFeedback).toBeUndefined();
     expect(envelope.config.mouseGestures.gestures[0].name).toBeUndefined();
     language = "zh-CN";
     client.sendConfig(defaultSettings);
-    expect(JSON.parse(socket.sent[1]).data.gestureLabels["gesture-up"]).toBe("向上 · 复制");
+    expect(JSON.parse(socket.sent[1]).data.gestureLabels["gesture-up"]).toBe("复制");
   });
 
   it("does not reconnect after an intentional disconnect", () => {

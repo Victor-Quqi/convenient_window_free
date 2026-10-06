@@ -3,6 +3,68 @@ use crate::platform::{Point, Rect};
 
 const SAMPLE_COUNT: usize = 64;
 
+/// Keep the whole stroke within a bounded buffer, including its release point.
+pub fn append_gesture_point(points: &mut Vec<Point>, point: Point, release: bool) {
+    if let Some(last) = points.last() {
+        let distance = distance_i32(*last, point);
+        if distance == 0.0 || (!release && distance < 2.0) {
+            return;
+        }
+    }
+    if points.len() >= 512 {
+        let mut tolerance = 0.5;
+        loop {
+            let simplified = simplify_stroke(points, tolerance);
+            if simplified.len() <= 256 {
+                *points = simplified;
+                break;
+            }
+            tolerance *= 2.0;
+        }
+    }
+    points.push(point);
+}
+
+fn simplify_stroke(points: &[Point], tolerance: f32) -> Vec<Point> {
+    let mut keep = vec![false; points.len()];
+    keep[0] = true;
+    keep[points.len() - 1] = true;
+    let mut pending = vec![(0, points.len() - 1)];
+    while let Some((start, end)) = pending.pop() {
+        let a = points[start];
+        let b = points[end];
+        let dx = b.x as f32 - a.x as f32;
+        let dy = b.y as f32 - a.y as f32;
+        let length_squared = dx * dx + dy * dy;
+        let mut farthest = None;
+        let mut maximum = tolerance * tolerance;
+        for (index, p) in points.iter().enumerate().take(end).skip(start + 1) {
+            let px = p.x as f32 - a.x as f32;
+            let py = p.y as f32 - a.y as f32;
+            let t = if length_squared > 0.0 {
+                ((px * dx + py * dy) / length_squared).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let distance = (px - t * dx).powi(2) + (py - t * dy).powi(2);
+            if distance > maximum {
+                maximum = distance;
+                farthest = Some(index);
+            }
+        }
+        if let Some(index) = farthest {
+            keep[index] = true;
+            pending.push((start, index));
+            pending.push((index, end));
+        }
+    }
+    points
+        .iter()
+        .zip(keep)
+        .filter_map(|(point, keep)| keep.then_some(*point))
+        .collect()
+}
+
 #[derive(Clone, Debug)]
 pub struct GestureMatch<'a> {
     pub gesture: &'a GestureTemplate,
@@ -263,6 +325,91 @@ fn path_efficiency(points: &[GesturePoint]) -> f32 {
 mod tests {
     use super::*;
     use crate::config::MouseGestureConfig;
+
+    fn captured(vertices: &[Point], step: i32) -> Vec<Point> {
+        let mut points = Vec::new();
+        for pair in vertices.windows(2) {
+            let length = distance_i32(pair[0], pair[1]).ceil() as i32;
+            for offset in (0..length).step_by(step as usize) {
+                let t = offset as f32 / length as f32;
+                append_gesture_point(
+                    &mut points,
+                    Point {
+                        x: (pair[0].x as f32 + (pair[1].x - pair[0].x) as f32 * t).round() as i32,
+                        y: (pair[0].y as f32 + (pair[1].y - pair[0].y) as f32 * t).round() as i32,
+                    },
+                    false,
+                );
+                assert!(points.len() <= 512);
+            }
+        }
+        append_gesture_point(&mut points, *vertices.last().unwrap(), true);
+        assert_eq!(points.first(), vertices.first());
+        assert_eq!(points.last(), vertices.last());
+        points
+    }
+
+    #[test]
+    fn dense_and_sparse_long_strokes_keep_the_same_gesture() {
+        let config = MouseGestureConfig::default();
+        let rectangle = [
+            Point { x: -300, y: 0 },
+            Point { x: 0, y: 0 },
+            Point { x: 0, y: 300 },
+            Point { x: -300, y: 300 },
+            Point { x: -300, y: 0 },
+        ];
+        let l = [
+            Point { x: 0, y: 0 },
+            Point { x: 0, y: 1200 },
+            Point { x: 1040, y: 1200 },
+        ];
+        let circle: Vec<_> = (0..=1200)
+            .map(|i| {
+                let angle = std::f32::consts::TAU * i as f32 / 1200.0;
+                Point {
+                    x: (angle.cos() * 600.0).round() as i32,
+                    y: (angle.sin() * 600.0).round() as i32,
+                }
+            })
+            .collect();
+        for (vertices, expected) in [
+            (&rectangle[..], "gesture-rectangle"),
+            (&l[..], "gesture-l"),
+            (&circle[..], "gesture-circle"),
+        ] {
+            for step in [1, 2, 10] {
+                let points = captured(vertices, step);
+                assert_eq!(recognize(&points, &config).unwrap().gesture.id, expected);
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_compaction_preserves_turns_and_release_endpoint() {
+        let vertices = [
+            Point { x: -12000, y: -100 },
+            Point {
+                x: -12000,
+                y: 12000,
+            },
+            Point { x: 1, y: 12000 },
+        ];
+        let points = captured(&vertices, 1);
+        assert!(points.contains(&vertices[1]));
+        assert_eq!(
+            recognize(&points, &MouseGestureConfig::default())
+                .unwrap()
+                .gesture
+                .id,
+            "gesture-l"
+        );
+        let mut points = vec![Point { x: 0, y: 0 }];
+        append_gesture_point(&mut points, Point { x: 1, y: 0 }, false);
+        assert_eq!(points.len(), 1);
+        append_gesture_point(&mut points, Point { x: 1, y: 0 }, true);
+        assert_eq!(points.last(), Some(&Point { x: 1, y: 0 }));
+    }
 
     #[test]
     fn directional_templates_keep_their_direction() {

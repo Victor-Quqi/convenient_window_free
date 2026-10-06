@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod brightness;
+mod gesture_overlay;
 pub mod hints;
 pub mod input;
 pub mod keyboard;

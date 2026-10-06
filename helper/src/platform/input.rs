@@ -1,4 +1,5 @@
 use crate::config::{GestureTriggerButton, MouseButton};
+use crate::core::gesture::append_gesture_point;
 use crate::platform::{GestureCapture, InputState, Point, WindowDragCapture, WindowDragMode};
 use anyhow::{bail, Result};
 use rdev::{listen, simulate, Button, Event, EventType, Key, SimulateError};
@@ -56,6 +57,7 @@ struct InputStore {
 
 #[derive(Default)]
 struct GestureInProgress {
+    cancelled: bool,
     trigger: GestureTriggerButton,
     modifiers: u8,
     points: Vec<Point>,
@@ -241,13 +243,8 @@ fn handle_event(event: Event) {
                     capture.current = cursor;
                 }
                 if let Some(gesture) = state.gesture.as_mut() {
-                    let should_push = gesture.points.last().is_none_or(|last| {
-                        let dx = last.x - cursor.x;
-                        let dy = last.y - cursor.y;
-                        dx * dx + dy * dy >= 4
-                    });
-                    if should_push && gesture.points.len() < 512 {
-                        gesture.points.push(cursor);
+                    if !gesture.cancelled {
+                        append_gesture_point(&mut gesture.points, cursor, false);
                     }
                 }
             }
@@ -271,6 +268,9 @@ fn handle_button(state: &mut InputStore, button: Button, down: bool) {
     let Some(button) = map_button(button) else {
         return;
     };
+    if button == MouseButton::Left && down {
+        cancel_gesture_by_user(state);
+    }
     match button {
         MouseButton::Left => {
             state.state.left_down = down;
@@ -293,7 +293,7 @@ fn handle_button(state: &mut InputStore, button: Button, down: bool) {
             }
         }
         MouseButton::Middle => state.state.middle_down = down,
-        MouseButton::X1 | MouseButton::X2 => return,
+        MouseButton::X1 | MouseButton::X2 => {}
     }
 
     if handle_drag_event(state, button, down) {
@@ -311,10 +311,15 @@ fn handle_button(state: &mut InputStore, button: Button, down: bool) {
                 trigger,
                 modifiers: state.modifiers,
                 points: vec![state.cursor],
+                cancelled: false,
             });
         }
-    } else if let Some(gesture) = state.gesture.take() {
+    } else if let Some(mut gesture) = state.gesture.take() {
         if gesture.trigger == trigger {
+            if gesture.cancelled {
+                return;
+            }
+            append_gesture_point(&mut gesture.points, state.cursor, true);
             if state.completed_gestures.len() >= 8 {
                 state.completed_gestures.pop_front();
             }
@@ -369,7 +374,12 @@ fn handle_drag_event(state: &mut InputStore, button: MouseButton, down: bool) ->
 
 fn update_key(state: &mut InputStore, key: Key, down: bool) {
     match key {
-        Key::Escape => state.state.escape_down = down,
+        Key::Escape => {
+            state.state.escape_down = down;
+            if down {
+                cancel_gesture_by_user(state);
+            }
+        }
         Key::Return | Key::KpReturn => state.state.enter_down = down,
         Key::ControlLeft | Key::ControlRight => set_modifier(&mut state.modifiers, 1, down),
         Key::Alt | Key::AltGr => set_modifier(&mut state.modifiers, 2, down),
@@ -561,6 +571,15 @@ fn parse_ascii_key(part: &str) -> Option<Key> {
 #[allow(dead_code)]
 fn simulate_error_text(error: SimulateError) -> String {
     error.to_string()
+}
+
+fn cancel_gesture_by_user(state: &mut InputStore) {
+    if let Some(gesture) = state.gesture.as_mut() {
+        if !gesture.cancelled {
+            gesture.cancelled = true;
+            gesture.points.clear();
+        }
+    }
 }
 
 #[cfg(test)]
