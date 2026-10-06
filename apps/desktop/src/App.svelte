@@ -123,7 +123,9 @@
   let settings: AppSettings = loadSettings();
   let mode: Mode | null = null;
   let helperStatus: HelperStatus = "disconnected";
-  const administratorModeSupported = host.getPrivilegeState?.().supported ?? false;
+  const administratorModeSupported = host.getPrivilegeSupport?.().supported
+    ?? host.getPrivilegeState?.().supported
+    ?? false;
   let helperElevated: boolean | null = null;
   let switchingPrivilege = false;
   let privilegeNotice = "";
@@ -1162,8 +1164,8 @@
   function hasSecureBridge(): boolean { return host.kind === "desktop"; }
 </script>
 
-{#snippet topmostPinSetting()}
-  <div class="setting-title pin-setting" style="margin: 0 0 16px; padding-top: 0; border-top: 0">
+{#snippet topmostPinOption()}
+  <div class="setting-title topmost-pin-option">
     <div><h2>{ui("pinTooltip")}</h2><p>{ui("pinTooltipDescription")}</p></div>
     <label class="mini-switch"><input aria-label={ui("enablePin")} bind:checked={settings.topmostPin.enabled} on:change={() => persist()} type="checkbox" /><span></span></label>
   </div>
@@ -1268,6 +1270,7 @@
                 {#key `${selectedDisplayId}:${selectedZone}:${activeTrigger}:${modifierId(selectedHotzoneModifiers)}:${actionEditorRevision}`}
                 <div class="action-editor">
                   <label><span>{ui("action")}</span><ActionPicker options={actionOptions()} value={presetIndex(currentAction())} onSelect={setActionPreset} /></label>
+                  {#if currentAction().kind === "toggle-window-topmost"}{@render topmostPinOption()}{/if}
                   {#if currentAction().kind === "open-command" || (currentAction().kind === "shortcut" && !actionPresets.some((item) => item.kind === "shortcut" && item.value !== undefined && item.value === currentAction().value))}
                     <label><span>{currentAction().kind === "shortcut" ? ui("shortcut") : ui("command")}</span>{#if currentAction().kind === "shortcut"}<ShortcutRecorder english={english} label={ui("recordShortcut")} value={shortcutDraft} onChange={setActionShortcut} />{#if shortcutError}<p class="modifier-error" role="alert">{shortcutError}</p>{/if}{:else}<input value={currentAction().value ?? ""} on:input={setActionValue} placeholder={ui("enterValue")} />{/if}</label>
                   {/if}
@@ -1282,7 +1285,6 @@
                 <div class="list-section"><div class="subhead"><div><h2>{ui("pausedApps")}</h2><p>{ui("foreground")}{foregroundApp || ui("noForeground")}</p></div><button class="quiet" on:click={() => addForeground("hotzones")} type="button">+ {ui("addApp")}</button></div><div class="app-list">{#each settings.pausedApps as app}<div><span>{app}</span><button aria-label={format(ui("removeApp"), { app })} on:click={() => removeApp("hotzones", app)} type="button">×</button></div>{:else}<p class="empty">{ui("noPausedApps")}</p>{/each}</div></div>
               </div>
             {:else if mode === "edge-hide"}
-              {@render topmostPinSetting()}
               <div class="window-tabs"><button class:active={windowEnhancementTab === "edge"} on:click={() => { windowEnhancementTab = "edge"; }} type="button">{ui("edgeTab")}</button><button class:active={windowEnhancementTab === "drag"} on:click={() => { windowEnhancementTab = "drag"; }} type="button">{ui("dragTab")}</button></div>
               {#if windowEnhancementTab === "edge"}
                 <div class="feature-intro edge-master-intro" on:mouseleave={(event) => handleFeatureTutorialMouseLeave("edge-hide", event)} on:focusout={(event) => handleFeatureTutorialFocusOut("edge-hide", event)} role="group">
@@ -1325,7 +1327,6 @@
                 </div>
               {/if}
             {:else if mode === "gestures"}
-              {@render topmostPinSetting()}
               <div class="gesture-intro">
                 <div><span>{ui("gestureTitle")}</span><h2>{ui("gestureHeading")}</h2><p>{ui("gestureDescription")}</p></div>
                 <label class="mini-switch"><input aria-label={ui("enableGesture")} bind:checked={settings.mouseGestures.enabled} on:change={() => persist()} type="checkbox" /><span></span></label>
@@ -1392,6 +1393,7 @@
                       {#if gestureModifierError}<p class="modifier-error" role="alert">{gestureModifierError}</p>{/if}
                       {#if gestureModifierDraft === null}
                         <label><span>{ui("recognizeThen")}</span><ActionPicker options={actionOptions()} value={presetIndex(gestureActionDraft)} onSelect={setGestureActionPreset} /></label>
+                        {#if gestureActionDraft.kind === "toggle-window-topmost"}{@render topmostPinOption()}{/if}
                         {#if gestureActionDraft.kind === "open-command" || (gestureActionDraft.kind === "shortcut" && !actionPresets.some((item) => item.kind === "shortcut" && item.value !== undefined && item.value === gestureActionDraft.value))}
                           <label><span>{gestureActionDraft.kind === "shortcut" ? ui("shortcut") : ui("command")}</span>{#if gestureActionDraft.kind === "shortcut"}<ShortcutRecorder english={english} label={ui("recordShortcut")} value={gestureShortcutDraft} onChange={setGestureActionShortcut} />{#if gestureShortcutError}<p class="modifier-error" role="alert">{gestureShortcutError}</p>{/if}{:else}<input value={gestureActionDraft.value ?? ""} on:input={setGestureActionValue} placeholder={ui("enterValue")} />{/if}</label>
                         {/if}

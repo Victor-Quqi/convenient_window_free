@@ -43,6 +43,7 @@ it("discovers and persists topmost pin controls and pin offsets through the real
       configureHostBridge({
         kind: 'desktop', getInitialSettings: () => structuredClone(stored),
         getHelperToken: () => 'test-token', getHelperState: installState,
+        getPrivilegeSupport: () => ({ supported: true }),
         getPrivilegeState: () => ({ supported: true, elevated: null }),
         startHelper: async () => { startCalls++; return { ok: true }; },
         setHelperElevation: elevated => setElevation(elevated),
@@ -57,45 +58,54 @@ it("discovers and persists topmost pin controls and pin offsets through the real
       flushSync(); await settle();
       const topmostPin = () => {
         const inputs = document.querySelectorAll('input[aria-label="Enable topmost pin"]');
-        assert.equal(inputs.length, 1, 'the active page must expose exactly one topmost pin switch');
+        assert.equal(inputs.length, 1, 'the topmost action must expose exactly one pin switch');
         const input = inputs[0];
         assert.equal(input.disabled, false, 'topmost pin must remain operable');
-        assert.equal(input.closest('[inert]'), null, 'topmost pin must not inherit inert state from another feature');
+        assert.ok(input.closest('.topmost-pin-option'), 'the pin switch must be attached to the topmost action');
         return input;
+      };
+      const noTopmostPin = () => assert.equal(document.querySelectorAll('input[aria-label="Enable topmost pin"]').length, 0, 'pin switch must stay hidden without a topmost action');
+      const chooseAction = async (label) => {
+        const picker = document.querySelector('.action-editor .picker-trigger');
+        assert.ok(picker, 'the action picker must be available');
+        picker.click(); flushSync();
+        const option = [...document.querySelectorAll('.picker-menu button')].find(button => button.textContent.trim() === label);
+        assert.ok(option, 'the requested action must be available');
+        option.click(); await settle();
       };
       open(2);
       assert.equal(document.querySelector('.window-tabs button').classList.contains('active'), true, 'Windows enhancement must initially show the edge tab');
-      assert.equal(document.querySelector('.drawer-body').firstElementChild.classList.contains('pin-setting'), true, 'the Windows pin switch must be visible at the top without scrolling');
-      assert.equal(topmostPin().checked, true, 'topmost pin must default to enabled on the edge tab');
-      assert.ok(document.querySelector('.pin-setting').compareDocumentPosition(document.querySelector('.window-tabs')) & Node.DOCUMENT_POSITION_FOLLOWING, 'the shared pin switch must appear before the window tabs');
-      topmostPin().click(); await settle();
-      assert.equal(stored.topmostPin.enabled, false, 'the edge-tab pin choice must persist through the host');
+      noTopmostPin();
       document.querySelectorAll('.window-tabs button')[1].click(); flushSync();
       assert.equal(document.querySelector('input[aria-label="Enable dragging"]').checked, false, 'window drag is disabled in this scenario');
       assert.equal(document.querySelector('.feature-settings-body').hasAttribute('inert'), true, 'disabled drag settings must actually be inert');
-      assert.equal(topmostPin().checked, false, 'the drag tab must reflect the same pin setting');
+      noTopmostPin();
+      open(1);
+      noTopmostPin();
+      await chooseAction('Toggle always on top');
+      assert.equal(topmostPin().checked, true, 'the pin switch must default to enabled when topmost is selected');
       topmostPin().click(); await settle();
-      assert.equal(stored.topmostPin.enabled, true, 'the pin switch must work even while drag is disabled');
-      assert.equal(stored.windowDrag.enabled, false, 'changing the pin must not enable window drag');
-      open(3);
-      assert.equal(document.querySelector('.drawer-body').firstElementChild.classList.contains('pin-setting'), true, 'gesture users must find the pin switch at the start of the page');
-      assert.equal(topmostPin().checked, true, 'the gesture page must reflect the window-page pin setting');
+      assert.equal(stored.topmostPin.enabled, false, 'the hotzone topmost pin choice must persist through the host');
       topmostPin().click(); await settle();
-      assert.equal(stored.topmostPin.enabled, false, 'the gesture-page pin choice must persist through the same host setting');
-      open(2);
-      assert.equal(topmostPin().checked, false, 'the window page must reflect changes made from the gesture page');
+      assert.equal(stored.topmostPin.enabled, true, 'the hotzone topmost pin can be re-enabled');
       assert.equal(stored.enabled, true, 'pin changes must preserve the master switch');
       assert.equal(stored.mouseGestures.enabled, true, 'pin changes must preserve the gesture switch');
       assert.equal(stored.edgeHide.animationEnabled, false, 'pin changes must preserve unrelated edge preferences');
       assert.deepEqual(stored.taskbarAppearance, { enabled: true, mode: 'acrylic', opacity: 73, tint: '#EAF1FC', showBorder: true });
+      open(3);
+      noTopmostPin();
+      const circle = [...document.querySelectorAll('.gesture-library button')].find(button => button.textContent.includes('Circle'));
+      assert.ok(circle, 'the built-in circle gesture must be available');
+      circle.click(); await settle();
+      assert.equal(topmostPin().checked, true, 'the gesture topmost action must use the same default-enabled pin setting');
+      topmostPin().click(); await settle();
+      assert.equal(stored.topmostPin.enabled, false, 'the gesture topmost pin choice must persist through the same host setting');
       await unmount(component); document.body.replaceChildren();
       component = mount(App, { target: document.body }); flushSync(); await settle();
-      open(2);
-      assert.equal(document.querySelector('.window-tabs button').classList.contains('active'), true, 'remount must return to the default edge tab');
-      assert.equal(topmostPin().checked, false, 'an explicit pin-off choice must survive remount on the edge tab');
-      open(3);
-      assert.equal(topmostPin().checked, false, 'an explicit pin-off choice must survive remount on the gesture page');
-      open(2);
+      open(1);
+      assert.equal(topmostPin().checked, false, 'an explicit pin-off choice must survive remount when topmost remains selected');
+      assert.equal(stored.edgeHide.animationEnabled, false, 'the 0.6.3 animation preference must survive all new settings writes');
+      assert.deepEqual(stored.taskbarAppearance, { enabled: true, mode: 'acrylic', opacity: 73, tint: '#EAF1FC', showBorder: true });
       screenshot();
       assert.ok(pin(), 'the actual App must expose the pin offset choice');
       assert.equal(pin().textContent.trim(), 'Offset pinned image');

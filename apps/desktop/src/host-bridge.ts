@@ -9,6 +9,7 @@ export interface HostBridge {
     dataDir?: string;
   }>;
   stopHelper(): Promise<{ ok: boolean; error?: string }>;
+  getPrivilegeSupport?(): { supported: boolean };
   getPrivilegeState?(): { supported: boolean; elevated: boolean | null };
   setHelperElevation?(elevated: boolean): Promise<{ ok: boolean; elevated: boolean | null; warning?: string; error?: string }>;
   getHelperToken(): string | null;
