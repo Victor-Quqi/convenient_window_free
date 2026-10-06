@@ -174,6 +174,8 @@ export interface WindowDragSettings {
 
 export interface TopmostPinSettings {
   enabled: boolean;
+  /** Preference migration marker; the helper ignores this host-only field. */
+  defaultsVersion?: number;
 }
 
 export interface OcrSettings {

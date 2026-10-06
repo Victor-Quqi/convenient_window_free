@@ -1162,6 +1162,13 @@
   function hasSecureBridge(): boolean { return host.kind === "desktop"; }
 </script>
 
+{#snippet topmostPinSetting()}
+  <div class="setting-title pin-setting" style="margin: 0 0 16px; padding-top: 0; border-top: 0">
+    <div><h2>{ui("pinTooltip")}</h2><p>{ui("pinTooltipDescription")}</p></div>
+    <label class="mini-switch"><input aria-label={ui("enablePin")} bind:checked={settings.topmostPin.enabled} on:change={() => persist()} type="checkbox" /><span></span></label>
+  </div>
+{/snippet}
+
 <div class:app-disabled={!settings.enabled} class="app-shell">
   <header class="topbar">
     <div class="brand"><img src="app-icon.png" alt="" /><strong>{ui("brandName")}</strong></div>
@@ -1275,6 +1282,7 @@
                 <div class="list-section"><div class="subhead"><div><h2>{ui("pausedApps")}</h2><p>{ui("foreground")}{foregroundApp || ui("noForeground")}</p></div><button class="quiet" on:click={() => addForeground("hotzones")} type="button">+ {ui("addApp")}</button></div><div class="app-list">{#each settings.pausedApps as app}<div><span>{app}</span><button aria-label={format(ui("removeApp"), { app })} on:click={() => removeApp("hotzones", app)} type="button">×</button></div>{:else}<p class="empty">{ui("noPausedApps")}</p>{/each}</div></div>
               </div>
             {:else if mode === "edge-hide"}
+              {@render topmostPinSetting()}
               <div class="window-tabs"><button class:active={windowEnhancementTab === "edge"} on:click={() => { windowEnhancementTab = "edge"; }} type="button">{ui("edgeTab")}</button><button class:active={windowEnhancementTab === "drag"} on:click={() => { windowEnhancementTab = "drag"; }} type="button">{ui("dragTab")}</button></div>
               {#if windowEnhancementTab === "edge"}
                 <div class="feature-intro edge-master-intro" on:mouseleave={(event) => handleFeatureTutorialMouseLeave("edge-hide", event)} on:focusout={(event) => handleFeatureTutorialFocusOut("edge-hide", event)} role="group">
@@ -1315,9 +1323,9 @@
                 {#if windowDragBindingConflict}<p class="gesture-warning">{ui("moveResizeConflict")}</p>{/if}
                 <div class="list-section drag-paused-apps"><div class="subhead"><div><h2>{ui("pausedDragApps")}</h2><p>{ui("foreground")}{foregroundApp || ui("noForeground")}</p></div><button class="quiet" on:click={() => addForeground("drag")} type="button">+ {ui("addCurrentApp")}</button></div><div class="app-list">{#each settings.windowDrag.pausedApps as app}<div><span>{app}</span><button aria-label={format(ui("removeApp"), { app })} on:click={() => removeApp("drag", app)} type="button">×</button></div>{:else}<p class="empty">{ui("noPausedDragApps")}</p>{/each}</div></div>
                 </div>
-                <div class="setting-title pin-setting"><div><h2>{ui("pinTooltip")}</h2><p>{ui("pinTooltipDescription")}</p></div><label class="mini-switch"><input aria-label={ui("enablePin")} bind:checked={settings.topmostPin.enabled} on:change={() => persist()} type="checkbox" /><span></span></label></div>
               {/if}
             {:else if mode === "gestures"}
+              {@render topmostPinSetting()}
               <div class="gesture-intro">
                 <div><span>{ui("gestureTitle")}</span><h2>{ui("gestureHeading")}</h2><p>{ui("gestureDescription")}</p></div>
                 <label class="mini-switch"><input aria-label={ui("enableGesture")} bind:checked={settings.mouseGestures.enabled} on:change={() => persist()} type="checkbox" /><span></span></label>

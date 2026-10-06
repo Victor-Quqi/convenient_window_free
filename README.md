@@ -42,7 +42,7 @@ Development source adds an **Appearance** (slim wand-and-sparkle) entry and move
 - **Hot zones**: configure the four corners and four edges of each monitor independently, with hover, mouse-button, wheel, and edge-movement triggers.
 - **Window edge hiding**: move windows partly off-screen and restore them from a visible edge strip, with multi-window and multi-monitor support. The restore outline and hide/restore animation can be disabled independently without disabling edge restoration.
 - **Anywhere move and resize**: move or resize the active window with configurable modifier-and-mouse combinations.
-- **Topmost controls**: keep a window above others and optionally use a small on-window pin to release it quickly.
+- **Topmost controls**: keep a window above others; a red on-window pin is shown by default and releases the window when clicked.
 - **Global mouse gestures**: bind gestures to shortcuts, system actions, commands, and window controls; create and manage custom gesture samples.
 - **Screenshots and pinned images**: capture an area, keep the image above other windows, move or resize it, adjust opacity, copy it, or save it as PNG.
 - **Local OCR**: recognize text with Windows 11 language capabilities and copy the result without uploading the screenshot.
