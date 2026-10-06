@@ -98,6 +98,7 @@ export async function createDesktopHostBridge(): Promise<HostBridge> {
         return { ok: false, error: errorMessage(error) };
       }
     },
+    getPrivilegeSupport: () => ({ supported: status.administratorModeSupported }),
     getPrivilegeState: () => ({ supported: status.administratorModeSupported, elevated }),
     async setHelperElevation(desired) {
       try {

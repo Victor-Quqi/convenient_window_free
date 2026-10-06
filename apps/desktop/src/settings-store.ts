@@ -12,6 +12,7 @@ export const MAX_GESTURE_TEMPLATES = 64;
 export const MAX_SETTINGS_STORAGE_BYTES = 900 * 1024;
 
 const SETTINGS_KEY = "magic-corners.settings";
+const TOPMOST_PIN_DEFAULTS_VERSION = 1;
 
 const hotzoneIds: HotzoneId[] = [
   "top-left",
@@ -93,7 +94,8 @@ export const defaultSettings: AppSettings = {
     pausedApps: []
   },
   topmostPin: {
-    enabled: true
+    enabled: true,
+    defaultsVersion: TOPMOST_PIN_DEFAULTS_VERSION
   },
   ocr: {
     language: "auto",
@@ -123,7 +125,13 @@ export const defaultSettings: AppSettings = {
 
 export function loadSettings(): AppSettings {
   const stored = loadStoredSettings();
-  return normalizeSettings(stored);
+  const settings = normalizeSettings(stored);
+  // Old 0.6.x profiles did not expose this control. Restore the new default once,
+  // then persist the marker with the next normal settings write.
+  if (stored?.topmostPin?.defaultsVersion !== TOPMOST_PIN_DEFAULTS_VERSION) {
+    settings.topmostPin.enabled = true;
+  }
+  return settings;
 }
 
 export function normalizeSettings(stored: Partial<AppSettings> | null | undefined): AppSettings {
@@ -208,7 +216,8 @@ export function normalizeSettings(stored: Partial<AppSettings> | null | undefine
     mouseGestures: normalizeMouseGestures(stored.mouseGestures, sourceSchemaVersion),
     windowDrag: normalizeWindowDrag(stored.windowDrag),
     topmostPin: {
-      enabled: booleanValue(stored.topmostPin?.enabled, defaultSettings.topmostPin.enabled)
+      enabled: booleanValue(stored.topmostPin?.enabled, defaultSettings.topmostPin.enabled),
+      defaultsVersion: TOPMOST_PIN_DEFAULTS_VERSION
     },
     ocr: normalizeOcr(stored.ocr),
     taskbarAppearance: normalizeTaskbarAppearance(stored.taskbarAppearance),
