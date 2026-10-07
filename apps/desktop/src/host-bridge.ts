@@ -16,6 +16,7 @@ export interface HostBridge {
     warning?: string;
   }>;
   stopHelper(): Promise<{ ok: boolean; error?: string }>;
+  getPrivilegeSupport?(): { supported: boolean };
   getPrivilegeState?(): { supported: boolean; elevated: boolean | null };
   setHelperElevation?(elevated: boolean): Promise<{ ok: boolean; elevated: boolean | null; warning?: string; error?: string }>;
   getAdminStartup?(): Promise<AdminStartupState>;

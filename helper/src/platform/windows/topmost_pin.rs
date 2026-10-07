@@ -37,7 +37,7 @@ const PIN_PRESSED: COLORREF = COLORREF(0x003A34C9);
 const PIN_FOLLOW_INTERVAL: Duration = Duration::from_millis(8);
 const PIN_IDLE_INTERVAL: Duration = Duration::from_millis(80);
 const WM_MOUSELEAVE_MESSAGE: u32 = 0x02A3;
-static PIN_COMMANDS: OnceLock<mpsc::SyncSender<PinCommand>> = OnceLock::new();
+static PIN_COMMANDS: OnceLock<mpsc::Sender<PinCommand>> = OnceLock::new();
 static PIN_ENABLED: AtomicBool = AtomicBool::new(true);
 
 struct ManagedPin {
@@ -64,24 +64,21 @@ enum PinCommand {
 
 pub fn configure_topmost_pins(enabled: bool) {
     if PIN_ENABLED.swap(enabled, Ordering::AcqRel) != enabled {
-        let _ = pin_commands().try_send(PinCommand::Configure(enabled));
+        let _ = pin_commands().send(PinCommand::Configure(enabled));
     }
 }
 
 pub fn set_topmost_pin_target(handle: WindowHandle, topmost: bool) {
-    if !PIN_ENABLED.load(Ordering::Acquire) && topmost {
-        return;
-    }
-    let _ = pin_commands().try_send(PinCommand::SetTarget(handle, topmost));
+    let _ = pin_commands().send(PinCommand::SetTarget(handle, topmost));
 }
 
 pub fn clear_topmost_pins() {
-    let _ = pin_commands().try_send(PinCommand::Clear);
+    let _ = pin_commands().send(PinCommand::Clear);
 }
 
-fn pin_commands() -> &'static mpsc::SyncSender<PinCommand> {
+fn pin_commands() -> &'static mpsc::Sender<PinCommand> {
     PIN_COMMANDS.get_or_init(|| {
-        let (sender, receiver) = mpsc::sync_channel(32);
+        let (sender, receiver) = mpsc::channel();
         std::thread::Builder::new()
             .name("topmost-pin-ui".into())
             .spawn(move || run_pin_thread(receiver))
@@ -92,22 +89,28 @@ fn pin_commands() -> &'static mpsc::SyncSender<PinCommand> {
 
 fn run_pin_thread(receiver: mpsc::Receiver<PinCommand>) {
     register_pin_class();
-    let mut enabled = true;
+    let mut enabled = PIN_ENABLED.load(Ordering::Acquire);
     let mut pins: HashMap<WindowHandle, ManagedPin> = HashMap::new();
     loop {
         match receiver.recv_timeout(pin_refresh_interval(pins.values().any(|pin| pin.shown))) {
             Ok(PinCommand::SetTarget(handle, topmost)) => {
-                if topmost && enabled {
-                    pins.entry(handle)
-                        .or_insert_with(|| ManagedPin::new(create_pin_window(handle)));
+                if topmost {
+                    let pin = pins.entry(handle).or_insert_with(|| ManagedPin::new(0));
+                    if enabled {
+                        ensure_pin_window(handle, pin);
+                    }
                 } else {
                     remove_pin(&mut pins, handle);
                 }
             }
             Ok(PinCommand::Configure(next)) => {
                 enabled = next;
-                if !enabled {
-                    clear_pins(&mut pins);
+                if enabled {
+                    for (&target, pin) in pins.iter_mut() {
+                        ensure_pin_window(target, pin);
+                    }
+                } else {
+                    hide_pins(&mut pins);
                 }
             }
             Ok(PinCommand::Clear) => clear_pins(&mut pins),
@@ -178,7 +181,6 @@ fn refresh_pins(pins: &mut HashMap<WindowHandle, ManagedPin>) {
     let mut stale = Vec::new();
     for (&target, pin_state) in pins.iter_mut() {
         let target_hwnd = HWND(target.0 as *mut c_void);
-        let marker_hwnd = HWND(pin_state.marker as *mut c_void);
         let valid = unsafe { IsWindow(target_hwnd).as_bool() };
         let topmost = valid
             && (unsafe { GetWindowLongPtrW(target_hwnd, GWL_EXSTYLE) } as u32 & TOPMOST_STYLE.0)
@@ -190,15 +192,22 @@ fn refresh_pins(pins: &mut HashMap<WindowHandle, ManagedPin>) {
         if !unsafe { IsWindowVisible(target_hwnd).as_bool() }
             || unsafe { IsIconic(target_hwnd).as_bool() }
         {
-            if pin_state.shown {
+            if pin_state.shown && pin_state.marker != 0 {
                 unsafe {
-                    let _ = ShowWindow(marker_hwnd, SW_HIDE);
+                    let _ = ShowWindow(HWND(pin_state.marker as *mut c_void), SW_HIDE);
                 }
                 pin_state.shown = false;
                 pin_state.rect = None;
             }
             continue;
         }
+        if pin_state.marker == 0 {
+            ensure_pin_window(target, pin_state);
+        }
+        if pin_state.marker == 0 {
+            continue;
+        }
+        let marker_hwnd = HWND(pin_state.marker as *mut c_void);
         let mut rect = RECT::default();
         if unsafe { GetWindowRect(target_hwnd, &mut rect) }.is_err() {
             stale.push(target);
@@ -238,6 +247,24 @@ fn refresh_pins(pins: &mut HashMap<WindowHandle, ManagedPin>) {
     }
 }
 
+fn ensure_pin_window(target: WindowHandle, pin_state: &mut ManagedPin) {
+    if pin_state.marker == 0 {
+        pin_state.marker = create_pin_window(target);
+    }
+}
+
+fn hide_pins(pins: &mut HashMap<WindowHandle, ManagedPin>) {
+    for pin in pins.values_mut() {
+        if pin.marker != 0 && pin.shown {
+            unsafe {
+                let _ = ShowWindow(HWND(pin.marker as *mut c_void), SW_HIDE);
+            }
+        }
+        pin.shown = false;
+        pin.rect = None;
+    }
+}
+
 fn pin_rect(target: RECT, dpi: u32) -> RECT {
     let size = scale_dip(PIN_HIT_DIP, dpi).clamp(18, 88);
     let margin = scale_dip(PIN_MARGIN_DIP, dpi).clamp(6, 32);
@@ -265,16 +292,20 @@ fn pin_color(hovered: bool, pressed: bool) -> COLORREF {
 
 fn remove_pin(pins: &mut HashMap<WindowHandle, ManagedPin>, target: WindowHandle) {
     if let Some(pin) = pins.remove(&target) {
-        unsafe {
-            let _ = DestroyWindow(HWND(pin.marker as *mut c_void));
+        if pin.marker != 0 {
+            unsafe {
+                let _ = DestroyWindow(HWND(pin.marker as *mut c_void));
+            }
         }
     }
 }
 
 fn clear_pins(pins: &mut HashMap<WindowHandle, ManagedPin>) {
     for (_, pin) in pins.drain() {
-        unsafe {
-            let _ = DestroyWindow(HWND(pin.marker as *mut c_void));
+        if pin.marker != 0 {
+            unsafe {
+                let _ = DestroyWindow(HWND(pin.marker as *mut c_void));
+            }
         }
     }
 }
@@ -616,6 +647,31 @@ mod tests {
             let _ = DestroyWindow(hwnd);
         }
         super::super::assert_capture_exclusion_affinity(affinity);
+    }
+
+    #[test]
+    fn enabling_pins_replays_targets_seen_while_disabled() {
+        let _guard = PIN_WINDOW_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        clear_topmost_pins();
+        std::thread::sleep(Duration::from_millis(120));
+        configure_topmost_pins(false);
+        let target = test_topmost_window();
+        set_topmost_pin_target(WindowHandle(target.0 .0 as isize), true);
+        std::thread::sleep(Duration::from_millis(120));
+        let marker_while_disabled =
+            unsafe { FindWindowW(CLASS_NAME, PCWSTR::null()).unwrap_or_default() };
+        assert!(marker_while_disabled.0.is_null());
+
+        configure_topmost_pins(true);
+        std::thread::sleep(Duration::from_millis(260));
+        let marker = unsafe { FindWindowW(CLASS_NAME, PCWSTR::null()).unwrap_or_default() };
+        assert!(!marker.0.is_null());
+
+        clear_topmost_pins();
+        configure_topmost_pins(true);
+        std::thread::sleep(Duration::from_millis(120));
     }
 
     #[test]

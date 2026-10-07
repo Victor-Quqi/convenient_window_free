@@ -100,6 +100,7 @@ export async function createDesktopHostBridge(): Promise<HostBridge> {
         return { ok: false, error: errorMessage(error) };
       }
     },
+    getPrivilegeSupport: () => ({ supported: status.administratorModeSupported }),
     getPrivilegeState: () => ({ supported: status.administratorModeSupported, elevated }),
     async getStartup() {
       try { return { enabled: await invoke<boolean>("startup_status") }; }
