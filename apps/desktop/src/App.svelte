@@ -263,6 +263,19 @@
     return key ? (useEnglish ? en : zh)[key] : status;
   }
   $: renderedLastMessage = statusText(lastMessage, english);
+  // Lifecycle intent follows the saved switch/socket, not an error or unknown permission label.
+  $: runtimePowerActive = settings.enabled || helperStatus !== "disconnected";
+  let runtimeLabelKey: UiKey = "runtimeOff";
+  // Distinguish a disconnected helper from an active start; never paint an error green.
+  $: runtimeState = !helperInstallState.installed ? "missing" : helperError ? "error"
+    : stopping ? "stopping" : switchingPrivilege ? "switching"
+    : settings.enabled && helperStatus === "connected" ? "running"
+    : settings.enabled && (starting || recoveringHelper || helperStatus === "connecting") ? "starting"
+    : settings.enabled ? "disconnected" : "off";
+  $: runtimeLabelKey = runtimeState === "missing" ? "runtimeMissing" : runtimeState === "error" ? "runtimeError"
+    : runtimeState === "stopping" ? "runtimeStopping" : runtimeState === "switching" ? "runtimeSwitching"
+    : runtimeState === "running" ? "runtimeRunning" : runtimeState === "starting" ? "runtimeStarting"
+    : runtimeState === "disconnected" ? "runtimeDisconnected" : "runtimeOff";
 
   onMount(() => {
     initTheme();
@@ -1417,33 +1430,31 @@
               {#if !helperInstallState.installed}
                 <section class="helper-install-card">
                   <div class="helper-install-copy">
-                    <span class="eyebrow">{ui("helperInstallIncomplete")}</span>
                     <h2>{ui("helperFilesMissing")}</h2>
                     <p>{ui("helperNotRunnable")}</p>
                   </div>
                 </section>
               {/if}
-              <div class="power-summary"><div class="power-orb" class:on={settings.enabled && helperStatus === "connected"}><span></span></div><h2>{settings.enabled ? helperStatus === "connected" ? ui("runtimeRunning") : ui("runtimeStarting") : ui("runtimeOff")}</h2><p>{settings.enabled ? helperStatus === "connected" ? format(ui("runtimeRunningDetail"), { summary: runtimeSummary }) : ui("runtimeStartingDetail") : ui("runtimeOffDetail")}</p></div>
-              <div class="power-facts desktop-power-facts">
-                <div><span>{ui("masterState")}</span><strong class:on={settings.enabled}>{settings.enabled ? ui("masterOn") : ui("masterOffState")}</strong><p>{ui("masterStateDetail")}</p></div>
-                <div><span>{ui("helperSection")}</span><strong class:on={helperStatus === "connected"}>{helperStatus === "connected" ? ui("connected") : helperStatus === "connecting" ? ui("connecting") : ui("disconnected")}</strong><p>{ui("helperRole")}</p>{#if helperPlatform}<small class="platform-capabilities">{helperPlatform.system} · {helperPlatform.architecture}{helperPlatform.session ? ` · ${helperPlatform.session}` : ""} · {unavailableCapabilityText(helperPlatform)}</small>{/if}</div>
+              <div class="power-summary" data-state={runtimeState}>
+                <div class="power-orb" class:on={runtimeState === "running"} class:warning={runtimeState === "missing" || runtimeState === "disconnected"} class:error={runtimeState === "error"} aria-hidden="true"><span></span></div>
+                <h2 aria-live="polite">{ui(runtimeLabelKey)}</h2>
               </div>
-              {#if administratorModeSupported}
-                <div class="permission-settings">
-                  <label class="permission-toggle" title={ui("adminModeDetail")}>
-                    <span>{ui("adminMode")}</span>
-                    {#if switchingPrivilege}<small role="status">{ui("adminSwitching")}</small>{:else if helperElevated === null}<small role="status">{ui("adminStateUnknown")}</small>{/if}
-                    <span class="mini-switch">
-                      <input type="checkbox" role="switch" aria-label={ui("adminMode")} checked={helperElevated === true} disabled={helperElevated === null || switchingPrivilege || starting || stopping || upgradingHelper || recoveringHelper || !settings.enabled || helperStatus !== "connected"} on:change={(event) => { event.currentTarget.checked = helperElevated === true; void switchHelperPrivilege(); }} />
-                      <span aria-hidden="true"></span>
-                    </span>
-                  </label>
-                  {#if privilegeNotice}<p role="status">{statusText(privilegeNotice)}</p>{/if}
+              <dl class="runtime-states" aria-label={ui("currentState")}>
+                <div class="runtime-row"><dt>{ui("masterState")}</dt><dd><strong class:on={settings.enabled}>{settings.enabled ? ui("masterOn") : ui("masterOffState")}</strong></dd></div>
+                <div class="runtime-row"><dt>{ui("helperSection")}</dt><dd><strong class:on={helperStatus === "connected"} class:warning={!helperInstallState.installed || (settings.enabled && helperStatus === "disconnected")}>{!helperInstallState.installed ? ui("runtimeHelperNotInstalled") : helperStatus === "connected" ? ui("connected") : helperStatus === "connecting" ? ui("connecting") : ui("disconnected")}</strong></dd></div>
+                <div class="runtime-row" class:permission-settings={administratorModeSupported}><dt>{ui("runtimePermission")}</dt><dd>{#if administratorModeSupported}<label class="permission-toggle" title={ui("adminModeDetail")}><strong class:warning={helperElevated === null}>{switchingPrivilege ? ui("adminSwitching") : helperElevated === null ? ui("adminStateUnknown") : helperElevated ? ui("runtimeAdministrator") : ui("runtimeStandard")}</strong><span class="mini-switch"><input type="checkbox" role="switch" aria-label={ui("adminMode")} checked={helperElevated === true} disabled={helperElevated === null || switchingPrivilege || starting || stopping || upgradingHelper || recoveringHelper || !settings.enabled || helperStatus !== "connected"} on:change={(event) => { event.currentTarget.checked = helperElevated === true; void switchHelperPrivilege(); }} /><span aria-hidden="true"></span></span></label>{:else}<strong>{ui("runtimeUnavailable")}</strong>{/if}{#if privilegeNotice}<p class="runtime-notice" role="status">{statusText(privilegeNotice, english)}</p>{/if}</dd></div>
+              </dl>
+              {#if helperError}<div class="runtime-notice error" role="alert">{statusText(helperError, english)}</div>{:else if runtimeState === "disconnected"}<p class="runtime-notice warning" role="status">{ui("runtimeReconnectHint")}</p>{/if}
+              <div class="power-actions runtime-actions"><button class="apply" data-action={runtimePowerActive ? "stop" : "start"} disabled={switchingPrivilege || starting || stopping || (!runtimePowerActive && !helperInstallState.installed)} on:click={() => setPowerEnabled(!runtimePowerActive)} type="button">{runtimePowerActive ? ui("closeFeature") : ui("openFeature")}</button><button aria-live="polite" class:failed={connectionTestState === "failed"} class:success={connectionTestState === "success"} class:testing={connectionTestState === "testing"} class="quiet connection-test" disabled={helperStatus !== "connected" || connectionTestState === "testing"} on:click={runConnectionTest} type="button"><i aria-hidden="true"></i><span>{connectionTestState === "testing" ? ui("connectionTesting") : connectionTestState === "success" ? ui("connectionOk") : connectionTestState === "failed" ? ui("connectionFailed") : ui("connectionTest")}</span></button></div>
+              <details class="runtime-details">
+                <summary>{ui("runtimeDetails")}</summary>
+                <div class="runtime-details-body">
+                  {#if helperPlatform}<div class="runtime-platform"><span>{ui("runtimePlatform")}</span><p>{helperPlatform.system} · {helperPlatform.architecture}{helperPlatform.session ? ` · ${helperPlatform.session}` : ""}</p><p>{unavailableCapabilityText(helperPlatform)}</p></div>{/if}
+                  <div class="helper-meta"><span>{format(ui("helperVersion"), { version: helperInstallState.version })}</span><button on:click={() => openHelperPage("repository")} type="button">{ui("publicDownload")}</button><code>{helperInstallState.installDir ?? ui("helperInstallDirUnknown")}</code></div>
+                  <div class:error={Boolean(helperError)} class="status-rail"><div><span>{ui("recentAction")}</span><strong>{lastAction || statusText("noAction")}</strong></div><div><span>{ui("currentState")}</span><strong aria-live="polite">{statusText(helperError, english) || renderedLastMessage}</strong></div></div>
+                  <button class="quiet" on:click={copyDiagnostics} type="button">{ui("diagnostics")}</button>
                 </div>
-              {/if}
-              <div class="power-actions"><button class="apply" disabled={!helperInstallState.installed || settings.enabled || starting || stopping || switchingPrivilege} on:click={() => setPowerEnabled(true)} type="button">{ui("openFeature")}</button><button class="quiet" disabled={switchingPrivilege || starting || stopping || (!settings.enabled && helperStatus === "disconnected")} on:click={() => setPowerEnabled(false)} type="button">{ui("closeFeature")}</button><button aria-live="polite" class:failed={connectionTestState === "failed"} class:success={connectionTestState === "success"} class:testing={connectionTestState === "testing"} class="quiet connection-test" disabled={helperStatus !== "connected" || connectionTestState === "testing"} on:click={runConnectionTest} type="button"><i aria-hidden="true"></i><span>{connectionTestState === "testing" ? ui("connectionTesting") : connectionTestState === "success" ? ui("connectionOk") : connectionTestState === "failed" ? ui("connectionFailed") : ui("connectionTest")}</span></button><button class="quiet" on:click={copyDiagnostics} type="button">{ui("diagnostics")}</button></div>
-              <div class="helper-meta"><span>{format(ui("helperVersion"), { version: helperInstallState.version })}</span><button on:click={() => openHelperPage("repository")} type="button">{ui("publicDownload")}</button><code>{helperInstallState.installDir ?? ui("helperInstallDirUnknown")}</code></div>
-              <div class:error={Boolean(helperError)} class="status-rail"><div><span>{ui("recentAction")}</span><strong>{lastAction || statusText("noAction")}</strong></div><div><span>{ui("currentState")}</span><strong aria-live="polite">{statusText(helperError, english) || renderedLastMessage}</strong></div></div>
+              </details>
             {:else if mode === "beautification"}
               <TaskbarAppearance {english} appearance={settings.taskbarAppearance} connected={helperStatus === "connected"} masterEnabled={settings.enabled} status={taskbarStatus} onChange={updateTaskbarAppearance} />
             {:else}

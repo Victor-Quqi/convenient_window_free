@@ -5,7 +5,7 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { build } from "vite";
 import { expect, it } from "vitest";
 
-it("discovers and persists topmost pin controls and pin offsets through the real App and host", async () => {
+it("preserves feature controls and exercises compact runtime states through the real App and host", async () => {
   const directory = mkdtempSync(nodePath.join(import.meta.dirname, ".ui-regression-test-"));
   try {
     const entry = nodePath.join(directory, "entry.ts");
@@ -36,7 +36,8 @@ it("discovers and persists topmost pin controls and pin offsets through the real
       stored.edgeHide.animationEnabled = false;
       stored.ocr.pinOffset = false;
       stored.taskbarAppearance = { enabled: true, mode: 'acrylic', opacity: 73, tint: '#EAF1FC', showBorder: true };
-      const installState = () => ({ installed: true, development: false, version: '0.6.4', bytes: 0 });
+      let helperInstalled = true;
+      const installState = () => ({ installed: helperInstalled, development: false, version: '0.6.4', bytes: 0 });
       let elevationResult = { ok: true, elevated: true };
       const elevationRequests = [];
       let setElevation = async elevated => { elevationRequests.push(elevated); return elevationResult; };
@@ -128,6 +129,7 @@ it("discovers and persists topmost pin controls and pin offsets through the real
       assert.equal(permission().disabled, true, 'a socket without a ready permission report is still unknown');
       assert.equal(permission().checked, false);
       assert.ok(document.querySelector('.permission-settings').textContent.includes('Permission state unknown'));
+      assert.equal(document.querySelector('.runtime-actions .apply').dataset.action, 'stop', 'unknown permission must not turn an active helper into a start action');
       ready(true);
       assert.equal(permission().checked, true);
       assert.equal(permission().disabled, false);
@@ -218,6 +220,81 @@ it("discovers and persists topmost pin controls and pin offsets through the real
       assert.equal(startCalls, beforeRecovery + 1, 'failed pre-switch persistence must preserve eligibility for ordinary connection recovery');
       ready(true);
       await unmount(component);
+      document.body.replaceChildren();
+      localStorage.setItem('convenient-window-language', 'en-US');
+      stored.enabled = true;
+      component = mount(App, { target: document.body }); flushSync(); await settle(); open(0);
+      assert.equal(document.querySelector('.power-summary').dataset.state, 'starting', 'an active connect reports starting');
+      const runtimeDetails = () => document.querySelector('.runtime-details:not(.install-details)');
+      assert.equal(runtimeDetails().open, false, 'technical details start collapsed');
+      assert.equal(document.querySelector('.power-facts'), null, 'large explanatory cards are removed');
+      assert.equal(document.querySelectorAll('.runtime-states > .runtime-row').length, 3, 'master, helper and permission use three compact rows');
+      assert.equal(document.querySelectorAll('.runtime-actions button').length, 2, 'one lifecycle action sits beside one connection test');
+      assert.ok(document.querySelector('.runtime-actions > .connection-test'), 'connection testing remains a sibling action');
+      assert.equal(document.querySelector('.runtime-actions .apply').dataset.action, 'stop');
+      assert.equal(document.querySelector('.power-summary p'), null, 'healthy operation needs no explanatory paragraph');
+      ready(false);
+      receive({ type: 'helper.ready', data: { protocolVersion: SUPPORTED_HELPER_PROTOCOL, version: '0.6.4', elevated: false,
+        platform: { system: 'windows', architecture: 'x86_64', session: 'Win32', capabilities: { globalInput: true, ocr: false } } } }); flushSync();
+      assert.equal(document.querySelector('.power-summary').dataset.state, 'running');
+      assert.ok(document.querySelector('.power-orb').classList.contains('on'));
+      assert.ok(document.querySelector('.runtime-states').textContent.includes('Standard'));
+      assert.ok(runtimeDetails().querySelector('.runtime-platform').textContent.includes('x86_64'), 'platform information belongs inside details');
+      runtimeDetails().querySelector('summary').click(); flushSync();
+      assert.equal(runtimeDetails().open, true, 'the native disclosure remains operable');
+      runtimeDetails().querySelector('summary').click(); flushSync();
+      receive({ type: 'runtime.error', data: { code: 'input_monitor_failed' } }); flushSync();
+      assert.equal(runtimeDetails().open, false);
+      assert.equal(document.querySelector('.power-summary').dataset.state, 'error');
+      assert.equal(document.querySelector('.runtime-actions .apply').dataset.action, 'stop', 'error does not imply the enabled helper should start again');
+      const alert = document.querySelector('.runtime-notice[role="alert"]');
+      assert.ok(alert && alert.textContent.trim(), 'critical errors remain visible with details closed');
+      assert.equal(alert.closest('details'), null, 'critical error must never be folded');
+      assert.equal(document.querySelector('.power-orb').classList.contains('on'), false, 'a connected socket cannot make an error green');
+
+      ready(true);
+      assert.ok(document.querySelector('.runtime-states').textContent.includes('Administrator'));
+      receiveStatus('disconnected'); flushSync();
+      assert.equal(document.querySelector('.power-summary').dataset.state, 'error', 'a disconnect with a recovery error must not claim to be starting');
+      assert.ok(document.querySelectorAll('.runtime-states .runtime-row')[1].textContent.includes('Disconnected'), 'the connection state remains explicit even with an error');
+      assert.ok(document.querySelector('.runtime-states').textContent.includes('Permission state unknown'), 'disconnect clears known elevation');
+      assert.ok(document.querySelector('.runtime-notice[role="alert"]'), 'the disconnect reason remains outside the disclosure');
+      receiveStatus('connecting'); flushSync();
+      assert.equal(document.querySelector('.power-summary').dataset.state, 'error', 'reconnecting does not silently clear a pending error');
+      ready(false);
+      assert.equal(document.querySelectorAll('.runtime-states input[role="switch"]').length, 1, 'only the current-session permission switch remains');
+      assert.equal(document.querySelector('.login-toggle'), null);
+      assert.equal(document.querySelector('.permission-startup'), null);
+      const off = [...document.querySelectorAll('.runtime-actions button')].find(button => button.textContent.trim() === 'Close');
+      assert.ok(off && !off.disabled, 'stop remains a primary visible action');
+      off.click(); await settle();
+      assert.equal(stored.enabled, false, 'stop must still use the existing host persistence path');
+      assert.equal(document.querySelector('.power-summary').dataset.state, 'off');
+      assert.equal(document.querySelector('.runtime-actions .apply').dataset.action, 'start');
+      assert.equal(document.querySelectorAll('.runtime-actions button').length, 2, 'the redundant disabled stop action is not rendered');
+      assert.equal(document.querySelector('.power-orb').classList.contains('on'), false);
+      const on = [...document.querySelectorAll('.runtime-actions button')].find(button => button.textContent.trim() === 'Open');
+      assert.ok(on && !on.disabled, 'start remains available after stopping');
+      on.click(); await settle();
+      assert.equal(stored.enabled, true);
+      ready(false);
+      await unmount(component); document.body.replaceChildren();
+      for (const language of ['en-US', 'zh-CN']) {
+        stored.enabled = false;
+        localStorage.setItem('convenient-window-language', language);
+        helperInstalled = false;
+        component = mount(App, { target: document.body }); flushSync(); await settle(); open(0);
+        assert.equal(document.querySelector('.power-summary').dataset.state, 'missing');
+        assert.equal(document.querySelector('.power-orb').classList.contains('on'), false);
+        assert.ok(document.querySelector('.helper-install-card'), 'missing files must expose recovery guidance');
+        assert.equal(document.querySelector('.runtime-actions .apply').dataset.action, 'start');
+        assert.equal(document.querySelector('.runtime-actions .apply').disabled, true, 'cannot start missing files');
+        assert.equal(runtimeDetails().open, false);
+        assert.equal(document.querySelector('.power-summary h2').textContent.trim(), language === 'en-US' ? 'Helper not installed' : '助手未安装');
+
+        await unmount(component); document.body.replaceChildren();
+      }
+      helperInstalled = true;
       console.log('App UI host regression passed');
     `);
     await build({
