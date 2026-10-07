@@ -76,6 +76,10 @@ The UI awaits a successful durable desktop-settings write before sending that ex
 
 Schema v8 adds optional `ocr.pinOffset`, default true when absent; host normalization also defaults invalid input to true, while the helper still requires a boolean; explicit false survives both host normalizers and helper deserialization. Pinned images start at the capture's original physical-pixel dimensions and signed virtual-desktop origin. True offsets the origin 16 px down/right; false covers the capture in place. No initial fit-to-screen scaling is applied, so large or edge-adjacent images may extend beyond the screen. Manual move/resize remains available; OCR still reads the original pixels. Topmost pin tracking checks stacking order even without a position change and keeps a pin immediately above its owner, not above unrelated higher windows.
 
+## Runtime Center
+
+The runtime center presents a compact running/off/starting/disconnected/error/missing state and master/helper/permission rows. Technical platform, version, path and diagnostics data are in an initially collapsed details section. Errors and unknown permissions stay visible outside that section. Feature controls use the same lifecycle operation as the master switch; this presentation change does not add scheduled administrator startup.
+
 ## Helper Lifecycle
 
 Each host starts the helper with an absolute `--data-dir` owned by that product. Authentication tokens, runtime configuration, usage data, and logs remain separate between products. A platform-native single-instance lock (the `Global\ConvenientWindowHelper` mutex on Windows and an exclusive runtime/cache lock file on Unix) prevents both products from running helpers concurrently; the losing process logs `HELPER_INSTANCE_CONFLICT` and exits nonzero so the host can show a stable error.

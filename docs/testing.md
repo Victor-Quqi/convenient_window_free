@@ -106,6 +106,9 @@ For interactive acceptance, start the desktop normally with an isolated data dir
 
 ## 0.6.4 local candidate acceptance
 
+Runtime-center refinement (2026-10-07) passed the 165 desktop frontend tests, zero-error/warning Svelte checks and production frontend build. Isolated Chromium host/WebSocket mocks cover connected/off states, details disclosure, ping, light/dark themes, English and 640px layout, and the context-sensitive start/stop action. This is UI/state evidence, not actual UAC, installation, or scheduled-administrator startup acceptance. Scheduled startup is not included in this integration.
+
+
 Keep an existing 0.6.3 installation intact. NSIS replacement/uninstall is not an automatic local development action; the user performs the actual candidate install/upgrade, while installer automation belongs in an isolated account/CI.
 
 This is development acceptance only: no Release, tag, stable replacement, or release-freeze claim. Preserve existing 0.6.3 outputs by selecting a separate directory for every package gate, from the repository root:
