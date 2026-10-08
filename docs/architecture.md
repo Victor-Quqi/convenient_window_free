@@ -2,7 +2,7 @@
 
 ## Hot-zone hover hint
 
-Introduced in schema v8, the optional `showHotzoneHint` boolean defaults to true for older settings and preserves an explicit false across normalization and persistence. It controls only the pale translucent hover hint. The engine short-circuits hint selection when disabled and updates the dedicated hot-zone hint channel with `None`, hiding an existing hint without clearing edge-hide or gesture overlays. Detection, per-display actions, wheel accumulation, timings, and settings previews remain independent. Request deduplication is unchanged; the option adds no worker, timer, polling, or file I/O. Protocol v7 is unchanged; current settings use schema v9.
+Introduced in schema v8, the optional `showHotzoneHint` boolean defaults to true for older settings and preserves an explicit false across normalization and persistence. It controls only the pale translucent hover hint. The engine keeps one shared input/hint frame and submits `None` to the dedicated hot-zone hint channel when disabled, hiding an existing hint without clearing edge-hide or gesture overlays. Detection, per-display actions, wheel accumulation, timings, and settings previews remain independent. Request deduplication is unchanged; the option adds no worker, timer, polling, or file I/O. Protocol v7 is unchanged; current settings use schema v9.
 
 ## Per-zone geometry (schema v9)
 
