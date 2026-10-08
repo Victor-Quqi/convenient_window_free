@@ -1,5 +1,17 @@
 # Testing
 
+## Per-zone geometry and schema-v9 acceptance
+
+Require the exact protocol7/schema9 ready handshake before sending configuration; test old, missing and future schemas without writes or dropped geometry. Migrate earlier settings without materializing overrides or changing legacy global sizes and actions. Verify shared rectangle/normalization fixtures, corner priority over full-length edges, per-display isolation, deep copies, persistence, export/import and per-zone reset. UI regression must mount the real App, cancel numeric drafts on context changes, preserve non-square ratios, update both previews, and allow selecting all eight zones inside a narrow drawer. Browser host/IPC mocks are not native acceptance evidence.
+
+Helper verification: 235 passed / 3 existing ignored tests, including the shared hot-zone-frame path, schema-v8 migration and stale-schema rejection.
+
+Development evidence: the desktop frontend passes 267 tests across 25 files, with zero Svelte errors/warnings. The corresponding other-host frontend passes 327 tests across 26 files. Shared fixtures and modules pass parity checks. Real-browser acceptance covers 28 paired-host geometry scenarios and the standard modifier/language/layout smoke; host and IPC mocks are explicitly not native evidence.
+
+Manual Windows acceptance must include bottom-edge wheel controls at centered and 100% lengths, endpoints versus corner priority, hint-off actions, independent displays, negative coordinates, portrait orientation, and 100–200% DPI. Unlinked 12×24 then linked width24 must produce 24×48. Reset removes only the current override and falls back to the legacy global thickness/40%. Do not install over existing user software automatically. New schema settings require the matching helper and are not a downgrade artifact.
+
+The engine resolves one per-display hot-zone frame per tick for both hint and action paths; geometry adds no worker, polling or runtime I/O. Real-user responsiveness remains a manual acceptance item, not a conclusion from unit-test durations.
+
 ## Hot-zone hover hint (0.6.4)
 
 Both frontends default the optional `showHotzoneHint` flag on for missing or malformed values and preserve false across normalization, storage, import/export, remounting, and feature-switch changes. The shared configuration fixture includes false. DOM checks mount the real App with mocked host/IPC; real-browser checks cover light/dark, English, narrow layouts, toggling and reloads. Native helper tests cover persistence, independent wheel detection, per-display actions, hiding/reusing the hot-zone HWND, and preserving the separate edge-preview hint.

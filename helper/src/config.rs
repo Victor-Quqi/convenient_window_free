@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 const MAX_GESTURE_TEMPLATES: usize = 64;
 
@@ -234,13 +234,66 @@ pub struct HotzoneSetting {
     #[serde(default)]
     pub actions: Vec<TriggerAction>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub geometry: Option<HotzoneGeometry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger: Option<TriggerKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action: Option<HotzoneAction>,
 }
 
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "kebab-case")]
+pub enum HotzoneGeometry {
+    Corner {
+        width: i32,
+        height: i32,
+        #[serde(default = "default_true")]
+        linked: bool,
+    },
+    Edge {
+        thickness: i32,
+        #[serde(rename = "lengthPercent")]
+        length_percent: i32,
+    },
+}
+
+impl HotzoneGeometry {
+    pub fn normalized(self, id: HotzoneId) -> Option<Self> {
+        let corner = matches!(
+            id,
+            HotzoneId::TopLeft
+                | HotzoneId::TopRight
+                | HotzoneId::BottomLeft
+                | HotzoneId::BottomRight
+        );
+        match self {
+            Self::Corner {
+                width,
+                height,
+                linked,
+            } if corner => Some(Self::Corner {
+                width: width.clamp(2, 128),
+                height: height.clamp(2, 128),
+                linked,
+            }),
+            Self::Edge {
+                thickness,
+                length_percent,
+            } if !corner => Some(Self::Edge {
+                thickness: thickness.clamp(2, 48),
+                length_percent: length_percent.clamp(10, 100),
+            }),
+            _ => None,
+        }
+    }
+}
+
 impl HotzoneSetting {
     fn normalize_actions(&mut self) {
+        self.geometry = self
+            .geometry
+            .take()
+            .and_then(|shape| shape.normalized(self.id));
         if self.actions.is_empty() {
             if let (Some(trigger), Some(action)) = (self.trigger, self.action.clone()) {
                 self.actions.push(TriggerAction {
@@ -809,6 +862,7 @@ fn default_hotzones() -> Vec<HotzoneSetting> {
             id,
             enabled: false,
             actions: Vec::new(),
+            geometry: None,
             trigger: None,
             action: None,
         })
@@ -1093,12 +1147,12 @@ mod tests {
     }
 
     #[test]
-    fn shared_schema_eight_migration_preserves_user_data_and_is_idempotent() {
+    fn shared_schema_nine_migration_preserves_user_data_and_is_idempotent() {
         let fixture: serde_json::Value =
             serde_json::from_str(include_str!("../../tests/fixtures/i18n-migration.json")).unwrap();
         let config: AppConfig = serde_json::from_value(fixture["input"].clone()).unwrap();
         let migrated = config.normalized();
-        assert_eq!(migrated.schema_version, 8);
+        assert_eq!(migrated.schema_version, 9);
         for (id, name) in fixture["expectedNames"].as_object().unwrap() {
             let gesture = migrated
                 .mouse_gestures
@@ -1159,6 +1213,8 @@ mod tests {
             "schemaVersion": config.schema_version,
             "hotzonesEnabled": config.hotzones_enabled,
             "showHotzoneHint": config.show_hotzone_hint,
+            "cornerGeometry": config.hotzones.iter().find(|zone| zone.id == HotzoneId::TopLeft).unwrap().geometry,
+            "edgeGeometry": config.hotzones.iter().find(|zone| zone.id == HotzoneId::Bottom).unwrap().geometry,
             "edgeSize": config.edge_size,
             "hoverDelayMs": config.hover_delay_ms,
             "pollIntervalMs": config.poll_interval_ms,
@@ -1221,12 +1277,62 @@ mod tests {
             .unwrap();
             let config = config.normalized();
             assert_eq!(config.show_hotzone_hint, enabled);
-            assert_eq!(config.schema_version, 8);
+            assert_eq!(config.schema_version, 9);
             let saved = serde_json::to_value(&config).unwrap();
             assert_eq!(saved["showHotzoneHint"], enabled);
             let reloaded: AppConfig = serde_json::from_value(saved).unwrap();
             assert_eq!(reloaded.normalized().show_hotzone_hint, enabled);
         }
+    }
+
+    #[test]
+    fn schema_eight_shapes_are_preserved_without_materializing_overrides() {
+        let config: AppConfig = serde_json::from_value(serde_json::json!({ "schemaVersion": 8, "edgeSize": 24,
+            "showHotzoneHint": false, "hotzonesEnabled": true,
+            "hotzones": [{"id":"bottom", "actions":[{"trigger":"wheel-up","action":{"kind":"volume-adjust","value":"0.02"}}]}]
+        })).unwrap();
+        let config = config.normalized();
+        assert_eq!(config.schema_version, 9);
+        assert_eq!(config.edge_size, 24);
+        assert!(!config.show_hotzone_hint);
+        assert!(config.hotzones.iter().all(|zone| zone.geometry.is_none()));
+        assert!(config
+            .hotzones
+            .iter()
+            .find(|zone| zone.id == HotzoneId::Bottom)
+            .unwrap()
+            .has_action());
+    }
+
+    #[test]
+    fn per_monitor_geometry_round_trips_without_enabling_actions() {
+        let config: AppConfig = serde_json::from_value(serde_json::json!({"schemaVersion":9,
+            "monitorProfiles":[
+                {"monitorId":"first","hotzones":[{"id":"bottom","geometry":{"kind":"edge","thickness":16,"lengthPercent":100}}]},
+                {"monitorId":"second","hotzones":[{"id":"bottom","geometry":{"kind":"edge","thickness":4,"lengthPercent":20}}]}
+            ]
+        })).unwrap();
+        let config = config.normalized();
+        let saved = serde_json::to_value(&config).unwrap();
+        let roundtrip: AppConfig = serde_json::from_value(saved.clone()).unwrap();
+        assert_eq!(serde_json::to_value(roundtrip.normalized()).unwrap(), saved);
+        assert_eq!(
+            config.monitor_profiles[0]
+                .hotzones
+                .iter()
+                .find(|zone| zone.id == HotzoneId::Bottom)
+                .unwrap()
+                .geometry,
+            Some(HotzoneGeometry::Edge {
+                thickness: 16,
+                length_percent: 100
+            })
+        );
+        assert!(config
+            .monitor_profiles
+            .iter()
+            .flat_map(|profile| &profile.hotzones)
+            .all(|zone| !zone.has_action()));
     }
 
     #[test]

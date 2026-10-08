@@ -56,7 +56,7 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       });
       const settle = async () => { for (let i = 0; i < 8; i++) { await Promise.resolve(); flushSync(); } };
       const open = index => { document.querySelectorAll('.mode-nav button')[index].click(); flushSync(); };
-      const ready = elevated => { receiveStatus('connected'); receive({ type: 'helper.ready', data: { protocolVersion: SUPPORTED_HELPER_PROTOCOL, version: '0.6.4', elevated } }); flushSync(); };
+      const ready = elevated => { receiveStatus('connected'); receive({ type: 'helper.ready', data: { protocolVersion: SUPPORTED_HELPER_PROTOCOL, schemaVersion: 9, version: '0.6.4', elevated } }); flushSync(); };
       const pin = () => document.querySelector('.pin-offset-option button');
       const screenshot = () => { open(3); document.querySelector('button.screenshot').click(); flushSync(); };
       let component = mount(App, { target: document.body });
@@ -75,7 +75,7 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
         const row = rows[0];
         assert.ok(row.classList.contains('setting-title'), 'hint setting must use the existing setting-title style');
         assert.ok(row.previousElementSibling.textContent.includes('Corner parameters') || row.previousElementSibling.textContent.includes('热区参数'), 'hint setting belongs under hotzone parameters');
-        assert.ok(row.nextElementSibling.classList.contains('form-grid'), 'the existing hotzone size control stays in place');
+        assert.ok(row.nextElementSibling.classList.contains('hotzone-geometry'), 'the per-area size editor follows the hint setting');
         const input = row.querySelector('.mini-switch input[type="checkbox"]');
         assert.ok(input, 'hint setting must use the existing mini-switch');
         return input;
@@ -109,7 +109,7 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
         hotzoneHint().click(); await settle();
         assert.equal(hotzoneHint().checked, showHotzoneHint);
         assert.equal(stored.showHotzoneHint, showHotzoneHint, 'hint off/on must persist through the actual host');
-        assert.equal(stored.schemaVersion, 8, 'hint preference is backward-compatible schema v8');
+        assert.equal(stored.schemaVersion, 9, 'geometry settings use schema v9');
         assert.equal(stored.hotzonesEnabled, true, 'hiding the hint must not disable corner actions');
         assert.deepEqual(stored.hotzones, hotzonesBeforeHint, 'hint changes must preserve every trigger action');
         assert.deepEqual(stored.monitorProfiles, profilesBeforeHint, 'hint changes must preserve per-display settings');
@@ -127,7 +127,7 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       document.querySelector('.settings-toggle').click(); flushSync();
       document.querySelectorAll('.config-actions .quiet')[0].click(); await settle();
       assert.equal(JSON.parse(exportedJson).showHotzoneHint, false, 'the actual App export must preserve the disabled hint');
-      assert.equal(JSON.parse(exportedJson).schemaVersion, 8);
+      assert.equal(JSON.parse(exportedJson).schemaVersion, 9);
       open(1); hotzoneHint().click(); await settle();
       assert.equal(stored.showHotzoneHint, true, 'prepare a different choice before importing the saved JSON');
       document.querySelector('.settings-toggle').click(); flushSync();
@@ -303,7 +303,7 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       assert.equal(document.querySelector('.runtime-actions .apply').dataset.action, 'stop');
       assert.equal(document.querySelector('.power-summary p'), null, 'healthy operation needs no explanatory paragraph');
       ready(false);
-      receive({ type: 'helper.ready', data: { protocolVersion: SUPPORTED_HELPER_PROTOCOL, version: '0.6.4', elevated: false,
+      receive({ type: 'helper.ready', data: { protocolVersion: SUPPORTED_HELPER_PROTOCOL, schemaVersion: 9, version: '0.6.4', elevated: false,
         platform: { system: 'windows', architecture: 'x86_64', session: 'Win32', capabilities: { globalInput: true, ocr: false } } } }); flushSync();
       assert.equal(document.querySelector('.power-summary').dataset.state, 'running');
       assert.ok(document.querySelector('.power-orb').classList.contains('on'));

@@ -45,9 +45,14 @@ export interface ModifierAction {
   action: HotzoneAction;
 }
 
+export type HotzoneGeometry =
+  | { kind: "corner"; width: number; height: number; linked: boolean }
+  | { kind: "edge"; thickness: number; lengthPercent: number };
+
 export interface HotzoneSetting {
   id: HotzoneId;
   enabled: boolean;
+  geometry?: HotzoneGeometry;
   actions: TriggerAction[];
 }
 

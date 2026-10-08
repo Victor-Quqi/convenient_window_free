@@ -185,8 +185,12 @@ describe("number settings persistence round trip", () => {
   it("uses the draft-aware action for every number input in the settings page", () => {
     const source = readFileSync(nodePath.join(import.meta.dirname, "App.svelte"), "utf8");
     const inputs = source.match(/<input\b[^]*?\/>/g)!.filter((input) => input.includes('type="number"'));
-    expect(inputs).toHaveLength(fields.length);
-    for (const input of inputs) {
+    // The legacy global edgeSize remains a migration fallback, not an App input.
+    expect(inputs).toHaveLength(fields.filter(([path]) => path !== "edgeSize").length);
+    const geometrySource = readFileSync(nodePath.join(import.meta.dirname, "HotzoneGeometryEditor.svelte"), "utf8");
+    const geometryInputs = geometrySource.match(/<input\b[^]*?\/>/g)!.filter((input) => input.includes('type="number"'));
+    expect(geometryInputs).toHaveLength(4); // Corner width/height; edge thickness/length.
+    for (const input of [...inputs, ...geometryInputs]) {
       expect(input).toContain("use:numberSetting=");
       expect(input).not.toContain("bind:value");
       expect(input).not.toContain("on:input");

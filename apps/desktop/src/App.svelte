@@ -4,11 +4,12 @@
   import { runtimeErrorKey } from "./runtime-error";
   import { onMount } from "svelte";
   import { fly } from "svelte/transition";
-  import { HelperClient, isSupportedHelperProtocol, SUPPORTED_HELPER_PROTOCOL } from "./helper-client";
+  import { HelperClient, isSupportedHelperProtocol, isSupportedHelperSchema, SUPPORTED_HELPER_PROTOCOL, SUPPORTED_HELPER_SCHEMA } from "./helper-client";
   import { needsHelperUpgrade } from "./helper-version";
   import { HelperRecoveryGuard } from "./helper-recovery";
   import ActionPicker from "./ActionPicker.svelte";
   import MonitorStage from "./MonitorStage.svelte";
+  import HotzoneGeometryEditor from "./HotzoneGeometryEditor.svelte";
   import GestureCanvas from "./GestureCanvas.svelte";
   import ModifierRecorder from "./ModifierRecorder.svelte";
   import ShortcutRecorder from "./ShortcutRecorder.svelte";
@@ -25,7 +26,7 @@
   import type { Language, UiKey } from "./i18n";
   import type {
     ActionKind, AppSettings, DisplayInfo, Edge, HelperPlatformInfo, HelperStatus, HotzoneAction,
-    GesturePoint, GestureTemplate, HotzoneId, HotzoneSetting, ModifierKey,
+    GesturePoint, GestureTemplate, HotzoneGeometry, HotzoneId, HotzoneSetting, ModifierKey,
     OcrLanguage, TaskbarAppearanceSettings, TaskbarAppearanceStatus, TriggerAction, TriggerKind
   } from "./types";
 
@@ -260,7 +261,7 @@
   };
   function statusText(status: UiStatusKey | string, useEnglish = english): string {
     const key = statusKeys[status as UiStatusKey] ?? (Object.hasOwn(zh, status) ? status as UiKey : undefined);
-    return key ? (useEnglish ? en : zh)[key] : status;
+    return key ? format((useEnglish ? en : zh)[key], { schema: SUPPORTED_HELPER_SCHEMA }) : status;
   }
   $: renderedLastMessage = statusText(lastMessage, english);
   // Lifecycle intent follows the saved switch/socket, not an error or unknown permission label.
@@ -309,7 +310,7 @@
     });
     const offMessage = helper.onMessage((message) => {
       if (message.type === "helper.ready") {
-        const data = message.data as { version?: unknown; protocolVersion?: unknown; ocrLanguages?: unknown; platform?: HelperPlatformInfo; elevated?: unknown } | null;
+        const data = message.data as { version?: unknown; protocolVersion?: unknown; schemaVersion?: unknown; ocrLanguages?: unknown; platform?: HelperPlatformInfo; elevated?: unknown } | null;
         helperPlatform = helper.platformInfo ?? (data?.platform ?? null);
         availableOcrLanguages = Array.isArray(data?.ocrLanguages)
           ? data.ocrLanguages.filter((language): language is OcrLanguage => language === "auto" || language === "zh-Hans" || language === "en")
@@ -318,6 +319,12 @@
           lastMessage = format(ui("statusHelperProtocol"), { min: SUPPORTED_HELPER_PROTOCOL, max: SUPPORTED_HELPER_PROTOCOL });
           helperError = lastMessage;
           helperRecoveryFailed = true;
+          helper.stop();
+        } else if (!isSupportedHelperSchema(data?.schemaVersion)) {
+          lastMessage = "statusHelperSchema";
+          helperError = "statusHelperSchema";
+          helperRecoveryFailed = true;
+          displayReady = false;
           helper.stop();
         } else if (needsHelperUpgrade(expectedHelperVersion, data?.version)) {
           requestHelperUpgrade(data?.version);
@@ -336,7 +343,7 @@
         }
       } else if (message.type === "runtime.status") {
         const data = message.data as { displays?: DisplayInfo[]; foreground?: string; message?: string };
-        if (Array.isArray(data.displays) && data.displays.length) {
+        if (!helperRecoveryFailed && Array.isArray(data.displays) && data.displays.length) {
           displayReady = true;
           displays = data.displays;
           const selectedDisplay = displays.find((display) =>
@@ -463,6 +470,24 @@
     }
     currentDisplayHotzones = profile.hotzones;
     return profile.hotzones;
+  }
+
+  function setHotzoneGeometry(geometry: HotzoneGeometry): void {
+    if (!displayReady || !displays.some((display) => display.id === selectedDisplayId)) return;
+    const zone = ensureProfile().find((item) => item.id === selectedZone);
+    if (!zone) return;
+    zone.geometry = { ...geometry };
+    settings = { ...settings };
+    persist();
+  }
+
+  function resetHotzoneGeometry(): void {
+    if (!displayReady || !displays.some((display) => display.id === selectedDisplayId)) return;
+    const zone = ensureProfile().find((item) => item.id === selectedZone);
+    if (!zone) return;
+    delete zone.geometry;
+    settings = { ...settings };
+    persist();
   }
 
   function currentZone(): HotzoneSetting {
@@ -1173,7 +1198,7 @@
       lastMessage = format(ui("diagnosticsFailed"), { error: error instanceof Error ? error.message : String(error) });
     }
   }
-  function cloneHotzones(zones: HotzoneSetting[]): HotzoneSetting[] { return zones.map((zone) => ({ ...zone, actions: zone.actions.map((item) => ({ trigger: item.trigger, action: { ...item.action }, modifierActions: (item.modifierActions ?? []).map((variant) => ({ modifiers: [...variant.modifiers], action: { ...variant.action } })), cooldownMs: item.cooldownMs, hoverDelayMs: item.hoverDelayMs })) })); }
+  function cloneHotzones(zones: HotzoneSetting[]): HotzoneSetting[] { return zones.map((zone) => ({ ...zone, ...(zone.geometry ? { geometry: { ...zone.geometry } } : {}), actions: zone.actions.map((item) => ({ trigger: item.trigger, action: { ...item.action }, modifierActions: (item.modifierActions ?? []).map((variant) => ({ modifiers: [...variant.modifiers], action: { ...variant.action } })), cooldownMs: item.cooldownMs, hoverDelayMs: item.hoverDelayMs })) })); }
   function hasSecureBridge(): boolean { return host.kind === "desktop"; }
 </script>
 
@@ -1216,6 +1241,7 @@
         edgeHideEdges={currentDisplayEdgeHideEdges}
         hotzonesEnabled={settings.hotzonesEnabled}
         hotzones={currentDisplayHotzones}
+        edgeSize={settings.edgeSize}
         onSelectDisplay={selectDisplay}
         onSelectZone={selectZone}
         onToggleEdge={toggleEdge}
@@ -1250,7 +1276,7 @@
               </div>
               <div class="feature-settings-head"><span>{ui("hotzoneSettings")}</span><strong>{settings.hotzonesEnabled ? ui("unifiedOn") : ui("keepConfig")}</strong></div>
               <div class="feature-settings-body" class:off={!settings.hotzonesEnabled} inert={!settings.hotzonesEnabled}>
-                {#if !displayReady}<p class="empty" role="status">{ui("waitingForDisplays")}</p>{/if}
+                {#if !displayReady}<p class="empty hotzone-connection-note" class:error={Boolean(helperError)} role={helperError ? "alert" : "status"}>{helperError ? statusText(helperError, english) : ui("waitingForDisplays")}</p>{/if}
                 <div class="monitor-hotzone-settings" inert={!displayReady}>
                 <div class="trigger-tabs">
                   {#each triggerGroups as group}
@@ -1295,7 +1321,17 @@
                 </div>
                 <div class="subhead" style="margin-top:18px"><div><h2>{ui("hotzoneParameters")}</h2><p>{ui("hotzoneParametersDescription")}</p></div></div>
                 <div class="setting-title hotzone-hint-setting"><div><h2>{ui("showHotzoneHint")}</h2><p>{ui("hotzoneHintDescription")}</p></div><label class="mini-switch"><input aria-label={ui("showHotzoneHint")} bind:checked={settings.showHotzoneHint} on:change={() => persist()} type="checkbox" /><span></span></label></div>
-                <div class="form-grid"><label><span>{ui("edgeSize")}</span><div><input use:numberSetting={{ value: settings.edgeSize, onChange: (value) => { settings.edgeSize = value; persist(); } }} min="2" max="48" type="number" /><em>px</em></div></label></div>
+                <HotzoneGeometryEditor
+                  zone={currentDisplayHotzones.find((zone) => zone.id === selectedZone) ?? currentDisplayHotzones[0]}
+                  display={displayReady ? displays.find((display) => display.id === selectedDisplayId) : undefined}
+                  monitorId={selectedDisplayId}
+                  edgeSize={settings.edgeSize}
+                  ready={displayReady}
+                  {language}
+                  onChange={setHotzoneGeometry}
+                  onReset={resetHotzoneGeometry}
+                  onSelectZone={selectZone}
+                />
                 <div class="list-section"><div class="subhead"><div><h2>{ui("pausedApps")}</h2><p>{ui("foreground")}{foregroundApp || ui("noForeground")}</p></div><button class="quiet" on:click={() => addForeground("hotzones")} type="button">+ {ui("addApp")}</button></div><div class="app-list">{#each settings.pausedApps as app}<div><span>{app}</span><button aria-label={format(ui("removeApp"), { app })} on:click={() => removeApp("hotzones", app)} type="button">×</button></div>{:else}<p class="empty">{ui("noPausedApps")}</p>{/each}</div></div>
               </div>
             {:else if mode === "edge-hide"}
