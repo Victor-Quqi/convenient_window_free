@@ -78,7 +78,7 @@ Schema v8 adds optional `ocr.pinOffset`, default true when absent; host normaliz
 
 ## Runtime Center
 
-The runtime center presents a compact running/off/starting/disconnected/error/missing state and master/helper/permission rows. Technical platform, version, path and diagnostics data are in an initially collapsed details section. Errors and unknown permissions stay visible outside that section. Feature controls use the same lifecycle operation as the master switch; this presentation change does not add scheduled administrator startup.
+The runtime center presents a compact running/off/starting/disconnected/error/missing state and two aligned grey master/helper cards with short descriptions. Permission controls are only in the top-right Settings panel. Technical platform, version, path and diagnostics data are in an initially collapsed details section. Errors and unknown permissions stay visible outside that section. Feature controls use the same lifecycle operation as the master switch; this presentation change does not add scheduled administrator startup.
 
 ## Helper Lifecycle
 

@@ -39,6 +39,9 @@ export function format(template: string, values: Record<string, string | number>
 
 export const zh = {
   runtimeDetails: "运行详情",
+  runtimeRulesBrief: "控制全部功能",
+  runtimeHelperBrief: "监听与窗口操作",
+  runtimePermissionUnknownHint: "权限状态未知，请在设置中检查。",
   runtimePermission: "权限",
   runtimeStandard: "普通权限",
   runtimeAdministrator: "管理员",
@@ -200,6 +203,9 @@ export const zh = {
 
 export const en: Record<keyof typeof zh, string> = {
   runtimeDetails: "Runtime details",
+  runtimeRulesBrief: "Controls all features",
+  runtimeHelperBrief: "Window actions",
+  runtimePermissionUnknownHint: "Permission unknown. Check Settings.",
   runtimePermission: "Permission",
   runtimeStandard: "Standard",
   runtimeAdministrator: "Administrator",

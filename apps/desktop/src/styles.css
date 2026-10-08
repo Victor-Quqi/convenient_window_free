@@ -371,16 +371,15 @@ input[type="number"][aria-invalid="true"] { border-color: var(--danger); }
 .power-summary h2 { margin: 12px 0 0; color: var(--ink); font-size: 18px; line-height: 1.4; font-weight: 600; overflow-wrap: anywhere; }
 .power-summary[data-state="running"] h2 { color: var(--green); }
 .power-summary[data-state="error"] h2 { color: var(--danger); }
-.runtime-states { margin: 0 0 16px; }
-.runtime-row { display: grid; grid-template-columns: minmax(0, .75fr) minmax(0, 1.25fr); align-items: center; gap: 10px; min-height: 40px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
-.runtime-row dt { color: var(--muted); overflow-wrap: anywhere; }
-.runtime-row dd { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px 10px; min-width: 0; margin: 0; text-align: right; }
-.runtime-row strong { color: var(--muted); font-size: 12px; line-height: 1.5; font-weight: 500; overflow-wrap: anywhere; }
-.runtime-row strong.on { color: var(--green); }
-.runtime-row strong.warning { color: var(--amber); }
-.runtime-row .runtime-notice { flex-basis: 100%; margin: 2px 0 0; }
-.runtime-row.permission-settings { padding: 10px 0; }
-.runtime-row .permission-toggle { justify-content: flex-end; flex-wrap: wrap; min-width: 0; }
+.power-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0 0 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--raised); }
+.runtime-card { min-width: 0; padding: 12px 14px; }
+.runtime-card + .runtime-card { border-left: 1px solid var(--line); }
+.runtime-card dt { margin-bottom: 4px; color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.runtime-card dd { display: grid; grid-template-rows: auto 1fr; gap: 4px; margin: 0; }
+.runtime-card strong { color: var(--muted); font-size: 12px; line-height: 1.5; font-weight: 600; overflow-wrap: anywhere; }
+.runtime-card strong.on { color: var(--green); }
+.runtime-card strong.warning { color: var(--amber); }
+.runtime-card p { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .runtime-link { padding: 2px 0; border: 0; color: var(--accent-soft); background: transparent; font-size: 11px; }
 .runtime-link:hover { text-decoration: underline; }
 .runtime-notice { margin: 0 0 12px; color: var(--muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
@@ -825,7 +824,7 @@ input[type="number"][aria-invalid="true"] { border-color: var(--danger); }
 :root[data-theme="light"] .theme-toggle .icon-moon { opacity: 0; transform: rotate(-90deg) scale(.35); }
 
 /* 主题切换时主要表面柔和过渡（不覆盖各控件自身的 hover 过渡） */
-body, .topbar, .drawer, .drawer-head, .mode-nav, .power-orb,
+body, .topbar, .drawer, .drawer-head, .mode-nav, .power-facts, .power-orb,
 .helper-install-card, .install-console, .screenshot-panel, .gesture-catalog,
 .gesture-editor, .gesture-global-settings, .app-list > div, .gesture-options label,
 .install-stages i, .zone span, .screen, .window-demo {
@@ -917,7 +916,12 @@ body, .topbar, .drawer, .drawer-head, .mode-nav, .power-orb,
 .beauty-diagnostics { margin: 8px 0 0; color: var(--muted); font-size: 11px; }
 .beauty-diagnostics summary { cursor: pointer; }
 .beauty-diagnostics code { display: block; margin: 7px 0; user-select: text; }
-.permission-settings { padding: 14px 0; }
+.permission-settings { margin-top: 16px; padding: 16px 0 0; border-top: 1px solid var(--line); }
+.permission-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px 14px; }
+.permission-heading h2 { margin: 0; color: var(--ink); font-size: 13px; font-weight: 600; }
+.permission-state { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.permission-state.warning { color: var(--amber); }
+.permission-settings .runtime-notice { margin-top: 10px; }
 .permission-toggle { display: flex; align-items: center; gap: 10px; min-height: 24px; color: var(--muted); font-size: 12px; cursor: pointer; }
 .permission-toggle > span:first-child { flex: 1; }
 .permission-toggle small, .permission-settings > p { color: var(--faint); font-size: 11px; }

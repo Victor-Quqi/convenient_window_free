@@ -5,7 +5,7 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import { build } from "vite";
 import { expect, it } from "vitest";
 
-it("preserves feature controls and exercises compact runtime states through the real App and host", async () => {
+it("preserves feature controls and exercises aligned runtime cards and settings permissions through the real App and host", async () => {
   const directory = mkdtempSync(nodePath.join(import.meta.dirname, ".ui-regression-test-"));
   try {
     const entry = nodePath.join(directory, "entry.ts");
@@ -123,13 +123,19 @@ it("preserves feature controls and exercises compact runtime states through the 
       component = mount(App, { target: document.body }); flushSync(); await settle(); screenshot();
       assert.equal(pin().getAttribute('aria-pressed'), 'true', 'pin offset must survive remount');
       open(0); receiveStatus('connected'); flushSync();
+      assert.equal(document.querySelector('.permission-settings'), null, 'permission settings must not remain in the runtime center');
+      const openSettings = () => { document.querySelector('.settings-toggle').click(); flushSync(); };
+      openSettings();
       const permission = () => document.querySelector('.permission-settings input[role="switch"]');
       assert.ok(permission(), 'both real Apps must expose the supported helper permission control');
       assert.equal(permission().getAttribute('aria-label'), 'Administrator access');
       assert.equal(permission().disabled, true, 'a socket without a ready permission report is still unknown');
       assert.equal(permission().checked, false);
       assert.ok(document.querySelector('.permission-settings').textContent.includes('Permission state unknown'));
+      open(0);
       assert.equal(document.querySelector('.runtime-actions .apply').dataset.action, 'stop', 'unknown permission must not turn an active helper into a start action');
+      assert.ok(document.querySelector('.runtime-permission-warning'), 'unknown remains visible without a permission setting in the runtime center');
+      openSettings();
       ready(true);
       assert.equal(permission().checked, true);
       assert.equal(permission().disabled, false);
@@ -148,16 +154,16 @@ it("preserves feature controls and exercises compact runtime states through the 
       assert.equal(connectCalls, beforeRetainedFailure + 1, 'a failed switch with known surviving helper state must reconnect');
       ready(true);
       assert.equal(permission().checked, true, 'the reconnected helper ready state remains authoritative');
-      assert.equal(document.querySelector('.status-rail').classList.contains('error'), false, 'fresh ready clears the switch error');
+      assert.equal(Boolean(document.querySelector('.permission-settings [role="alert"]')), false, 'fresh ready clears the switch error');
       ready(false);
       receive({ type: 'runtime.error', data: { code: 'input_monitor_failed' } }); flushSync();
-      assert.equal(document.querySelector('.status-rail').classList.contains('error'), true);
+      assert.equal(Boolean(document.querySelector('.permission-settings [role="alert"]')), true);
       elevationResult = { ok: true, elevated: false, warning: 'adminCancelled' };
       const beforeCancelledRequest = connectCalls;
       permission().click(); await settle();
       assert.equal(elevationRequests.at(-1), true, 'ordinary mode requests elevation, never guesses from unknown');
       assert.equal(connectCalls, beforeCancelledRequest + 1);
-      assert.equal(document.querySelector('.status-rail').classList.contains('error'), false, 'a successful cancellation fallback must not retain an old helper error');
+      assert.equal(Boolean(document.querySelector('.permission-settings [role="alert"]')), false, 'a successful cancellation fallback must not retain an old helper error');
       assert.ok(document.querySelector('.permission-settings').textContent.toLowerCase().includes('cancel'));
       ready(false);
       assert.equal(permission().checked, false);
@@ -165,7 +171,7 @@ it("preserves feature controls and exercises compact runtime states through the 
       open(4);
       assert.ok(document.querySelector('.drawer').textContent.includes('Taskbar effect applied'), 'new taskbar status must render after permission reconnection');
       assert.deepEqual(sent.at(-1).taskbarAppearance, { enabled: true, mode: 'acrylic', opacity: 73, tint: '#EAF1FC', showBorder: true });
-      open(0); ready(true);
+      openSettings(); ready(true);
       elevationResult = { ok: false, elevated: false, error: 'ordinary-start-failure' };
       permission().click(); await settle();
       assert.equal(permission().checked, false, 'a failed ordinary restart must never retain the old elevated=true UI');
@@ -186,10 +192,10 @@ it("preserves feature controls and exercises compact runtime states through the 
       assert.equal(permission().disabled, true);
       assert.ok(document.querySelector('.permission-settings').textContent.includes('Permission state unknown'));
       assert.equal(document.querySelector('.master input').disabled, false, 'exception cleanup must release the switching state');
-      assert.ok(document.querySelector('.status-rail').textContent.includes('transport-switch-failure'));
+      assert.ok(document.querySelector('.permission-settings [role="alert"]').textContent.includes('transport-switch-failure'));
       await unmount(component); document.body.replaceChildren();
       localStorage.setItem('convenient-window-language', 'zh-CN');
-      component = mount(App, { target: document.body }); flushSync(); await settle(); open(0);
+      component = mount(App, { target: document.body }); flushSync(); await settle(); openSettings();
       assert.equal(permission().getAttribute('aria-label'), '管理员权限');
       assert.ok(document.querySelector('.permission-settings').textContent.includes('权限状态未知'));
       ready(false);
@@ -197,10 +203,12 @@ it("preserves feature controls and exercises compact runtime states through the 
       setElevation = elevated => { elevationRequests.push(elevated); return new Promise(resolve => { finishElevation = resolve; }); };
       permission().click(); await settle();
       assert.equal(document.querySelector('.master input').disabled, true, 'no lifecycle toggle is allowed while permission replacement is pending');
+      open(0);
       const offButton = [...document.querySelectorAll('.power-actions button')].find(button => button.textContent.includes('关闭功能'));
       assert.equal(offButton.disabled, true);
       const deleteButton = document.querySelector('.power-actions .danger');
       if (deleteButton) assert.equal(deleteButton.disabled, true, 'the host must not delete helper files during a pending elevation request');
+      openSettings();
       const pendingRequests = elevationRequests.length;
       permission().dispatchEvent(new Event('change')); await settle();
       assert.equal(elevationRequests.length, pendingRequests, 'permission replacement is not reentrant');
@@ -227,8 +235,9 @@ it("preserves feature controls and exercises compact runtime states through the 
       assert.equal(document.querySelector('.power-summary').dataset.state, 'starting', 'an active connect reports starting');
       const runtimeDetails = () => document.querySelector('.runtime-details:not(.install-details)');
       assert.equal(runtimeDetails().open, false, 'technical details start collapsed');
-      assert.equal(document.querySelector('.power-facts'), null, 'large explanatory cards are removed');
-      assert.equal(document.querySelectorAll('.runtime-states > .runtime-row').length, 3, 'master, helper and permission use three compact rows');
+      assert.equal(document.querySelectorAll('.power-facts > .runtime-card').length, 2, 'the two grey cards are retained');
+      assert.equal(document.querySelectorAll('.power-facts p').length, 2, 'each card has one short description');
+      assert.equal(document.querySelector('.permission-settings'), null, 'permission controls only belong in Settings');
       assert.equal(document.querySelectorAll('.runtime-actions button').length, 2, 'one lifecycle action sits beside one connection test');
       assert.ok(document.querySelector('.runtime-actions > .connection-test'), 'connection testing remains a sibling action');
       assert.equal(document.querySelector('.runtime-actions .apply').dataset.action, 'stop');
@@ -238,7 +247,9 @@ it("preserves feature controls and exercises compact runtime states through the 
         platform: { system: 'windows', architecture: 'x86_64', session: 'Win32', capabilities: { globalInput: true, ocr: false } } } }); flushSync();
       assert.equal(document.querySelector('.power-summary').dataset.state, 'running');
       assert.ok(document.querySelector('.power-orb').classList.contains('on'));
-      assert.ok(document.querySelector('.runtime-states').textContent.includes('Standard'));
+      openSettings();
+      assert.ok(document.querySelector('.permission-settings').textContent.includes('Standard'));
+      open(0);
       assert.ok(runtimeDetails().querySelector('.runtime-platform').textContent.includes('x86_64'), 'platform information belongs inside details');
       runtimeDetails().querySelector('summary').click(); flushSync();
       assert.equal(runtimeDetails().open, true, 'the native disclosure remains operable');
@@ -253,16 +264,18 @@ it("preserves feature controls and exercises compact runtime states through the 
       assert.equal(document.querySelector('.power-orb').classList.contains('on'), false, 'a connected socket cannot make an error green');
 
       ready(true);
-      assert.ok(document.querySelector('.runtime-states').textContent.includes('Administrator'));
+      openSettings();
+      assert.ok(document.querySelector('.permission-settings').textContent.includes('Administrator'));
+      open(0);
       receiveStatus('disconnected'); flushSync();
       assert.equal(document.querySelector('.power-summary').dataset.state, 'error', 'a disconnect with a recovery error must not claim to be starting');
-      assert.ok(document.querySelectorAll('.runtime-states .runtime-row')[1].textContent.includes('Disconnected'), 'the connection state remains explicit even with an error');
-      assert.ok(document.querySelector('.runtime-states').textContent.includes('Permission state unknown'), 'disconnect clears known elevation');
+      assert.ok(document.querySelectorAll('.power-facts .runtime-card')[1].textContent.includes('Disconnected'), 'the connection state remains explicit even with an error');
+      assert.ok(document.querySelector('.runtime-permission-warning').textContent.includes('Permission unknown'), 'disconnect clears known elevation');
       assert.ok(document.querySelector('.runtime-notice[role="alert"]'), 'the disconnect reason remains outside the disclosure');
       receiveStatus('connecting'); flushSync();
       assert.equal(document.querySelector('.power-summary').dataset.state, 'error', 'reconnecting does not silently clear a pending error');
       ready(false);
-      assert.equal(document.querySelectorAll('.runtime-states input[role="switch"]').length, 1, 'only the current-session permission switch remains');
+      assert.equal(document.querySelectorAll('.drawer input[role="switch"]').length, 0, 'permission settings are absent from the runtime center');
       assert.equal(document.querySelector('.login-toggle'), null);
       assert.equal(document.querySelector('.permission-startup'), null);
       const off = [...document.querySelectorAll('.runtime-actions button')].find(button => button.textContent.trim() === 'Close');
