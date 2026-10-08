@@ -1,5 +1,11 @@
 # Testing
 
+## Hot-zone hover hint (0.6.4)
+
+Both frontends default the optional `showHotzoneHint` flag on for missing or malformed values and preserve false across normalization, storage, import/export, remounting, and feature-switch changes. The shared configuration fixture includes false. DOM checks mount the real App with mocked host/IPC; real-browser checks cover light/dark, English, narrow layouts, toggling and reloads. Native helper tests cover persistence, independent wheel detection, per-display actions, hiding/reusing the hot-zone HWND, and preserving the separate edge-preview hint.
+
+Manual Windows acceptance: restart the updated helper, keep a bottom-edge volume-wheel action configured, and disable the hover hint in Corner parameters. Verify no pale background appears while scrolling still changes volume. Reenable to restore the hint, then disable and restart to verify persistence. Edge-hide hints, gesture trails, topmost pins, and the settings preview must remain unchanged. The option introduces no worker, timer, polling or runtime file reads; automated evidence is not a real-user responsiveness measurement. Custom zone lengths are not part of this change.
+
 ## Required Baselines
 
 Historical regression floors remain useful, but they are not current candidate results. Migration work originally required 71 host-integration frontend tests and 129 default helper tests (2 Windows OCR tests explicitly ignored). The archived 0.5.9 candidate reported 107 host-integration tests, 79 standalone frontend tests, 165 helper tests (2 ignored), and 13 Tauri host tests.

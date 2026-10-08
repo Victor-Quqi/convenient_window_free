@@ -76,6 +76,7 @@ export interface AppSettings {
   schemaVersion: number;
   enabled: boolean;
   hotzonesEnabled: boolean;
+  showHotzoneHint: boolean;
   edgeSize: number;
   hoverDelayMs: number;
   pollIntervalMs: number;

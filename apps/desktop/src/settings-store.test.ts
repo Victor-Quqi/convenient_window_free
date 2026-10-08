@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   defaultSettings,
+  loadSettings,
   MAX_GESTURE_TEMPLATES,
   MAX_SETTINGS_STORAGE_BYTES,
   normalizeSettings,
@@ -9,13 +10,35 @@ import {
 import contractFixture from "../../../tests/fixtures/config-contract.json";
 import type { AppSettings } from "./types";
 
-const hostBridgeState = vi.hoisted(() => ({ current: null as null | { saveSettings(settings: unknown): Promise<void> } }));
+const hostBridgeState = vi.hoisted(() => ({ current: null as null | { getInitialSettings?(): unknown; saveSettings(settings: unknown): Promise<void> } }));
 
 vi.mock("./host-bridge", () => ({
   getOptionalHostBridge: () => hostBridgeState.current
 }));
 
 describe("normalizeSettings", () => {
+  it("defaults the hotzone hint on for missing settings without changing schema v8", () => {
+    expect(defaultSettings.showHotzoneHint).toBe(true);
+    expect(defaultSettings.schemaVersion).toBe(8);
+    for (const input of [null, undefined, {}, { schemaVersion: 7 }, { schemaVersion: 8 }]) {
+      expect(normalizeSettings(input)).toMatchObject({ schemaVersion: 8, showHotzoneHint: true });
+    }
+  });
+
+  it.each([null, 0, 1, "false", "true", {}, []].map((value) => [value]))("defaults a non-boolean hotzone hint %j on", (showHotzoneHint) => {
+    const settings = normalizeSettings({ showHotzoneHint } as unknown as Partial<AppSettings>);
+    expect(settings.showHotzoneHint).toBe(true);
+  });
+
+  it.each([false, true])("preserves hotzone hint %s through normalization and JSON export/import", (showHotzoneHint) => {
+    const settings = normalizeSettings({ showHotzoneHint, enabled: false, hotzonesEnabled: false });
+    expect(settings).toMatchObject({ schemaVersion: 8, showHotzoneHint, enabled: false, hotzonesEnabled: false });
+    expect(normalizeSettings(settings).showHotzoneHint).toBe(showHotzoneHint);
+    const exported = JSON.stringify(normalizeSettings(settings), null, 2);
+    expect(JSON.parse(exported).showHotzoneHint).toBe(showHotzoneHint);
+    expect(normalizeSettings(JSON.parse(exported))).toMatchObject({ schemaVersion: 8, showHotzoneHint, enabled: false, hotzonesEnabled: false });
+  });
+
   it("keeps taskbar transparency off for legacy and malformed configuration", () => {
     expect(defaultSettings.taskbarAppearance.enabled).toBe(false);
     expect(normalizeSettings({}).taskbarAppearance.enabled).toBe(false);
@@ -50,6 +73,7 @@ describe("normalizeSettings", () => {
     expect({
       schemaVersion: settings.schemaVersion,
       hotzonesEnabled: settings.hotzonesEnabled,
+      showHotzoneHint: settings.showHotzoneHint,
       edgeSize: settings.edgeSize,
       hoverDelayMs: settings.hoverDelayMs,
       pollIntervalMs: settings.pollIntervalMs,
@@ -405,6 +429,37 @@ describe("normalizeSettings", () => {
 });
 
 describe("saveSettings", () => {
+  it("preserves either hotzone hint choice through desktop host storage and readback", async () => {
+    let stored: AppSettings | null = null;
+    const setItem = vi.fn();
+    vi.stubGlobal("localStorage", { setItem });
+    hostBridgeState.current = {
+      getInitialSettings: () => stored,
+      saveSettings: async (settings) => { stored = structuredClone(settings) as AppSettings; }
+    };
+    for (const showHotzoneHint of [false, true]) {
+      const settings = normalizeSettings({ showHotzoneHint, enabled: false, hotzonesEnabled: false });
+      await saveSettings(settings);
+      expect(stored).toMatchObject({ schemaVersion: 8, showHotzoneHint });
+      expect(loadSettings()).toMatchObject({ schemaVersion: 8, showHotzoneHint, enabled: false, hotzonesEnabled: false });
+    }
+    expect(setItem).not.toHaveBeenCalled();
+  });
+
+  it("preserves either hotzone hint choice through local fallback storage and readback", async () => {
+    let stored: string | null = null;
+    vi.stubGlobal("localStorage", {
+      getItem: () => stored,
+      setItem: (_key: string, value: string) => { stored = value; }
+    });
+    for (const showHotzoneHint of [false, true]) {
+      const settings = normalizeSettings({ showHotzoneHint, enabled: false, hotzonesEnabled: false });
+      await saveSettings(settings);
+      expect(JSON.parse(stored!)).toMatchObject({ schemaVersion: 8, showHotzoneHint });
+      expect(loadSettings()).toMatchObject({ schemaVersion: 8, showHotzoneHint, enabled: false, hotzonesEnabled: false });
+    }
+  });
+
   afterEach(() => {
     hostBridgeState.current = null;
     vi.unstubAllGlobals();

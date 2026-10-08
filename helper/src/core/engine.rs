@@ -1060,7 +1060,7 @@ fn hotzone_hint_for(
     monitors: &[platform::Monitor],
     paused: bool,
 ) -> Option<HotzoneId> {
-    if paused || !config.hotzones_enabled {
+    if paused || !config.hotzones_enabled || !config.show_hotzone_hint {
         return None;
     }
 
@@ -1450,6 +1450,61 @@ mod tests {
         assert_eq!(
             hotzone_hint_for(&config, Point { x: 99, y: 1 }, &[monitor()], false),
             Some(HotzoneId::TopRight)
+        );
+    }
+
+    #[test]
+    fn hotzone_hint_can_be_hidden_and_restored_without_changing_actions() {
+        let display = monitor();
+        let cursor = Point { x: 99, y: 1 };
+        let mut config = AppConfig::default();
+        config.monitor_profiles = vec![MonitorProfile {
+            monitor_id: monitor_id(&display),
+            hotzones: vec![hotzone(HotzoneId::TopRight, true, ActionKind::ShowDesktop)],
+        }];
+        assert_eq!(
+            hotzone_hint_for(&config, cursor, &[display], false),
+            Some(HotzoneId::TopRight)
+        );
+        config.show_hotzone_hint = false;
+        assert_eq!(hotzone_hint_for(&config, cursor, &[display], false), None);
+        assert!(hotzones_for_cursor(&config, cursor, &[display])[0].has_action());
+        config.show_hotzone_hint = true;
+        assert_eq!(
+            hotzone_hint_for(&config, cursor, &[display], false),
+            Some(HotzoneId::TopRight)
+        );
+        assert_eq!(hotzone_hint_for(&config, cursor, &[display], true), None);
+    }
+
+    #[test]
+    fn hidden_hotzone_hint_preserves_volume_wheel_detection_and_trigger() {
+        let display = monitor();
+        let cursor = Point { x: 50, y: 99 };
+        let mut config = AppConfig::default();
+        config.show_hotzone_hint = false;
+        let mut setting = hotzone(HotzoneId::Bottom, true, ActionKind::VolumeAdjust);
+        setting.actions[0].trigger = TriggerKind::WheelUp;
+        setting.actions[0].action.value = Some("5".into());
+        config.hotzones = vec![setting];
+        assert_eq!(hotzone_hint_for(&config, cursor, &[display], false), None);
+        let detected = detect_hotzone(cursor, &[display], config.edge_size);
+        assert_eq!(detected, Some(HotzoneId::Bottom));
+        let action = &hotzones_for_cursor(&config, cursor, &[display])[0].actions[0];
+        assert_eq!(action.action.kind, ActionKind::VolumeAdjust);
+        assert_eq!(action.trigger, TriggerKind::WheelUp);
+        let now = Instant::now();
+        let mut triggers = HotzoneTriggerController::new(now);
+        triggers.observe(now, detected);
+        assert_eq!(
+            triggers.accumulate_continuous_motion(
+                now,
+                HotzoneId::Bottom,
+                action.trigger,
+                1.0,
+                Duration::from_millis(10)
+            ),
+            Some(1.0)
         );
     }
 

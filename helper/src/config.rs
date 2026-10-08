@@ -16,6 +16,9 @@ pub struct AppConfig {
     pub enabled: bool,
     #[serde(default = "default_true")]
     pub hotzones_enabled: bool,
+    /// Only controls the hover hint, not hotzone detection or actions.
+    #[serde(default = "default_true")]
+    pub show_hotzone_hint: bool,
     #[serde(default = "default_edge_size")]
     pub edge_size: i32,
     #[serde(default = "default_hover_delay_ms")]
@@ -51,6 +54,7 @@ impl Default for AppConfig {
             gesture_labels: Default::default(),
             enabled: true,
             hotzones_enabled: true,
+            show_hotzone_hint: true,
             edge_size: 8,
             hover_delay_ms: 350,
             poll_interval_ms: 33,
@@ -1154,6 +1158,7 @@ mod tests {
         let actual = serde_json::json!({
             "schemaVersion": config.schema_version,
             "hotzonesEnabled": config.hotzones_enabled,
+            "showHotzoneHint": config.show_hotzone_hint,
             "edgeSize": config.edge_size,
             "hoverDelayMs": config.hover_delay_ms,
             "pollIntervalMs": config.poll_interval_ms,
@@ -1207,11 +1212,30 @@ mod tests {
         assert_eq!(config.window_drag.resize_modifiers, vec![ModifierKey::Alt]);
     }
     #[test]
+    fn hotzone_hint_choice_survives_normalization_and_serialization() {
+        for enabled in [true, false] {
+            let config: AppConfig = serde_json::from_value(serde_json::json!({
+                "schemaVersion": 8,
+                "showHotzoneHint": enabled
+            }))
+            .unwrap();
+            let config = config.normalized();
+            assert_eq!(config.show_hotzone_hint, enabled);
+            assert_eq!(config.schema_version, 8);
+            let saved = serde_json::to_value(&config).unwrap();
+            assert_eq!(saved["showHotzoneHint"], enabled);
+            let reloaded: AppConfig = serde_json::from_value(saved).unwrap();
+            assert_eq!(reloaded.normalized().show_hotzone_hint, enabled);
+        }
+    }
+
+    #[test]
     fn config_deserializes_with_defaults() {
         let config: AppConfig = serde_json::from_str(r#"{"enabled":true}"#).unwrap();
 
         assert!(config.enabled);
         assert!(config.hotzones_enabled);
+        assert!(config.show_hotzone_hint);
         assert_eq!(config.edge_size, 8);
         assert_eq!(config.hotzones.len(), 8);
         assert_eq!(config.edge_hide.strip_size, 16);

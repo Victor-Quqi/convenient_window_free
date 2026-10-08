@@ -39,7 +39,7 @@ Administrator mode does not support protected processes. Scheduled elevated logi
 
 Development source adds an **Appearance** (slim wand-and-sparkle) entry and moves global settings to a circular top-right gear. Taskbar material is an off-by-default Windows 11 x64 technical prototype with transparent, acrylic and tinted modes plus opacity and border controls. Activation is direct; the Explorer risk note remains inside the panel. The illustrated preview is not proof of actual rendering; initial transparency has received positive local acceptance feedback, while material compatibility, icon clarity, and cross-environment recovery still require per-environment acceptance. The prototype was included in 0.6.3; it remains off by default and does not imply universal compatibility.
 
-- **Hot zones**: configure the four corners and four edges of each monitor independently, with hover, mouse-button, wheel, and edge-movement triggers.
+- **Hot zones**: configure the four corners and four edges of each monitor independently, with hover, mouse-button, wheel, and edge-movement triggers. The default-on translucent hover hint can be disabled in Corner parameters without disabling actions or the settings preview.
 - **Window edge hiding**: move windows partly off-screen and restore them from a visible edge strip, with multi-window and multi-monitor support. The restore outline and hide/restore animation can be disabled independently without disabling edge restoration.
 - **Anywhere move and resize**: move or resize the active window with configurable modifier-and-mouse combinations.
 - **Topmost controls**: keep a window above others; a red on-window pin is shown by default and releases the window when clicked.

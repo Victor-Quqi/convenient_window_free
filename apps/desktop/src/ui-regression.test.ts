@@ -20,6 +20,7 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       let receive, receiveStatus;
       let connectCalls = 0, stopCalls = 0, saves = 0, startCalls = 0;
       let failSaves = false;
+      let exportedJson = "";
       const sent = [];
       HelperClient.prototype.onMessage = function(handler) { receive = handler; return () => {}; };
       HelperClient.prototype.onStatus = function(handler) { receiveStatus = handler; return () => {}; };
@@ -28,6 +29,7 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       HelperClient.prototype.stop = function() { stopCalls++; receiveStatus('disconnected'); };
       HelperClient.prototype.sendConfig = function(settings) { sent.push(structuredClone(settings)); return true; };
       let stored = normalizeSettings(defaultSettings);
+      delete stored.showHotzoneHint;
       stored.enabled = true;
       stored.hotzonesEnabled = true;
       stored.mouseGestures.enabled = true;
@@ -43,6 +45,8 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       let setElevation = async elevated => { elevationRequests.push(elevated); return elevationResult; };
       configureHostBridge({
         kind: 'desktop', getInitialSettings: () => structuredClone(stored),
+        exportSettings: async value => { exportedJson = JSON.stringify(value, null, 2); return true; },
+        importSettings: async () => JSON.parse(exportedJson),
         getHelperToken: () => 'test-token', getHelperState: installState,
         getPrivilegeSupport: () => ({ supported: true }),
         getPrivilegeState: () => ({ supported: true, elevated: null }),
@@ -65,6 +69,17 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
         assert.ok(input.closest('.topmost-pin-option'), 'the pin switch must be attached to the topmost action');
         return input;
       };
+      const hotzoneHint = () => {
+        const rows = document.querySelectorAll('.hotzone-hint-setting');
+        assert.equal(rows.length, 1, 'the hotzone parameters must expose exactly one hint setting');
+        const row = rows[0];
+        assert.ok(row.classList.contains('setting-title'), 'hint setting must use the existing setting-title style');
+        assert.ok(row.previousElementSibling.textContent.includes('Corner parameters') || row.previousElementSibling.textContent.includes('热区参数'), 'hint setting belongs under hotzone parameters');
+        assert.ok(row.nextElementSibling.classList.contains('form-grid'), 'the existing hotzone size control stays in place');
+        const input = row.querySelector('.mini-switch input[type="checkbox"]');
+        assert.ok(input, 'hint setting must use the existing mini-switch');
+        return input;
+      };
       const noTopmostPin = () => assert.equal(document.querySelectorAll('input[aria-label="Enable topmost pin"]').length, 0, 'pin switch must stay hidden without a topmost action');
       const chooseAction = async (label) => {
         const picker = document.querySelector('.action-editor .picker-trigger');
@@ -82,6 +97,45 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       assert.equal(document.querySelector('.feature-settings-body').hasAttribute('inert'), true, 'disabled drag settings must actually be inert');
       noTopmostPin();
       open(1);
+      assert.equal(hotzoneHint().checked, true, 'missing/initial hint preference defaults on in the real App');
+      assert.equal(hotzoneHint().getAttribute('aria-label'), 'Show translucent hint area');
+      assert.equal(document.querySelector('.hotzone-hint-setting h2').textContent, 'Show translucent hint area');
+      assert.equal(document.querySelector('.hotzone-hint-setting p').textContent, 'Hides only the hover hint; corner actions still work');
+      const hotzonesBeforeHint = structuredClone(stored.hotzones);
+      const profilesBeforeHint = structuredClone(stored.monitorProfiles);
+      const edgeSizeBeforeHint = stored.edgeSize;
+      const savesBeforeHint = saves;
+      for (const showHotzoneHint of [false, true, false]) {
+        hotzoneHint().click(); await settle();
+        assert.equal(hotzoneHint().checked, showHotzoneHint);
+        assert.equal(stored.showHotzoneHint, showHotzoneHint, 'hint off/on must persist through the actual host');
+        assert.equal(stored.schemaVersion, 8, 'hint preference is backward-compatible schema v8');
+        assert.equal(stored.hotzonesEnabled, true, 'hiding the hint must not disable corner actions');
+        assert.deepEqual(stored.hotzones, hotzonesBeforeHint, 'hint changes must preserve every trigger action');
+        assert.deepEqual(stored.monitorProfiles, profilesBeforeHint, 'hint changes must preserve per-display settings');
+        assert.equal(stored.edgeSize, edgeSizeBeforeHint, 'hint changes must not alter the hotzone size');
+      }
+      assert.equal(saves, savesBeforeHint + 3, 'each hint change must auto-save');
+      document.querySelector('.hotzone-master-intro input').click(); await settle();
+      assert.equal(stored.hotzonesEnabled, false);
+      assert.equal(document.querySelector('.feature-settings-body').hasAttribute('inert'), true, 'the existing corner master switch still disables settings');
+      assert.equal(hotzoneHint().checked, false);
+      assert.equal(stored.showHotzoneHint, false, 'disabling corners must retain the hint choice');
+      document.querySelector('.hotzone-master-intro input').click(); await settle();
+      assert.equal(stored.hotzonesEnabled, true);
+      assert.equal(hotzoneHint().checked, false, 're-enabling corners must not reset the hint choice');
+      document.querySelector('.settings-toggle').click(); flushSync();
+      document.querySelectorAll('.config-actions .quiet')[0].click(); await settle();
+      assert.equal(JSON.parse(exportedJson).showHotzoneHint, false, 'the actual App export must preserve the disabled hint');
+      assert.equal(JSON.parse(exportedJson).schemaVersion, 8);
+      open(1); hotzoneHint().click(); await settle();
+      assert.equal(stored.showHotzoneHint, true, 'prepare a different choice before importing the saved JSON');
+      document.querySelector('.settings-toggle').click(); flushSync();
+      document.querySelectorAll('.config-actions .quiet')[1].click(); await settle();
+      assert.equal(stored.showHotzoneHint, false, 'the actual App import must restore the exported disabled hint');
+      assert.equal(sent.at(-1).showHotzoneHint, false, 'the imported hint choice must reach the helper configuration');
+      open(1);
+      assert.equal(hotzoneHint().checked, false, 'the imported choice must also update the real control');
       noTopmostPin();
       await chooseAction('Toggle always on top');
       assert.equal(topmostPin().checked, true, 'the pin switch must default to enabled when topmost is selected');
@@ -105,6 +159,7 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       component = mount(App, { target: document.body }); flushSync(); await settle();
       open(1);
       assert.equal(topmostPin().checked, false, 'an explicit pin-off choice must survive remount when topmost remains selected');
+      assert.equal(hotzoneHint().checked, false, 'an explicit hint-off choice must survive App remount');
       assert.equal(stored.edgeHide.animationEnabled, false, 'the 0.6.3 animation preference must survive all new settings writes');
       assert.deepEqual(stored.taskbarAppearance, { enabled: true, mode: 'acrylic', opacity: 73, tint: '#EAF1FC', showBorder: true });
       screenshot();
@@ -195,7 +250,12 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       assert.ok(document.querySelector('.permission-settings [role="alert"]').textContent.includes('transport-switch-failure'));
       await unmount(component); document.body.replaceChildren();
       localStorage.setItem('convenient-window-language', 'zh-CN');
-      component = mount(App, { target: document.body }); flushSync(); await settle(); openSettings();
+      component = mount(App, { target: document.body }); flushSync(); await settle(); open(1);
+      assert.equal(hotzoneHint().checked, false, 'language changes must retain the saved hint preference');
+      assert.equal(hotzoneHint().getAttribute('aria-label'), '显示半透明提示区域');
+      assert.equal(document.querySelector('.hotzone-hint-setting h2').textContent, '显示半透明提示区域');
+      assert.equal(document.querySelector('.hotzone-hint-setting p').textContent, '关闭只隐藏悬停提示，触发角动作仍然生效');
+      openSettings();
       assert.equal(permission().getAttribute('aria-label'), '管理员权限');
       assert.ok(document.querySelector('.permission-settings').textContent.includes('权限状态未知'));
       ready(false);
@@ -282,6 +342,7 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       assert.ok(off && !off.disabled, 'stop remains a primary visible action');
       off.click(); await settle();
       assert.equal(stored.enabled, false, 'stop must still use the existing host persistence path');
+      assert.equal(stored.showHotzoneHint, false, 'turning off all features must retain the hint choice');
       assert.equal(document.querySelector('.power-summary').dataset.state, 'off');
       assert.equal(document.querySelector('.runtime-actions .apply').dataset.action, 'start');
       assert.equal(document.querySelectorAll('.runtime-actions button').length, 2, 'the redundant disabled stop action is not rendered');
@@ -296,7 +357,11 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
         stored.enabled = false;
         localStorage.setItem('convenient-window-language', language);
         helperInstalled = false;
-        component = mount(App, { target: document.body }); flushSync(); await settle(); open(0);
+        component = mount(App, { target: document.body }); flushSync(); await settle(); open(1);
+        assert.equal(hotzoneHint().checked, false, 'remounting with all features off must retain the hint choice');
+        assert.equal(stored.enabled, false);
+        assert.equal(hotzoneHint().getAttribute('aria-label'), language === 'en-US' ? 'Show translucent hint area' : '显示半透明提示区域');
+        open(0);
         assert.equal(document.querySelector('.power-summary').dataset.state, 'missing');
         assert.equal(document.querySelector('.power-orb').classList.contains('on'), false);
         assert.ok(document.querySelector('.helper-install-card'), 'missing files must expose recovery guidance');

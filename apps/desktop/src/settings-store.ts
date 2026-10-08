@@ -51,6 +51,7 @@ export const defaultSettings: AppSettings = {
   },
   enabled: true,
   hotzonesEnabled: true,
+  showHotzoneHint: true,
   edgeSize: 8,
   hoverDelayMs: 350,
   pollIntervalMs: 33,
@@ -159,6 +160,7 @@ export function normalizeSettings(stored: Partial<AppSettings> | null | undefine
       : sourceSchemaVersion < 6
         ? legacyHotzonesEnabled(stored)
         : defaultSettings.hotzonesEnabled,
+    showHotzoneHint: booleanValue(stored.showHotzoneHint, defaultSettings.showHotzoneHint),
     edgeSize: integerInRange(stored.edgeSize, defaultSettings.edgeSize, 2, 48),
     hoverDelayMs,
     pollIntervalMs: integerInRange(stored.pollIntervalMs, defaultSettings.pollIntervalMs, 10, 250),

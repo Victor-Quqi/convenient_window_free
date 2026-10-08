@@ -2,6 +2,7 @@
   "input": {
     "schemaVersion": 2,
     "enabled": true,
+    "showHotzoneHint": false,
     "edgeSize": 999,
     "hoverDelayMs": 0,
     "pollIntervalMs": 0,
@@ -25,6 +26,7 @@
   },
   "expected": {
     "schemaVersion": 8,
+    "showHotzoneHint": false,
     "hotzonesEnabled": false,
     "edgeSize": 48,
     "hoverDelayMs": 0,
