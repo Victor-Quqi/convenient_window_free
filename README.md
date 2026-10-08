@@ -31,7 +31,7 @@ The development source integrates PRs [#21](https://github.com/ximizhou/convenie
 - Pinned screenshots start at original pixel size. `ocr.pinOffset` defaults to true (16 px down/right); turning it off covers the captured area. Large or edge-adjacent images may extend beyond the screen instead of being automatically resized.
 - Number inputs preserve incomplete drafts until blur/Enter, and monitor-specific hot-zone edits wait for real display identities.
 - Early helper shutdown signals remain queued for the original engine subscription.
-- Windows administrator mode elevates only the helper for the current session; configured commands remain in the ordinary-permission host. Failed state queries display unknown rather than a cached permission label.
+- Windows administrator mode is selected under Settings (top-right gear) and elevates only the helper for the current session; configured commands remain in the ordinary-permission host. Failed state queries display unknown rather than a cached permission label.
 
 Administrator mode does not support protected processes. Scheduled elevated login/startup is not part of this candidate (the second phase of [issue #20](https://github.com/ximizhou/convenient_window_free/issues/20)). Host adapters require their own runtime acceptance. Do not run competing hosts on the fixed helper port `56873`. See [candidate notes](docs/release-notes/0.6.4.md), [manual tests](docs/testing.md#064-local-candidate-acceptance), and [local packaging](docs/release.md#develop-acceptance). Automated results and artifact identities must be recorded for the actual candidate; UAC, multi-monitor/DPI, and taskbar recovery still require real-machine checks.
 
