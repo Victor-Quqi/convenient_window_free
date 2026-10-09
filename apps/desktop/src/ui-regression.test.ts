@@ -354,7 +354,8 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       assert.equal(document.querySelector('.power-summary').dataset.state, 'running');
       assert.ok(document.querySelector('.power-orb').classList.contains('on'));
       openSettings();
-      assert.ok(document.querySelector('.permission-settings').textContent.includes('Standard'));
+      assert.equal(permission().checked, false);
+      assert.equal(document.querySelector('.permission-state'), null, 'known permission uses only the switch state');
       open(0);
       assert.ok(runtimeDetails().querySelector('.runtime-platform').textContent.includes('x86_64'), 'platform information belongs inside details');
       runtimeDetails().querySelector('summary').click(); flushSync();
@@ -371,7 +372,8 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
 
       ready(true);
       openSettings();
-      assert.ok(document.querySelector('.permission-settings').textContent.includes('Administrator'));
+      assert.equal(permission().checked, true);
+      assert.equal(document.querySelector('.permission-state'), null, 'known permission uses only the switch state');
       open(0);
       receiveStatus('disconnected'); flushSync();
       assert.equal(document.querySelector('.power-summary').dataset.state, 'error', 'a disconnect with a recovery error must not claim to be starting');
