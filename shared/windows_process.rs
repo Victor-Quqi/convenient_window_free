@@ -1,19 +1,12 @@
 //! Process handles used across the desktop/helper privilege boundary.
 use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
-use windows::core::{PCWSTR, PWSTR};
-use windows::Win32::Foundation::{
-    CloseHandle, LocalFree, FILETIME, HANDLE, HLOCAL, WAIT_OBJECT_0, WAIT_TIMEOUT,
-};
-use windows::Win32::Security::Authorization::ConvertSidToStringSidW;
-use windows::Win32::Security::{
-    GetTokenInformation, TokenElevation, TokenSessionId, TokenUser, TOKEN_ELEVATION, TOKEN_QUERY,
-    TOKEN_USER,
-};
+use windows::core::PCWSTR;
+use windows::Win32::Foundation::{CloseHandle, FILETIME, HANDLE, WAIT_OBJECT_0, WAIT_TIMEOUT};
+use windows::Win32::Security::{GetTokenInformation, TokenElevation, TOKEN_ELEVATION, TOKEN_QUERY};
 use windows::Win32::System::Threading::{
     GetCurrentProcess, GetExitCodeProcess, GetProcessId, GetProcessTimes, OpenProcess,
-    OpenProcessToken, QueryFullProcessImageNameW, WaitForSingleObject, PROCESS_NAME_WIN32,
-    PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
+    OpenProcessToken, WaitForSingleObject, PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE,
 };
 
 pub struct ProcessHandle(isize);
@@ -51,70 +44,6 @@ impl ProcessHandle {
         is_elevated(self.raw())
     }
 
-    pub fn image(&self) -> Result<std::path::PathBuf, String> {
-        let mut buffer = vec![0u16; 32768];
-        let mut length = buffer.len() as u32;
-        unsafe {
-            QueryFullProcessImageNameW(
-                self.raw(),
-                PROCESS_NAME_WIN32,
-                PWSTR(buffer.as_mut_ptr()),
-                &mut length,
-            )
-        }
-        .map_err(|error| error.to_string())?;
-        Ok(std::path::PathBuf::from(String::from_utf16_lossy(
-            &buffer[..length as usize],
-        )))
-    }
-
-    pub fn user_sid(&self) -> Result<String, String> {
-        unsafe {
-            let mut token = HANDLE::default();
-            OpenProcessToken(self.raw(), TOKEN_QUERY, &mut token)
-                .map_err(|error| error.to_string())?;
-            let token = Self::new(token);
-            let mut length = 0;
-            let _ = GetTokenInformation(token.raw(), TokenUser, None, 0, &mut length);
-            let mut buffer = vec![0usize; (length as usize).div_ceil(std::mem::size_of::<usize>())];
-            GetTokenInformation(
-                token.raw(),
-                TokenUser,
-                Some(buffer.as_mut_ptr().cast()),
-                length,
-                &mut length,
-            )
-            .map_err(|error| error.to_string())?;
-            let user = &*buffer.as_ptr().cast::<TOKEN_USER>();
-            let mut string = PWSTR::null();
-            ConvertSidToStringSidW(user.User.Sid, &mut string)
-                .map_err(|error| error.to_string())?;
-            let result = string.to_string().map_err(|error| error.to_string());
-            let _ = LocalFree(HLOCAL(string.0.cast()));
-            result
-        }
-    }
-
-    pub fn session(&self) -> Result<u32, String> {
-        unsafe {
-            let mut token = HANDLE::default();
-            OpenProcessToken(self.raw(), TOKEN_QUERY, &mut token)
-                .map_err(|error| error.to_string())?;
-            let token = Self::new(token);
-            let mut session = 0u32;
-            let mut length = 0;
-            GetTokenInformation(
-                token.raw(),
-                TokenSessionId,
-                Some((&mut session as *mut u32).cast()),
-                4,
-                &mut length,
-            )
-            .map_err(|error| error.to_string())?;
-            Ok(session)
-        }
-    }
-
     pub fn try_wait(&self) -> Result<Option<i32>, String> {
         unsafe {
             match WaitForSingleObject(self.raw(), 0) {
@@ -144,34 +73,6 @@ pub fn current_elevated() -> Result<bool, String> {
 
 pub fn current_birth() -> Result<u64, String> {
     process_birth(unsafe { GetCurrentProcess() })
-}
-
-pub fn same_path(left: &std::path::Path, right: &std::path::Path) -> bool {
-    match (left.canonicalize(), right.canonicalize()) {
-        (Ok(left), Ok(right)) => left
-            .to_string_lossy()
-            .eq_ignore_ascii_case(&right.to_string_lossy()),
-        _ => false,
-    }
-}
-
-pub fn verify_desktop(
-    pid: u32,
-    birth: u64,
-    executable: &std::path::Path,
-) -> Result<ProcessHandle, String> {
-    let owner = ProcessHandle::open(pid)?;
-    let current = ProcessHandle::open(std::process::id())?;
-    if owner.birth()? != birth
-        || owner.try_wait()?.is_some()
-        || owner.elevated()?
-        || owner.user_sid()? != current.user_sid()?
-        || owner.session()? != current.session()?
-        || !same_path(&owner.image()?, executable)
-    {
-        return Err("Desktop owner identity does not match".into());
-    }
-    Ok(owner)
 }
 
 fn is_elevated(process: HANDLE) -> Result<bool, String> {
@@ -221,17 +122,5 @@ mod tests {
         assert_eq!(process.birth().unwrap(), current_birth().unwrap());
         assert_eq!(process.elevated().unwrap(), current_elevated().unwrap());
         assert_eq!(process.try_wait().unwrap(), None);
-        assert!(same_path(
-            &process.image().unwrap(),
-            &std::env::current_exe().unwrap()
-        ));
-        assert!(process.user_sid().unwrap().starts_with("S-1-5-"));
-        let _ = process.session().unwrap();
-        assert!(verify_desktop(
-            std::process::id(),
-            current_birth().unwrap() + 1,
-            &std::env::current_exe().unwrap()
-        )
-        .is_err());
     }
 }

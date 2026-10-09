@@ -8,8 +8,6 @@ mod ipc;
 mod logging;
 mod paths;
 mod platform;
-#[path = "../../shared/scheduled_owner.rs"]
-mod scheduled_owner;
 mod single_instance;
 mod storage;
 mod usage;
@@ -136,7 +134,6 @@ async fn wait_for_task(name: &str, task: &mut JoinHandle<Result<()>>) -> Result<
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 2)]
 async fn main() -> Result<()> {
-    desktop_owner::validate_scheduled_start()?;
     #[cfg(target_os = "windows")]
     unsafe {
         use windows::Win32::UI::HiDpi::{
@@ -214,10 +211,10 @@ mod runtime_tests {
     #[test]
     fn future_schema_is_rejected_before_deserializing_new_fields() {
         let error = decode_config(
-            serde_json::json!({"schemaVersion": 9, "mouseGestures": "future format"}),
+            serde_json::json!({"schemaVersion": 10, "mouseGestures": "future format"}),
         )
         .unwrap_err();
-        assert!(error.to_string().contains("Unsupported settings schema 9"));
+        assert!(error.to_string().contains("Unsupported settings schema 10"));
     }
 
     use std::sync::atomic::{AtomicBool, Ordering};

@@ -8,24 +8,84 @@ const RUN: &str = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 const APPROVED: &str =
     "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run";
 
-fn is_our_command(command: &str, executable: &Path) -> bool {
+fn command_request(command: &str, executable: &Path) -> Option<bool> {
     let command = command.trim();
-    let path = if let Some(quoted) = command.strip_prefix('"') {
+    let (path, args) = if let Some(quoted) = command.strip_prefix('"') {
         let Some((path, args)) = quoted.split_once('"') else {
-            return false;
+            return None;
         };
-        if args.trim() != "--autostart" {
-            return false;
-        }
-        path
+        (path, args.trim())
     } else {
         let Some(path) = command.strip_suffix(" --autostart") else {
-            return false;
+            return None;
         };
-        path
+        (path, "--autostart")
     };
     // Upgrades retain the install directory. A different path belongs to another copy.
-    Path::new(path).is_absolute() && path.eq_ignore_ascii_case(&executable.to_string_lossy())
+    if !Path::new(path).is_absolute() || !path.eq_ignore_ascii_case(&executable.to_string_lossy()) {
+        return None;
+    }
+    match args {
+        "--autostart" => Some(false),
+        "--autostart --request-admin" => Some(true),
+        _ => None,
+    }
+}
+
+fn is_our_command(command: &str, executable: &Path) -> bool {
+    command_request(command, executable).is_some()
+}
+
+fn startup_command(executable: &Path, request_admin: bool) -> String {
+    format!(
+        "\"{}\" --autostart{}",
+        executable.display(),
+        if request_admin {
+            " --request-admin"
+        } else {
+            ""
+        }
+    )
+}
+
+#[derive(serde::Serialize)]
+pub struct AdminStartupState {
+    pub enabled: bool,
+}
+
+pub fn admin_request_state() -> std::io::Result<AdminStartupState> {
+    let enabled = if enabled_for_current_executable()? {
+        let command: String = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey(RUN)?
+            .get_value(STARTUP_NAME)?;
+        command_request(&command, &std::env::current_exe()?) == Some(true)
+    } else {
+        false
+    };
+    Ok(AdminStartupState { enabled })
+}
+
+pub fn set_admin_request(enabled: bool) -> std::io::Result<()> {
+    if enabled {
+        return enable_request(true);
+    }
+    let user = RegKey::predef(HKEY_CURRENT_USER);
+    let run = match user.open_subkey_with_flags(RUN, KEY_READ | KEY_WRITE) {
+        Ok(run) => run,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let command: String = match run.get_value(STARTUP_NAME) {
+        Ok(value) => value,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    let executable = std::env::current_exe()?;
+    if command_request(&command, &executable) == Some(true) {
+        // Removing the request must preserve Task Manager's disabled state.
+        run.set_value(STARTUP_NAME, &startup_command(&executable, false))?;
+    }
+    Ok(())
 }
 
 /// Write the new entry and its OS override before removing the old names.
@@ -95,11 +155,15 @@ pub fn migrate_current_user() -> std::io::Result<()> {
 
 /// auto-launch 0.5 omits path quotes. Write the complete command in one operation.
 pub fn enable() -> std::io::Result<()> {
+    enable_request(admin_request_state()?.enabled)
+}
+
+fn enable_request(request_admin: bool) -> std::io::Result<()> {
     let user = RegKey::predef(HKEY_CURRENT_USER);
     let (run, _) = user.create_subkey(RUN)?;
     run.set_value(
         STARTUP_NAME,
-        &format!("\"{}\" --autostart", std::env::current_exe()?.display()),
+        &startup_command(&std::env::current_exe()?, request_admin),
     )?;
     match user.open_subkey_with_flags(APPROVED, KEY_WRITE) {
         Ok(approved) => match approved.delete_value(STARTUP_NAME) {
@@ -141,6 +205,34 @@ pub fn enabled_for_current_executable() -> std::io::Result<bool> {
 mod tests {
     use super::*;
     use winreg::{enums::RegType::REG_BINARY, RegValue};
+
+    #[test]
+    fn login_request_is_explicit_and_bound_to_the_registered_copy() {
+        let exe = Path::new(r"C:\Apps with spaces\ConvenientWindow.exe");
+        assert_eq!(
+            command_request(&startup_command(exe, false), exe),
+            Some(false)
+        );
+        assert_eq!(
+            command_request(&startup_command(exe, true), exe),
+            Some(true)
+        );
+        assert_eq!(
+            command_request(&startup_command(exe, true), Path::new(r"C:\Other.exe")),
+            None
+        );
+        assert_eq!(
+            command_request(&format!("{} --extra", startup_command(exe, true)), exe),
+            None
+        );
+        assert_eq!(
+            command_request(
+                r#""C:\Apps with spaces\ConvenientWindow.exe" --request-admin"#,
+                exe
+            ),
+            None
+        );
+    }
 
     #[test]
     fn migration_preserves_disabled_state_is_idempotent_and_respects_new_entry() {

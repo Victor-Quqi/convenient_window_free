@@ -1,5 +1,15 @@
 # Architecture
 
+## Hot-zone hover hint
+
+Introduced in schema v8, the optional `showHotzoneHint` boolean defaults to true for older settings and preserves an explicit false across normalization and persistence. It controls only the pale translucent hover hint. The engine keeps one shared input/hint frame and submits `None` to the dedicated hot-zone hint channel when disabled, hiding an existing hint without clearing edge-hide or gesture overlays. Detection, per-display actions, wheel accumulation, timings, and settings previews remain independent. Request deduplication is unchanged; the option adds no worker, timer, polling, or file I/O. Protocol v7 is unchanged; current settings use schema v9.
+
+## Per-zone geometry (schema v9)
+
+Each global or per-display hot-zone record may include a `geometry` override: `{kind:"corner",width,height,linked}` for corners (2–128 integer physical px), or `{kind:"edge",thickness,lengthPercent}` for edges (2–48 integer physical px, 10–100 integer percent). Length stays centered. Missing geometry preserves the legacy global thickness and square corners / 40% edges; migration does not materialize overrides. Reset removes only the current zone override, and profile copies own their geometry values. Corner priority is retained even for a 100% edge. Runtime hints and input use the same clipped rectangle, while shared fixtures verify the preview implementation, signed desktop coordinates and small displays. Editing the ratio lock preserves an existing rectangle rather than forcing it square.
+
+Protocol v7 is retained, but the frontend requires an explicit schema-v9 ready handshake before flushing configuration. Old/missing/future schema reports cannot silently apply only legacy geometry. The engine resolves one shared frame per tick for both hint and input paths and bypasses display-ID allocation when no profiles exist. New shape calculations introduce no worker, polling or file I/O. Configuration loading migrates earlier supported schemas to v9 without changing actions or timings; downgrade to old hosts is not supported.
+
 ## Product Boundary
 
 ```text
@@ -59,7 +69,7 @@ Edge-hide movement uses a short ease-out transition rather than an instantaneous
 - Status text is stored as dictionary keys (for example `"helperSync"`) and translated at render time, so switching the language also retranslates the message already on screen.
 - Protocol 7 reports errors as `{ code, details, requestId? }` in `runtime.error` and `adjustment.updated.error`. Hosts translate the stable `code`, use a generic localized fallback for unknown codes, and keep `details` for diagnostics. Request failures return only to the requesting socket. The error-code contract is covered by `tests/fixtures/runtime-errors.json`.
 
-`helper.ready` reports `protocolVersion: 7` and `schemaVersion: 8`. A `config.update` payload contains `{ protocolVersion: 7, revision, config, gestureLabels? }`; `config.schemaVersion` must be 8. Other versions are rejected before storage or application. `config.applied` retains `requestId`, `revision` and `adjusted`. `gestureLabels` maps configured IDs to translated overlay labels, is capped at 80 non-control characters per label, and is excluded from storage. Hosts resend it on reconnect or language changes.
+`helper.ready` reports `protocolVersion: 7` and `schemaVersion: 9`. A `config.update` payload contains `{ protocolVersion: 7, revision, config, gestureLabels? }`; `config.schemaVersion` must be 9. Other versions are rejected before storage or application. `config.applied` retains `requestId`, `revision` and `adjusted`. `gestureLabels` maps configured IDs to translated overlay labels, is capped at 80 non-control characters per label, and is excluded from storage. Hosts resend it on reconnect or language changes.
 
 Schema 8 identifies built-in gestures by their five reserved IDs; an absent `name` selects the dictionary default and an explicit name overrides it. Schema 7 and earlier remove only names matching a reserved ID and a known historical default; other names and actions survive. Those schemas did not record whether a default name was explicitly chosen. The migration is idempotent and rejects future schemas before normalization. Shared migration cases live in `tests/fixtures/i18n-migration.json`. Historical-name rules remain frozen while old settings imports are supported; new translations never enter that table. `gesture.recognized.name` carries an override or `null`; hosts resolve display names by ID. `runtime.status` uses `gesture_not_recognized` or `window_topmost_changed`, with `{ title, topmost }` parameters for the latter.
 
@@ -78,7 +88,7 @@ Schema v8 adds optional `ocr.pinOffset`, default true when absent; host normaliz
 
 ## Runtime Center
 
-The runtime center presents a compact running/off/starting/disconnected/error/missing state and master/helper/permission rows. Technical platform, version, path and diagnostics data are in an initially collapsed details section. Errors and unknown permissions stay visible outside that section. Feature controls use the same lifecycle operation as the master switch; this presentation change does not add scheduled administrator startup.
+The runtime center presents a compact running/off/starting/disconnected/error/missing state and two aligned grey master/helper cards with short descriptions. Permission controls are only in the top-right Settings panel. Technical platform, version, path and diagnostics data are in an initially collapsed details section. Errors and unknown permissions stay visible outside that section. Feature controls use the same lifecycle operation as the master switch; this presentation change does not add scheduled administrator startup.
 
 ## Helper Lifecycle
 
@@ -149,7 +159,7 @@ The product name is `Convenient Window`; the identifier `com.ximizhou.convenient
 Edge-hide animation is controlled by the optional `edgeHide.animationEnabled` preference (default true). Disabled transitions write the final geometry/topmost state once; cleanup transitions are always immediate. Trigger conditions, collapse/restore delays and the controller acknowledgement flow do not change.
 ## Optional administrator helper on Windows
 
-The desktop remains at ordinary user permissions. The power panel can restart its helper with `ShellExecuteExW` and the `runas` verb. This choice lasts for the current helper session; automatic recovery starts an ordinary helper without requesting UAC. Cancellation or a failed elevated launch restarts the ordinary helper and reports the fallback. A replacement is started only after the previous process has exited.
+The desktop remains at ordinary user permissions. The administrator control under top-right Settings can restart its helper with `ShellExecuteExW` and the `runas` verb. This choice lasts for the current helper session; automatic recovery starts an ordinary helper without requesting UAC. Cancellation or a failed elevated launch restarts the ordinary helper and reports the fallback. A replacement is started only after the previous process has exited.
 
 The authenticated protocol-v7/schema-v8 `helper.ready` message includes `processId`, `elevated`, and `desktopManaged`. These report the actual helper PID, token elevation, and enabled owner binding; the retained `desktopManaged` name is not a product-identity assertion. The supervisor checks the owned process ID, authentication, and protocol before accepting readiness or issuing shutdown. Permission-switch errors query actual running/elevation state again; if that query fails, the frontend uses unknown (`elevated: null`) rather than a previous cached boolean. An unconfirmed state is not evidence that an old elevated helper stopped. An ordinary helper remains in the desktop's kill-on-close Job Object. An elevated helper monitors the desktop process handle and creation time, and listens for a per-launch stop event. Owner exit or that event requests graceful shutdown, with a bounded exit fallback if runtime cleanup stalls.
 

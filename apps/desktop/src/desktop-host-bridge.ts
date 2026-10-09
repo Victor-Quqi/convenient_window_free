@@ -116,12 +116,12 @@ export async function createDesktopHostBridge(): Promise<HostBridge> {
     onStartupChanged: handler => listen("startup-changed", handler),
     async getAdminStartup() {
       try { return await invoke<AdminStartupState>("admin_startup_status"); }
-      catch { return { enabled: null, needsRepair: false, error: "adminStartupUnknown" }; }
+      catch { return { enabled: null, error: "adminStartupUnknown" }; }
     },
     async setAdminStartup(enabled) {
       try { return await invoke<AdminStartupState>("set_admin_startup", { enabled }); }
       catch (error) {
-        const state = await invoke<AdminStartupState>("admin_startup_status").catch(() => ({ enabled: null, needsRepair: false }));
+        const state = await invoke<AdminStartupState>("admin_startup_status").catch(() => ({ enabled: null }));
         return { ...state, error: errorMessage(error) };
       }
     },

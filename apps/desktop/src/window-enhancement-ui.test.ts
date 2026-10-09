@@ -143,3 +143,22 @@ it("auto-saves the localized edge animation switch without changing delays", () 
   expect(source).toContain('settings.edgeHide.collapseDelayMs');
   expect(source).toContain('settings.edgeHide.restoreDelayMs');
 });
+
+
+describe("per-area geometry UI boundaries", () => {
+  it("replaces the global size input without adding a feature tab", () => {
+    expect(source).toContain('import HotzoneGeometryEditor from "./HotzoneGeometryEditor.svelte"');
+    expect(source).toContain('onChange={setHotzoneGeometry}');
+    expect(source).toContain('onReset={resetHotzoneGeometry}');
+    expect(source).toContain('ready={displayReady}');
+    expect(source).toContain('delete zone.geometry');
+    expect(source).toContain('geometry: { ...zone.geometry }');
+    expect(source).not.toContain('value: settings.edgeSize, onChange:');
+    expect(source).toContain('isSupportedHelperSchema(data?.schemaVersion)');
+    expect(i18n.zh.geometryScope).toContain("不改变动作");
+    expect(i18n.en.geometryLinked).toBe("Keep the current aspect ratio");
+    expect(styles).toContain('.geometry-field input { display: block; width: 100%; min-width: 0;');
+    expect(monitorStage).toContain('pointer-events:none');
+    expect(monitorStage).toContain('hotzonePreviewRect(selectedZone, selectedDisplay.bounds, edgeSize, selectedGeometry)');
+  });
+});

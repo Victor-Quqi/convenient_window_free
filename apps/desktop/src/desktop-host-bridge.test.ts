@@ -23,8 +23,8 @@ describe("helper privilege switching", () => {
     expect(invoke).toHaveBeenLastCalledWith("set_helper_elevation", { elevated: true });
     expect(bridge.getHelperToken()).toBe("elevated-token");
     expect(bridge.getPrivilegeState!()).toEqual({ supported: true, elevated: true });
-    invoke.mockResolvedValueOnce({ token: "ordinary-token", elevated: false, warning: "adminCancelled" });
-    expect(await bridge.setHelperElevation!(true)).toEqual({ ok: true, elevated: false, warning: "adminCancelled" });
+    invoke.mockResolvedValueOnce({ token: "ordinary-token", elevated: false, warning: "access denied" });
+    expect(await bridge.setHelperElevation!(true)).toEqual({ ok: true, elevated: false, warning: "access denied" });
     expect(bridge.getHelperToken()).toBe("ordinary-token");
   });
 
@@ -105,11 +105,11 @@ describe("helper privilege switching", () => {
     expect(bridge.getPrivilegeState!().elevated).toBe(false);
   });
 
-  it("reports the real startup state after cancelled registration without switching the current helper", async () => {
+  it("reports the real startup state after a failed preference update without switching the current helper", async () => {
     const bridge = await createDesktopHostBridge();
-    invoke.mockRejectedValueOnce("adminCancelled");
-    invoke.mockResolvedValueOnce({ enabled: false, needsRepair: false });
-    expect(await bridge.setAdminStartup!(true)).toEqual({ enabled: false, needsRepair: false, error: "adminCancelled" });
+    invoke.mockRejectedValueOnce("access denied");
+    invoke.mockResolvedValueOnce({ enabled: false });
+    expect(await bridge.setAdminStartup!(true)).toEqual({ enabled: false, error: "access denied" });
     expect(invoke.mock.calls.slice(2).map(([command]) => command)).toEqual(["set_admin_startup", "admin_startup_status"]);
     expect(bridge.getHelperToken()).toBe("old");
     expect(bridge.getPrivilegeState!().elevated).toBe(false);
@@ -118,14 +118,14 @@ describe("helper privilege switching", () => {
   it("keeps a failed startup update unknown when its status cannot be read", async () => {
     const bridge = await createDesktopHostBridge();
     invoke.mockRejectedValueOnce("access denied");
-    invoke.mockRejectedValueOnce("scheduler unavailable");
-    expect(await bridge.setAdminStartup!(false)).toEqual({ enabled: null, needsRepair: false, error: "access denied" });
+    invoke.mockRejectedValueOnce("registry unavailable");
+    expect(await bridge.setAdminStartup!(false)).toEqual({ enabled: null, error: "access denied" });
   });
 
   it("passes login fallback warnings to the UI while retaining the ordinary helper token", async () => {
     const bridge = await createDesktopHostBridge();
-    invoke.mockResolvedValueOnce({ token: "ordinary", elevated: false, warning: "adminStartupFallback" });
-    expect(await bridge.startHelper()).toMatchObject({ ok: true, warning: "adminStartupFallback" });
+    invoke.mockResolvedValueOnce({ token: "ordinary", elevated: false, warning: "adminFallback" });
+    expect(await bridge.startHelper()).toMatchObject({ ok: true, warning: "adminFallback" });
     expect(bridge.getHelperToken()).toBe("ordinary");
     expect(bridge.getPrivilegeState!().elevated).toBe(false);
   });

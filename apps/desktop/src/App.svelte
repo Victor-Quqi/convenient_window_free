@@ -4,11 +4,12 @@
   import { runtimeErrorKey } from "./runtime-error";
   import { onMount } from "svelte";
   import { fly } from "svelte/transition";
-  import { HelperClient, isSupportedHelperProtocol, SUPPORTED_HELPER_PROTOCOL } from "./helper-client";
+  import { HelperClient, isSupportedHelperProtocol, isSupportedHelperSchema, SUPPORTED_HELPER_PROTOCOL, SUPPORTED_HELPER_SCHEMA } from "./helper-client";
   import { needsHelperUpgrade } from "./helper-version";
   import { HelperRecoveryGuard } from "./helper-recovery";
   import ActionPicker from "./ActionPicker.svelte";
   import MonitorStage from "./MonitorStage.svelte";
+  import HotzoneGeometryEditor from "./HotzoneGeometryEditor.svelte";
   import GestureCanvas from "./GestureCanvas.svelte";
   import ModifierRecorder from "./ModifierRecorder.svelte";
   import ShortcutRecorder from "./ShortcutRecorder.svelte";
@@ -25,7 +26,7 @@
   import type { Language, UiKey } from "./i18n";
   import type {
     ActionKind, AppSettings, DisplayInfo, Edge, HelperPlatformInfo, HelperStatus, HotzoneAction,
-    GesturePoint, GestureTemplate, HotzoneId, HotzoneSetting, ModifierKey,
+    GesturePoint, GestureTemplate, HotzoneGeometry, HotzoneId, HotzoneSetting, ModifierKey,
     OcrLanguage, TaskbarAppearanceSettings, TaskbarAppearanceStatus, TriggerAction, TriggerKind
   } from "./types";
 
@@ -129,7 +130,7 @@
   let helperElevated: boolean | null = null;
   let switchingPrivilege = false;
   let privilegeNotice = "";
-  let adminStartup: AdminStartupState = { enabled: null, needsRepair: false };
+  let adminStartup: AdminStartupState = { enabled: null };
   let changingAdminStartup = false;
   let startupNotice = "";
   let startup: { enabled: boolean | null; error?: string } = { enabled: null };
@@ -306,7 +307,7 @@
   };
   function statusText(status: UiStatusKey | string, useEnglish = english): string {
     const key = statusKeys[status as UiStatusKey] ?? (Object.hasOwn(zh, status) ? status as UiKey : undefined);
-    return key ? (useEnglish ? en : zh)[key] : status;
+    return key ? format((useEnglish ? en : zh)[key], { schema: SUPPORTED_HELPER_SCHEMA }) : status;
   }
   $: renderedLastMessage = statusText(lastMessage, english);
   // Lifecycle intent follows the saved switch/socket, not an error or unknown permission label.
@@ -355,7 +356,7 @@
     });
     const offMessage = helper.onMessage((message) => {
       if (message.type === "helper.ready") {
-        const data = message.data as { version?: unknown; protocolVersion?: unknown; ocrLanguages?: unknown; platform?: HelperPlatformInfo; elevated?: unknown } | null;
+        const data = message.data as { version?: unknown; protocolVersion?: unknown; schemaVersion?: unknown; ocrLanguages?: unknown; platform?: HelperPlatformInfo; elevated?: unknown } | null;
         helperPlatform = helper.platformInfo ?? (data?.platform ?? null);
         availableOcrLanguages = Array.isArray(data?.ocrLanguages)
           ? data.ocrLanguages.filter((language): language is OcrLanguage => language === "auto" || language === "zh-Hans" || language === "en")
@@ -364,6 +365,12 @@
           lastMessage = format(ui("statusHelperProtocol"), { min: SUPPORTED_HELPER_PROTOCOL, max: SUPPORTED_HELPER_PROTOCOL });
           helperError = lastMessage;
           helperRecoveryFailed = true;
+          helper.stop();
+        } else if (!isSupportedHelperSchema(data?.schemaVersion)) {
+          lastMessage = "statusHelperSchema";
+          helperError = "statusHelperSchema";
+          helperRecoveryFailed = true;
+          displayReady = false;
           helper.stop();
         } else if (needsHelperUpgrade(expectedHelperVersion, data?.version)) {
           requestHelperUpgrade(data?.version);
@@ -382,7 +389,7 @@
         }
       } else if (message.type === "runtime.status") {
         const data = message.data as { displays?: DisplayInfo[]; foreground?: string; message?: string };
-        if (Array.isArray(data.displays) && data.displays.length) {
+        if (!helperRecoveryFailed && Array.isArray(data.displays) && data.displays.length) {
           displayReady = true;
           displays = data.displays;
           const selectedDisplay = displays.find((display) =>
@@ -509,6 +516,24 @@
     }
     currentDisplayHotzones = profile.hotzones;
     return profile.hotzones;
+  }
+
+  function setHotzoneGeometry(geometry: HotzoneGeometry): void {
+    if (!displayReady || !displays.some((display) => display.id === selectedDisplayId)) return;
+    const zone = ensureProfile().find((item) => item.id === selectedZone);
+    if (!zone) return;
+    zone.geometry = { ...geometry };
+    settings = { ...settings };
+    persist();
+  }
+
+  function resetHotzoneGeometry(): void {
+    if (!displayReady || !displays.some((display) => display.id === selectedDisplayId)) return;
+    const zone = ensureProfile().find((item) => item.id === selectedZone);
+    if (!zone) return;
+    delete zone.geometry;
+    settings = { ...settings };
+    persist();
   }
 
   function currentZone(): HotzoneSetting {
@@ -1220,7 +1245,7 @@
       lastMessage = format(ui("diagnosticsFailed"), { error: error instanceof Error ? error.message : String(error) });
     }
   }
-  function cloneHotzones(zones: HotzoneSetting[]): HotzoneSetting[] { return zones.map((zone) => ({ ...zone, actions: zone.actions.map((item) => ({ trigger: item.trigger, action: { ...item.action }, modifierActions: (item.modifierActions ?? []).map((variant) => ({ modifiers: [...variant.modifiers], action: { ...variant.action } })), cooldownMs: item.cooldownMs, hoverDelayMs: item.hoverDelayMs })) })); }
+  function cloneHotzones(zones: HotzoneSetting[]): HotzoneSetting[] { return zones.map((zone) => ({ ...zone, ...(zone.geometry ? { geometry: { ...zone.geometry } } : {}), actions: zone.actions.map((item) => ({ trigger: item.trigger, action: { ...item.action }, modifierActions: (item.modifierActions ?? []).map((variant) => ({ modifiers: [...variant.modifiers], action: { ...variant.action } })), cooldownMs: item.cooldownMs, hoverDelayMs: item.hoverDelayMs })) })); }
   function hasSecureBridge(): boolean { return host.kind === "desktop"; }
 </script>
 
@@ -1263,6 +1288,7 @@
         edgeHideEdges={currentDisplayEdgeHideEdges}
         hotzonesEnabled={settings.hotzonesEnabled}
         hotzones={currentDisplayHotzones}
+        edgeSize={settings.edgeSize}
         onSelectDisplay={selectDisplay}
         onSelectZone={selectZone}
         onToggleEdge={toggleEdge}
@@ -1297,7 +1323,7 @@
               </div>
               <div class="feature-settings-head"><span>{ui("hotzoneSettings")}</span><strong>{settings.hotzonesEnabled ? ui("unifiedOn") : ui("keepConfig")}</strong></div>
               <div class="feature-settings-body" class:off={!settings.hotzonesEnabled} inert={!settings.hotzonesEnabled}>
-                {#if !displayReady}<p class="empty" role="status">{ui("waitingForDisplays")}</p>{/if}
+                {#if !displayReady}<p class="empty hotzone-connection-note" class:error={Boolean(helperError)} role={helperError ? "alert" : "status"}>{helperError ? statusText(helperError, english) : ui("waitingForDisplays")}</p>{/if}
                 <div class="monitor-hotzone-settings" inert={!displayReady}>
                 <div class="trigger-tabs">
                   {#each triggerGroups as group}
@@ -1341,7 +1367,18 @@
                 <div class:single={activeTrigger !== "hover"} class="timing">{#if activeTrigger === "hover"}<label><span>{ui("hoverDelay")}</span><div><input use:numberSetting={{ key: `${displayReady}:${selectedDisplayId}:${selectedZone}:${activeTrigger}`, value: currentTriggerSlot().hoverDelayMs ?? settings.hoverDelayMs, onChange: (value) => setTriggerTiming("hoverDelayMs", value) }} min="0" max="3000" type="number" /><em>ms</em></div></label>{/if}<label><span>{ui("cooldown")}</span><div><input use:numberSetting={{ key: `${displayReady}:${selectedDisplayId}:${selectedZone}:${activeTrigger}`, value: currentTriggerSlot().cooldownMs ?? settings.actionCooldownMs, onChange: (value) => setTriggerTiming("cooldownMs", value) }} min="10" max="5000" type="number" /><em>ms</em></div></label></div>
                 </div>
                 <div class="subhead" style="margin-top:18px"><div><h2>{ui("hotzoneParameters")}</h2><p>{ui("hotzoneParametersDescription")}</p></div></div>
-                <div class="form-grid"><label><span>{ui("edgeSize")}</span><div><input use:numberSetting={{ value: settings.edgeSize, onChange: (value) => { settings.edgeSize = value; persist(); } }} min="2" max="48" type="number" /><em>px</em></div></label></div>
+                <div class="setting-title hotzone-hint-setting"><div><h2>{ui("showHotzoneHint")}</h2><p>{ui("hotzoneHintDescription")}</p></div><label class="mini-switch"><input aria-label={ui("showHotzoneHint")} bind:checked={settings.showHotzoneHint} on:change={() => persist()} type="checkbox" /><span></span></label></div>
+                <HotzoneGeometryEditor
+                  zone={currentDisplayHotzones.find((zone) => zone.id === selectedZone) ?? currentDisplayHotzones[0]}
+                  display={displayReady ? displays.find((display) => display.id === selectedDisplayId) : undefined}
+                  monitorId={selectedDisplayId}
+                  edgeSize={settings.edgeSize}
+                  ready={displayReady}
+                  {language}
+                  onChange={setHotzoneGeometry}
+                  onReset={resetHotzoneGeometry}
+                  onSelectZone={selectZone}
+                />
                 <div class="list-section"><div class="subhead"><div><h2>{ui("pausedApps")}</h2><p>{ui("foreground")}{foregroundApp || ui("noForeground")}</p></div><button class="quiet" on:click={() => addForeground("hotzones")} type="button">+ {ui("addApp")}</button></div><div class="app-list">{#each settings.pausedApps as app}<div><span>{app}</span><button aria-label={format(ui("removeApp"), { app })} on:click={() => removeApp("hotzones", app)} type="button">×</button></div>{:else}<p class="empty">{ui("noPausedApps")}</p>{/each}</div></div>
               </div>
             {:else if mode === "edge-hide"}
@@ -1486,11 +1523,12 @@
                 <div class="power-orb" class:on={runtimeState === "running"} class:warning={runtimeState === "missing" || runtimeState === "disconnected"} class:error={runtimeState === "error"} aria-hidden="true"><span></span></div>
                 <h2 aria-live="polite">{ui(runtimeLabelKey)}</h2>
               </div>
-              <dl class="runtime-states" aria-label={ui("currentState")}>
-                <div class="runtime-row"><dt>{ui("masterState")}</dt><dd><strong class:on={settings.enabled}>{settings.enabled ? ui("masterOn") : ui("masterOffState")}</strong></dd></div>
-                <div class="runtime-row"><dt>{ui("helperSection")}</dt><dd><strong class:on={helperStatus === "connected"} class:warning={!helperInstallState.installed || (settings.enabled && helperStatus === "disconnected")}>{!helperInstallState.installed ? ui("runtimeHelperNotInstalled") : helperStatus === "connected" ? ui("connected") : helperStatus === "connecting" ? ui("connecting") : ui("disconnected")}</strong></dd></div>
-                <div class="runtime-row"><dt>{ui("runtimePermission")}</dt><dd><strong class:warning={administratorModeSupported && helperElevated === null}>{!administratorModeSupported ? ui("runtimeUnavailable") : switchingPrivilege ? ui("adminSwitching") : helperElevated === null ? ui("adminStateUnknown") : helperElevated ? ui("runtimeAdministrator") : ui("runtimeStandard")}</strong></dd></div>
+              <dl class="power-facts" aria-label={ui("currentState")}>
+                <div class="runtime-card"><dt>{ui("masterState")}</dt><dd><strong class:on={settings.enabled}>{settings.enabled ? ui("masterOn") : ui("masterOffState")}</strong><p>{ui("runtimeRulesBrief")}</p></dd></div>
+                <div class="runtime-card"><dt>{ui("helperSection")}</dt><dd><strong class:on={helperStatus === "connected"} class:warning={!helperInstallState.installed || (settings.enabled && helperStatus === "disconnected")}>{!helperInstallState.installed ? ui("runtimeHelperNotInstalled") : helperStatus === "connected" ? ui("connected") : helperStatus === "connecting" ? ui("connecting") : ui("disconnected")}</strong><p>{ui("runtimeHelperBrief")}</p></dd></div>
               </dl>
+              {#if administratorModeSupported && helperElevated === null && settings.enabled}<p class="runtime-notice warning runtime-permission-warning" role="status">{ui("runtimePermissionUnknownHint")}</p>{/if}
+              {#if privilegeNotice}<p class="runtime-notice" role="status">{statusText(privilegeNotice, english)}</p>{/if}
               {#if helperError}<div class="runtime-notice error" role="alert">{statusText(helperError, english)}</div>{:else if runtimeState === "disconnected"}<p class="runtime-notice warning" role="status">{ui("runtimeReconnectHint")}</p>{/if}
               <div class="power-actions runtime-actions"><button class="apply" data-action={runtimePowerActive ? "stop" : "start"} disabled={switchingPrivilege || starting || stopping || (!runtimePowerActive && !helperInstallState.installed)} on:click={() => setPowerEnabled(!runtimePowerActive)} type="button">{runtimePowerActive ? ui("closeFeature") : ui("openFeature")}</button><button aria-live="polite" class:failed={connectionTestState === "failed"} class:success={connectionTestState === "success"} class:testing={connectionTestState === "testing"} class="quiet connection-test" disabled={helperStatus !== "connected" || connectionTestState === "testing"} on:click={runConnectionTest} type="button"><i aria-hidden="true"></i><span>{connectionTestState === "testing" ? ui("connectionTesting") : connectionTestState === "success" ? ui("connectionOk") : connectionTestState === "failed" ? ui("connectionFailed") : ui("connectionTest")}</span></button></div>
               <details class="runtime-details">
@@ -1506,44 +1544,40 @@
               <TaskbarAppearance {english} appearance={settings.taskbarAppearance} connected={helperStatus === "connected"} masterEnabled={settings.enabled} status={taskbarStatus} onChange={updateTaskbarAppearance} />
             {:else}
               <div class="setting-title"><div><h2>{ui("moreGlobal")}</h2><p>{ui("moreDescription")}</p></div></div>
-              {#if administratorModeSupported || host.getStartup}
-                <div class="permission-settings">
-                  {#if host.getStartup}
-                    <label class="permission-toggle login-toggle">
-                      <span>{ui("trayAutostart")}</span>
-                      <span class="mini-switch">
-                        <input type="checkbox" role="switch" aria-label={ui("trayAutostart")} checked={startup.enabled === true} disabled={startup.enabled === null || changingStartup || changingAdminStartup} on:change={(event) => { event.currentTarget.checked = startup.enabled === true; void setStartup(!startup.enabled); }} />
-                        <span aria-hidden="true"></span>
-                      </span>
-                    </label>
-                  {/if}
-                  {#if administratorModeSupported}
-                  <label class="permission-toggle" title={ui("adminModeDetail")}>
-                    <span>{ui("adminMode")}</span>
-                    {#if switchingPrivilege}<small role="status">{ui("adminSwitching")}</small>{:else if helperElevated === null}<small role="status">{ui("adminStateUnknown")}</small>{/if}
+              <div class="language-setting"><div><h2>{ui("language")}</h2><p>{ui("languageDescription")}</p></div><select aria-label={ui("language")} bind:value={language} on:change={setLanguage}><option value="zh-CN">{ui("chinese")}</option><option value="en-US">{ui("english")}</option></select></div>
+              <section class="permission-settings" aria-label={ui("runtimePermission")}>
+                {#if host.getStartup}
+                  <label class="permission-toggle login-toggle">
+                    <span>{ui("trayAutostart")}</span>
                     <span class="mini-switch">
-                      <input type="checkbox" role="switch" aria-label={ui("adminMode")} checked={helperElevated === true} disabled={helperElevated === null || switchingPrivilege || starting || stopping || upgradingHelper || recoveringHelper || !settings.enabled || helperStatus !== "connected"} on:change={(event) => { event.currentTarget.checked = helperElevated === true; void switchHelperPrivilege(); }} />
+                      <input type="checkbox" role="switch" aria-label={ui("trayAutostart")} checked={startup.enabled === true} disabled={startup.enabled === null || changingStartup || changingAdminStartup} on:change={(event) => { event.currentTarget.checked = startup.enabled === true; void setStartup(!startup.enabled); }} />
                       <span aria-hidden="true"></span>
                     </span>
                   </label>
+                {/if}
+                <div class="permission-heading"><h2>{ui("adminMode")}</h2>
+                  {#if administratorModeSupported}
+                    <label class="permission-toggle" title={ui("adminModeDetail")}><span class="permission-state" class:warning={helperElevated === null} aria-live="polite">{switchingPrivilege ? ui("adminSwitching") : helperElevated === null ? ui("adminStateUnknown") : helperElevated ? ui("runtimeAdministrator") : ui("runtimeStandard")}</span><span class="mini-switch"><input type="checkbox" role="switch" aria-label={ui("adminMode")} aria-describedby="helper-permission-description" checked={helperElevated === true} disabled={helperElevated === null || switchingPrivilege || starting || stopping || upgradingHelper || recoveringHelper || !settings.enabled || helperStatus !== "connected"} on:change={(event) => { event.currentTarget.checked = helperElevated === true; void switchHelperPrivilege(); }} /><span aria-hidden="true"></span></span></label>
+                  {:else}<span class="permission-state">{ui("runtimeUnavailable")}</span>{/if}
+                </div>
+                <p id="helper-permission-description">{ui("adminModeDetail")}</p>
+                {#if administratorModeSupported}
                   <div class="permission-startup">
                     <label class="permission-toggle" title={ui("adminStartupDetail")}>
                       <span>{ui("adminStartup")}</span>
                       {#if changingAdminStartup}<small>{ui("adminSwitching")}</small>{/if}
                       <span class="mini-switch">
-                        <input type="checkbox" role="switch" aria-label={ui("adminStartup")} checked={adminStartup.enabled === true} disabled={adminStartup.enabled === null || changingAdminStartup || changingStartup} on:change={(event) => { event.currentTarget.checked = adminStartup.enabled === true; void setAdminStartup(!adminStartup.enabled); }} />
+                        <input type="checkbox" role="switch" aria-label={ui("adminStartup")} aria-describedby="admin-startup-description" checked={adminStartup.enabled === true} disabled={adminStartup.enabled === null || changingAdminStartup || changingStartup} on:change={(event) => { event.currentTarget.checked = adminStartup.enabled === true; void setAdminStartup(!adminStartup.enabled); }} />
                         <span></span>
                       </span>
                     </label>
-                    {#if adminStartup.needsRepair}<button class="quiet" disabled={changingAdminStartup || changingStartup} title={ui("adminStartupRepair")} on:click={() => setAdminStartup(true)}>{ui("adminStartupRepairAction")}</button>{/if}
                   </div>
-                  {/if}
-                  {#if privilegeNotice}<p role="status">{statusText(privilegeNotice)}</p>{/if}
-                  {#if helperError}<p role="status">{statusText(helperError)}</p>{/if}
-                  {#if startupNotice || startup.error || adminStartup.error}<p role="status">{statusText(startupNotice || startup.error || adminStartup.error || "")}</p>{/if}
-                </div>
-              {/if}
-              <div class="language-setting"><div><h2>{ui("language")}</h2><p>{ui("languageDescription")}</p></div><select aria-label={ui("language")} bind:value={language} on:change={setLanguage}><option value="zh-CN">{ui("chinese")}</option><option value="en-US">{ui("english")}</option></select></div>
+                  <p id="admin-startup-description">{ui("adminStartupDetail")}</p>
+                {/if}
+                {#if startupNotice || startup.error || adminStartup.error}<p role="status">{statusText(startupNotice || startup.error || adminStartup.error || "")}</p>{/if}
+                {#if privilegeNotice}<p class="runtime-notice" role="status">{statusText(privilegeNotice, english)}</p>{/if}
+                {#if helperError}<div class="runtime-notice error" role="alert">{statusText(helperError, english)}</div>{/if}
+              </section>
               <div class="timing single"><label><span>{ui("pollInterval")}</span><div><input use:numberSetting={{ value: settings.pollIntervalMs, onChange: (value) => { settings.pollIntervalMs = value; persist(); } }} min="10" max="250" type="number" /><em>ms</em></div></label></div>
               <div class="config-section"><h2>{ui("config")}</h2><div class="config-actions"><button class="quiet" on:click={exportSettings} type="button">{ui("export")}</button><button class="quiet" on:click={importSettings} type="button">{ui("import")}</button><button class="danger" on:click={resetSettings} type="button">{ui("reset")}</button></div></div>
             {/if}

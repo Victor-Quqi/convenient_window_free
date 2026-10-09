@@ -1,12 +1,7 @@
 mod adjustment_hud;
 mod command_broker;
-#[cfg(windows)]
-#[path = "../../../../shared/scheduled_owner.rs"]
-mod scheduled_owner;
 mod storage;
 mod supervisor;
-#[cfg(windows)]
-mod windows_admin_startup;
 #[cfg(windows)]
 mod windows_autostart;
 #[cfg(windows)]
@@ -110,35 +105,39 @@ struct DesktopDiagnostics {
 }
 
 #[tauri::command]
-fn desktop_status(state: State<'_, DesktopState>) -> Result<DesktopStatus, String> {
-    let payload = supervisor::validate_payload(&state.paths.helper_payload_dir);
-    let helper_path = payload.as_ref().cloned().unwrap_or_else(|_| {
-        state
-            .paths
-            .helper_payload_dir
-            .join(supervisor::helper_executable_name())
-    });
-    let helper_error = payload.err();
-    let token = supervisor::read_valid_token(&state.paths.helper_data_dir.join("auth-token")).ok();
-    let mut helper = state
-        .helper
-        .lock()
-        .map_err(|_| "helper 进程状态锁已损坏".to_string())?;
-    let helper_running = helper.running();
-    let helper_elevated = helper.elevated();
-    Ok(DesktopStatus {
-        data_dir: path_string(&state.paths.app_data_dir),
-        helper_path: path_string(&helper_path),
-        helper_exists: helper_error.is_none(),
-        helper_running,
-        helper_bytes: supervisor::payload_size(&state.paths.helper_payload_dir),
-        helper_version: HELPER_VERSION,
-        helper_error,
-        repository: REPOSITORY_URL,
-        token,
-        helper_elevated,
-        administrator_mode_supported: cfg!(windows),
+async fn desktop_status(state: State<'_, DesktopState>) -> Result<DesktopStatus, String> {
+    let paths = state.paths.clone();
+    let process = Arc::clone(&state.helper);
+    tauri::async_runtime::spawn_blocking(move || {
+        let payload = supervisor::validate_payload(&paths.helper_payload_dir);
+        let helper_path = payload.as_ref().cloned().unwrap_or_else(|_| {
+            paths
+                .helper_payload_dir
+                .join(supervisor::helper_executable_name())
+        });
+        let helper_error = payload.err();
+        let token = supervisor::read_valid_token(&paths.helper_data_dir.join("auth-token")).ok();
+        let mut helper = process
+            .lock()
+            .map_err(|_| "helper 进程状态锁已损坏".to_string())?;
+        let helper_running = helper.running();
+        let helper_elevated = helper.elevated()?;
+        Ok(DesktopStatus {
+            data_dir: path_string(&paths.app_data_dir),
+            helper_path: path_string(&helper_path),
+            helper_exists: helper_error.is_none(),
+            helper_running,
+            helper_bytes: supervisor::payload_size(&paths.helper_payload_dir),
+            helper_version: HELPER_VERSION,
+            helper_error,
+            repository: REPOSITORY_URL,
+            token,
+            helper_elevated,
+            administrator_mode_supported: cfg!(windows),
+        })
     })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 #[tauri::command]
@@ -153,7 +152,7 @@ async fn start_helper(state: State<'_, DesktopState>) -> Result<StartResult, Str
             .map_err(|_| "helper 进程状态锁已损坏".to_string())?;
         #[cfg(windows)]
         if at_login {
-            return helper.start_at_login(&payload_dir, &data_dir);
+            return helper.switch_mode(&payload_dir, &data_dir, true);
         }
         #[cfg(not(windows))]
         let _ = at_login;
@@ -167,15 +166,16 @@ async fn start_helper(state: State<'_, DesktopState>) -> Result<StartResult, Str
 #[tauri::command]
 async fn admin_startup_status(
     state: State<'_, DesktopState>,
-) -> Result<windows_admin_startup::StartupState, String> {
-    let helper = state
-        .paths
-        .helper_payload_dir
-        .join(supervisor::helper_executable_name());
-    let data = state.paths.helper_data_dir.clone();
-    tauri::async_runtime::spawn_blocking(move || windows_admin_startup::state(&helper, &data))
-        .await
-        .map_err(|e| e.to_string())?
+) -> Result<windows_autostart::AdminStartupState, String> {
+    let startup_lock = Arc::clone(&state.startup_lock);
+    tauri::async_runtime::spawn_blocking(move || {
+        let _guard = startup_lock
+            .lock()
+            .map_err(|_| "Startup state lock is poisoned")?;
+        windows_autostart::admin_request_state().map_err(|e| e.to_string())
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[cfg(windows)]
@@ -184,20 +184,14 @@ async fn set_admin_startup(
     enabled: bool,
     app: AppHandle,
     state: State<'_, DesktopState>,
-) -> Result<windows_admin_startup::StartupState, String> {
-    let payload = state.paths.helper_payload_dir.clone();
-    let data = state.paths.helper_data_dir.clone();
+) -> Result<windows_autostart::AdminStartupState, String> {
     let startup_lock = Arc::clone(&state.startup_lock);
     let result = tauri::async_runtime::spawn_blocking(move || {
         let _guard = startup_lock
             .lock()
             .map_err(|_| "Startup state lock is poisoned")?;
-        if enabled {
-            windows_admin_startup::enable(&payload, &data)?;
-        } else {
-            windows_admin_startup::remove(false)?;
-        }
-        windows_admin_startup::state(&payload.join(supervisor::helper_executable_name()), &data)
+        windows_autostart::set_admin_request(enabled).map_err(|e| e.to_string())?;
+        windows_autostart::admin_request_state().map_err(|e| e.to_string())
     })
     .await
     .map_err(|e| e.to_string())?;
@@ -246,8 +240,6 @@ async fn set_startup(enabled: bool, app: AppHandle) -> Result<bool, String> {
                 .enable()
                 .map_err(|e| e.to_string())?;
         } else {
-            #[cfg(windows)]
-            windows_admin_startup::remove(false)?;
             worker_app
                 .autolaunch()
                 .disable()
@@ -533,16 +525,6 @@ fn path_string(path: &Path) -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    #[cfg(windows)]
-    if let Some(result) = windows_admin_startup::handle_cli() {
-        let code = if let Err(error) = result {
-            eprintln!("{error}");
-            1
-        } else {
-            0
-        };
-        std::process::exit(code);
-    }
     let explicit_data_dir = explicit_data_dir().expect("invalid desktop data directory override");
     let mut context = tauri::generate_context!();
     let main_window_position = context
@@ -575,7 +557,8 @@ pub fn run() {
                 settings_write_lock: Mutex::new(()),
                 shutdown_started: AtomicBool::new(false),
                 login_start_pending: AtomicBool::new(
-                    std::env::args().any(|arg| arg == "--autostart"),
+                    std::env::args().any(|arg| arg == "--autostart")
+                        && std::env::args().any(|arg| arg == "--request-admin"),
                 ),
                 startup_lock: Arc::new(Mutex::new(())),
             });

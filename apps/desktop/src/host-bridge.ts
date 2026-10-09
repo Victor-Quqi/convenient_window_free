@@ -1,6 +1,5 @@
 export interface AdminStartupState {
   enabled: boolean | null;
-  needsRepair: boolean;
   error?: string;
 }
 

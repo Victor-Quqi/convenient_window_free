@@ -16,9 +16,6 @@ pub struct ElevatedProcess {
 }
 
 impl ElevatedProcess {
-    pub fn from_handles(process: ProcessHandle, stop: ProcessHandle) -> Self {
-        Self { process, stop }
-    }
     pub fn id(&self) -> u32 {
         self.process.id()
     }
@@ -29,16 +26,16 @@ impl ElevatedProcess {
         self.process.try_wait()
     }
     pub fn kill(&self) -> Result<(), String> {
-        if self.try_wait()?.is_some() {
+        if matches!(self.try_wait(), Ok(Some(_))) {
             return Ok(());
         }
         unsafe {
-            SetEvent(self.stop.raw()).map_err(|error| error.to_string())?;
+            let signal = SetEvent(self.stop.raw());
             if WaitForSingleObject(self.process.raw(), 5000) != WAIT_OBJECT_0 {
-                return Err(
+                return Err(signal.err().map(|e| e.to_string()).unwrap_or_else(|| {
                     "Administrator helper did not stop; close the desktop app before retrying"
-                        .into(),
-                );
+                        .into()
+                }));
             }
         }
         Ok(())
@@ -86,10 +83,15 @@ pub fn launch(
         owner_birth,
         quote_argument(&stop_name)
     );
-    Ok(ElevatedProcess {
-        process: run_as_admin(executable, &parameters)?,
-        stop,
-    })
+    match run_as_admin(executable, &parameters) {
+        Ok(process) => Ok(ElevatedProcess { process, stop }),
+        Err(error) => {
+            // The shell may have launched a process without returning its handle.
+            // Request shutdown, but never treat this as proof that it exited.
+            let _ = unsafe { SetEvent(stop.raw()) };
+            Err(error)
+        }
+    }
 }
 
 pub fn run_as_admin(executable: &Path, parameters: &str) -> Result<ProcessHandle, String> {
@@ -126,7 +128,7 @@ pub fn run_as_admin(executable: &Path, parameters: &str) -> Result<ProcessHandle
     };
     unsafe { ShellExecuteExW(&mut info) }.map_err(launch_error)?;
     if info.hProcess.is_invalid() {
-        return Err("Admin helper process handle is unavailable".into());
+        return Err("adminLaunchUnconfirmed".into());
     }
     Ok(ProcessHandle::new(info.hProcess))
 }

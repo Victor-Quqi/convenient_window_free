@@ -56,11 +56,7 @@ impl ManagedChild {
     fn kill(&mut self) -> Result<(), String> {
         match self {
             Self::Ordinary(child) => {
-                if child
-                    .try_wait()
-                    .map_err(|error| error.to_string())?
-                    .is_none()
-                {
+                if !matches!(child.try_wait(), Ok(Some(_))) {
                     child.kill().map_err(|error| error.to_string())?;
                 }
                 child.wait().map_err(|error| error.to_string())?;
@@ -83,6 +79,7 @@ pub struct HelperProcess {
     child: Option<ManagedChild>,
     broker: Option<crate::command_broker::CommandBroker>,
     elevated: bool,
+    launch_uncertain: bool,
     #[cfg(windows)]
     child_job: Option<ChildJob>,
     last_exit_code: Option<i32>,
@@ -103,6 +100,7 @@ impl Default for HelperProcess {
             child: None,
             broker: None,
             elevated: false,
+            launch_uncertain: false,
             #[cfg(windows)]
             child_job: None,
             last_exit_code: None,
@@ -114,42 +112,18 @@ impl Default for HelperProcess {
 impl HelperProcess {
     pub fn start(&mut self, payload_dir: &Path, data_dir: &Path) -> Result<StartResult, String> {
         // Automatic recovery always starts without a UAC prompt.
-        self.start_mode(payload_dir, data_dir, false, false)
+        self.start_mode(payload_dir, data_dir, false)
     }
 
-    #[cfg(windows)]
-    pub fn start_at_login(
-        &mut self,
-        payload_dir: &Path,
-        data_dir: &Path,
-    ) -> Result<StartResult, String> {
-        let helper = validate_payload(payload_dir)?;
-        let status = crate::windows_admin_startup::state(&helper, data_dir);
-        let attempt = match status {
-            Ok(status) if !status.enabled => return self.start(payload_dir, data_dir),
-            Ok(status) if status.needs_repair => Err("adminStartupRepair".into()),
-            Ok(_) => self.start_mode(payload_dir, data_dir, true, true),
-            Err(_) => Err("adminStartupFailed".into()),
-        };
-        match attempt {
-            Ok(result) => Ok(result),
-            Err(error) if error == "adminStartupStopFailed" => Err(error),
-            Err(error) => {
-                self.stop(data_dir)?;
-                let mut result = self.start(payload_dir, data_dir)?;
-                result.warning = Some(if error == "adminStartupRepair" {
-                    error
-                } else {
-                    "adminStartupFallback".into()
-                });
-                Ok(result)
-            }
+    pub fn elevated(&mut self) -> Result<bool, String> {
+        if self.launch_uncertain {
+            return Err("adminLaunchUnconfirmed".into());
         }
-    }
-
-    pub fn elevated(&mut self) -> bool {
         self.refresh();
-        self.child.is_some() && self.elevated
+        if let Some(child) = self.child.as_mut() {
+            child.try_wait()?;
+        }
+        Ok(self.child.is_some() && self.elevated)
     }
 
     pub fn switch_mode(
@@ -166,7 +140,7 @@ impl HelperProcess {
         let (mut result, warning) = start_with_fallback(elevated, |mode| {
             // Never start a replacement while a failed attempt is still alive.
             self.stop(data_dir)?;
-            self.start_mode(payload_dir, data_dir, mode, false)
+            self.start_mode(payload_dir, data_dir, mode)
         })?;
         result.warning = warning;
         Ok(result)
@@ -177,8 +151,10 @@ impl HelperProcess {
         payload_dir: &Path,
         data_dir: &Path,
         elevated: bool,
-        scheduled: bool,
     ) -> Result<StartResult, String> {
+        if self.launch_uncertain {
+            return Err("adminLaunchUnconfirmed".into());
+        }
         self.refresh();
         let helper_path = validate_payload(payload_dir)?;
         if self.child.is_some() {
@@ -203,18 +179,17 @@ impl HelperProcess {
         #[cfg(windows)]
         let owner_birth = crate::windows_process::current_birth()?;
         #[cfg(not(windows))]
-        let _ = scheduled;
-        #[cfg(not(windows))]
         if elevated {
             return Err("Administrator mode is only available on Windows".into());
         }
         #[cfg(windows)]
         if elevated {
-            let process = if scheduled {
-                crate::windows_admin_startup::launch(&helper_path, data_dir, owner_birth)?
-            } else {
-                crate::windows_elevation::launch(&helper_path, data_dir, owner_birth)?
-            };
+            let process = crate::windows_elevation::launch(&helper_path, data_dir, owner_birth)
+                .inspect_err(|error| {
+                    if error == "adminLaunchUnconfirmed" {
+                        self.launch_uncertain = true;
+                    }
+                })?;
             // Keep ownership even when a subsequent token query fails.
             self.child = Some(ManagedChild::Elevated(process));
             self.elevated = true;
@@ -353,6 +328,9 @@ impl HelperProcess {
     }
 
     fn stop_inner(&mut self, data_dir: &Path) -> Result<StopResult, String> {
+        if self.launch_uncertain {
+            return Err("adminLaunchUnconfirmed".into());
+        }
         self.refresh();
         self.broker = None;
         if self.child.is_none() {
@@ -425,10 +403,8 @@ impl HelperProcess {
         let Some(child) = self.child.as_mut() else {
             return Ok(());
         };
-        child
-            .kill()
-            .map_err(|error| format!("无法终止 helper：{error}"))?;
-        self.last_exit_code = child.try_wait()?;
+        let stopped = child.kill();
+        self.last_exit_code = Some(confirmed_exit(stopped, child.try_wait())?);
         self.child = None;
         self.elevated = false;
         #[cfg(windows)]
@@ -436,6 +412,20 @@ impl HelperProcess {
             self.child_job = None;
         }
         Ok(())
+    }
+}
+
+fn confirmed_exit(
+    stop: Result<(), String>,
+    status: Result<Option<i32>, String>,
+) -> Result<i32, String> {
+    match status {
+        Ok(Some(code)) => Ok(code),
+        other => Err(format!(
+            "Helper exit is unconfirmed: {}; {}",
+            stop.err().unwrap_or_default(),
+            other.err().unwrap_or_default()
+        )),
     }
 }
 
@@ -460,7 +450,7 @@ fn start_with_fallback<T>(
 ) -> Result<(T, Option<String>), String> {
     match start(elevated) {
         Ok(result) => Ok((result, None)),
-        Err(error) if elevated => {
+        Err(error) if elevated && error != "adminLaunchUnconfirmed" => {
             let result = start(false).map_err(|fallback| {
                 format!("{error}; ordinary helper recovery failed: {fallback}")
             })?;
@@ -642,6 +632,42 @@ fn timestamp_ms() -> u128 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn failed_stop_still_checks_exit_and_never_discards_an_unknown_process() {
+        assert_eq!(
+            confirmed_exit(Err("signal failed".into()), Ok(Some(0))).unwrap(),
+            0
+        );
+        assert!(confirmed_exit(Err("signal failed".into()), Ok(None)).is_err());
+        assert!(confirmed_exit(Ok(()), Err("query failed".into())).is_err());
+        assert!(confirmed_exit(Ok(()), Ok(None)).is_err());
+    }
+
+    #[test]
+    fn unconfirmed_launch_blocks_fallback_recovery_and_further_uac_requests() {
+        let mut calls = 0;
+        let result = start_with_fallback::<()>(true, |_| {
+            calls += 1;
+            Err("adminLaunchUnconfirmed".into())
+        });
+        assert_eq!(calls, 1);
+        assert_eq!(result.unwrap_err(), "adminLaunchUnconfirmed");
+        let mut helper = HelperProcess {
+            launch_uncertain: true,
+            ..Default::default()
+        };
+        let path = Path::new("missing-payload");
+        assert_eq!(
+            helper.start(path, path).unwrap_err(),
+            "adminLaunchUnconfirmed"
+        );
+        assert_eq!(
+            helper.switch_mode(path, path, true).unwrap_err(),
+            "adminLaunchUnconfirmed"
+        );
+        assert!(helper.elevated().is_err());
+    }
 
     #[test]
     fn stop_failure_restores_commands_without_swallowing_the_original_error() {

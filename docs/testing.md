@@ -1,5 +1,23 @@
 # Testing
 
+## Per-zone geometry and schema-v9 acceptance
+
+Require the exact protocol7/schema9 ready handshake before sending configuration; test old, missing and future schemas without writes or dropped geometry. Migrate earlier settings without materializing overrides or changing legacy global sizes and actions. Verify shared rectangle/normalization fixtures, corner priority over full-length edges, per-display isolation, deep copies, persistence, export/import and per-zone reset. UI regression must mount the real App, cancel numeric drafts on context changes, preserve non-square ratios, update both previews, and allow selecting all eight zones inside a narrow drawer. Browser host/IPC mocks are not native acceptance evidence.
+
+Helper verification: 235 passed / 3 existing ignored tests, including the shared hot-zone-frame path, schema-v8 migration and stale-schema rejection.
+
+Development evidence: the desktop frontend passes 267 tests across 25 files, with zero Svelte errors/warnings. The corresponding other-host frontend passes 327 tests across 26 files. Shared fixtures and modules pass parity checks. Real-browser acceptance covers 28 paired-host geometry scenarios and the standard modifier/language/layout smoke; host and IPC mocks are explicitly not native evidence.
+
+Manual Windows acceptance must include bottom-edge wheel controls at centered and 100% lengths, endpoints versus corner priority, hint-off actions, independent displays, negative coordinates, portrait orientation, and 100–200% DPI. Unlinked 12×24 then linked width24 must produce 24×48. Reset removes only the current override and falls back to the legacy global thickness/40%. Do not install over existing user software automatically. New schema settings require the matching helper and are not a downgrade artifact.
+
+The engine resolves one per-display hot-zone frame per tick for both hint and action paths; geometry adds no worker, polling or runtime I/O. Real-user responsiveness remains a manual acceptance item, not a conclusion from unit-test durations.
+
+## Hot-zone hover hint (0.6.4)
+
+Both frontends default the optional `showHotzoneHint` flag on for missing or malformed values and preserve false across normalization, storage, import/export, remounting, and feature-switch changes. The shared configuration fixture includes false. DOM checks mount the real App with mocked host/IPC; real-browser checks cover light/dark, English, narrow layouts, toggling and reloads. Native helper tests cover persistence, independent wheel detection, per-display actions, hiding/reusing the hot-zone HWND, and preserving the separate edge-preview hint.
+
+Manual Windows acceptance: restart the updated helper, keep a bottom-edge volume-wheel action configured, and disable the hover hint in Corner parameters. Verify no pale background appears while scrolling still changes volume. Reenable to restore the hint, then disable and restart to verify persistence. Edge-hide hints, gesture trails, topmost pins, and the settings preview must remain unchanged. The option introduces no worker, timer, polling or runtime file reads; automated evidence is not a real-user responsiveness measurement. Custom zone lengths are not part of this change.
+
 ## Required Baselines
 
 Historical regression floors remain useful, but they are not current candidate results. Migration work originally required 71 host-integration frontend tests and 129 default helper tests (2 Windows OCR tests explicitly ignored). The archived 0.5.9 candidate reported 107 host-integration tests, 79 standalone frontend tests, 165 helper tests (2 ignored), and 13 Tauri host tests.
@@ -106,7 +124,7 @@ For interactive acceptance, start the desktop normally with an isolated data dir
 
 ## 0.6.4 local candidate acceptance
 
-Runtime-center refinement (2026-10-07) passed the 165 desktop frontend tests, zero-error/warning Svelte checks and production frontend build. Isolated Chromium host/WebSocket mocks cover connected/off states, details disclosure, ping, light/dark themes, English and 640px layout, and the context-sensitive start/stop action. This is UI/state evidence, not actual UAC, installation, or scheduled-administrator startup acceptance. Scheduled startup is not included in this integration.
+Runtime-center layout revision (2026-10-08) passed the 165 desktop frontend tests, zero-error/warning Svelte checks and production frontend build. Isolated Chromium host/WebSocket mocks verify two equal-height grey cards with aligned, short unclipped descriptions across Chinese/English and 800/640px layouts, permission controls only in Settings, disabled unknown-permission controls, visible warning/error states, details disclosure, ping, themes and start/stop. Unit regressions retain permission-cancellation, reconnection, failed/unknown state and pending-operation guards at the new entry. This is UI/state evidence, not actual UAC, installation, or scheduled-administrator startup acceptance. Scheduled startup is not included in this integration.
 
 
 Keep an existing 0.6.3 installation intact. NSIS replacement/uninstall is not an automatic local development action; the user performs the actual candidate install/upgrade, while installer automation belongs in an isolated account/CI.

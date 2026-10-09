@@ -5,7 +5,7 @@ use crate::core::edge_hide::{
     EdgeHideCommand, EdgeHideController, EdgeHideInput, EdgeHideLiveState,
 };
 use crate::core::gesture::{path_length_pixels, recognize};
-use crate::core::hotzone::{detect_hotzone, hotzone_rect};
+use crate::core::hotzone::{configured_hotzone_rect, detect_configured_hotzone};
 use crate::core::trigger::HotzoneTriggerController;
 use crate::core::window_drag::WindowDragController;
 use crate::ipc::errors::{ErrorCode, RuntimeError};
@@ -182,24 +182,20 @@ impl Engine {
                             platform::hide_gesture_overlay();
                         }
 
-                        let hint_rect =
-                            hotzone_hint_for(&config, cursor, monitors, paused || dragging)
-                                .and_then(|id| {
-                                    monitors
-                                        .iter()
-                                        .find(|monitor| monitor.bounds.contains(cursor))
-                                        .map(|monitor| {
-                                            hotzone_rect(id, monitor.bounds, config.edge_size)
-                                        })
-                                });
-                        platform::update_hotzone_hints(hint_rect);
-
+                        // Resolve the display/profile and geometry once for both hints and input.
+                        let hotzone_frame =
+                            hotzone_frame_for(&config, cursor, monitors, paused || dragging);
+                        platform::update_hotzone_hints(if config.show_hotzone_hint {
+                            hotzone_frame.rect
+                        } else {
+                            None
+                        });
                         self.handle_hotzone(
                             now,
                             &config,
                             &dispatcher,
                             cursor,
-                            monitors,
+                            hotzone_frame,
                             input,
                             previous_input,
                             previous_cursor,
@@ -566,7 +562,7 @@ impl Engine {
         config: &AppConfig,
         dispatcher: &ActionDispatcher,
         cursor: platform::Point,
-        monitors: &[platform::Monitor],
+        frame: HotzoneFrame<'_>,
         input: InputState,
         previous_input: InputState,
         previous_cursor: Option<platform::Point>,
@@ -578,17 +574,13 @@ impl Engine {
             return;
         }
 
-        let detected = detect_hotzone(cursor, monitors, config.edge_size);
-        hotzone_triggers.observe(now, detected);
+        hotzone_triggers.observe(now, frame.detected);
 
-        let Some(hotzone_id) = detected else {
+        let Some(hotzone_id) = frame.detected else {
             return;
         };
 
-        let Some(setting) = hotzones_for_cursor(config, cursor, monitors)
-            .iter()
-            .find(|item| item.id == hotzone_id && item.has_action())
-        else {
+        let Some(setting) = frame.setting else {
             hotzone_triggers.suspend(now);
             return;
         };
@@ -1054,21 +1046,58 @@ fn is_fullscreen_window(window: &platform::WindowInfo, monitors: &[platform::Mon
     })
 }
 
+#[derive(Clone, Copy, Default)]
+struct HotzoneFrame<'a> {
+    detected: Option<HotzoneId>,
+    setting: Option<&'a HotzoneSetting>,
+    rect: Option<platform::Rect>,
+}
+
+fn hotzone_frame_for<'a>(
+    config: &'a AppConfig,
+    cursor: platform::Point,
+    monitors: &[platform::Monitor],
+    paused: bool,
+) -> HotzoneFrame<'a> {
+    if paused || !config.hotzones_enabled {
+        return HotzoneFrame::default();
+    }
+    let zones = hotzones_for_cursor(config, cursor, monitors);
+    let detected = detect_configured_hotzone(cursor, monitors, config.edge_size, zones);
+    let setting =
+        detected.and_then(|id| zones.iter().find(|zone| zone.id == id && zone.has_action()));
+    let rect = setting.and_then(|zone| {
+        monitors
+            .iter()
+            .find(|monitor| monitor.bounds.contains(cursor))
+            .map(|monitor| {
+                configured_hotzone_rect(
+                    zone.id,
+                    monitor.bounds,
+                    config.edge_size,
+                    zone.geometry.as_ref(),
+                )
+            })
+    });
+    HotzoneFrame {
+        detected,
+        setting,
+        rect,
+    }
+}
+
+#[cfg(test)]
 fn hotzone_hint_for(
     config: &AppConfig,
     cursor: platform::Point,
     monitors: &[platform::Monitor],
     paused: bool,
 ) -> Option<HotzoneId> {
-    if paused || !config.hotzones_enabled {
+    if !config.show_hotzone_hint {
         return None;
     }
-
-    let detected = detect_hotzone(cursor, monitors, config.edge_size)?;
-    hotzones_for_cursor(config, cursor, monitors)
-        .iter()
-        .find(|item| item.id == detected && item.has_action())
-        .map(|item| item.id)
+    let frame = hotzone_frame_for(config, cursor, monitors, paused);
+    frame.setting.map(|zone| zone.id)
 }
 
 fn native_drag_preview_started(
@@ -1084,6 +1113,9 @@ fn hotzones_for_cursor<'a>(
     cursor: platform::Point,
     monitors: &[platform::Monitor],
 ) -> &'a [HotzoneSetting] {
+    if config.monitor_profiles.is_empty() {
+        return &config.hotzones;
+    }
     let Some(monitor) = monitors
         .iter()
         .find(|monitor| monitor.bounds.contains(cursor))
@@ -1202,6 +1234,7 @@ mod tests {
     use crate::config::{
         ActionKind, HotzoneAction, HotzoneSetting, MonitorProfile, TriggerAction, TriggerKind,
     };
+    use crate::core::hotzone::detect_hotzone;
     use crate::platform::{Monitor, Point, Rect};
 
     fn monitor() -> Monitor {
@@ -1416,6 +1449,7 @@ mod tests {
         HotzoneSetting {
             id,
             enabled,
+            geometry: None,
             actions: vec![TriggerAction {
                 trigger: TriggerKind::Hover,
                 action: HotzoneAction { kind, value: None },
@@ -1454,6 +1488,61 @@ mod tests {
     }
 
     #[test]
+    fn hotzone_hint_can_be_hidden_and_restored_without_changing_actions() {
+        let display = monitor();
+        let cursor = Point { x: 99, y: 1 };
+        let mut config = AppConfig::default();
+        config.monitor_profiles = vec![MonitorProfile {
+            monitor_id: monitor_id(&display),
+            hotzones: vec![hotzone(HotzoneId::TopRight, true, ActionKind::ShowDesktop)],
+        }];
+        assert_eq!(
+            hotzone_hint_for(&config, cursor, &[display], false),
+            Some(HotzoneId::TopRight)
+        );
+        config.show_hotzone_hint = false;
+        assert_eq!(hotzone_hint_for(&config, cursor, &[display], false), None);
+        assert!(hotzones_for_cursor(&config, cursor, &[display])[0].has_action());
+        config.show_hotzone_hint = true;
+        assert_eq!(
+            hotzone_hint_for(&config, cursor, &[display], false),
+            Some(HotzoneId::TopRight)
+        );
+        assert_eq!(hotzone_hint_for(&config, cursor, &[display], true), None);
+    }
+
+    #[test]
+    fn hidden_hotzone_hint_preserves_volume_wheel_detection_and_trigger() {
+        let display = monitor();
+        let cursor = Point { x: 50, y: 99 };
+        let mut config = AppConfig::default();
+        config.show_hotzone_hint = false;
+        let mut setting = hotzone(HotzoneId::Bottom, true, ActionKind::VolumeAdjust);
+        setting.actions[0].trigger = TriggerKind::WheelUp;
+        setting.actions[0].action.value = Some("5".into());
+        config.hotzones = vec![setting];
+        assert_eq!(hotzone_hint_for(&config, cursor, &[display], false), None);
+        let detected = detect_hotzone(cursor, &[display], config.edge_size);
+        assert_eq!(detected, Some(HotzoneId::Bottom));
+        let action = &hotzones_for_cursor(&config, cursor, &[display])[0].actions[0];
+        assert_eq!(action.action.kind, ActionKind::VolumeAdjust);
+        assert_eq!(action.trigger, TriggerKind::WheelUp);
+        let now = Instant::now();
+        let mut triggers = HotzoneTriggerController::new(now);
+        triggers.observe(now, detected);
+        assert_eq!(
+            triggers.accumulate_continuous_motion(
+                now,
+                HotzoneId::Bottom,
+                action.trigger,
+                1.0,
+                Duration::from_millis(10)
+            ),
+            Some(1.0)
+        );
+    }
+
+    #[test]
     fn hint_only_appears_inside_the_action_hotzone() {
         let mut config = AppConfig::default();
         config.edge_size = 8;
@@ -1472,6 +1561,107 @@ mod tests {
         assert_eq!(
             hotzone_hint_for(&config, inside, &[monitor()], false),
             Some(HotzoneId::TopRight)
+        );
+    }
+
+    #[test]
+    fn shared_hotzone_frame_preserves_actions_when_the_hint_is_hidden() {
+        use crate::config::HotzoneGeometry;
+        let mut config = AppConfig::default();
+        let mut zone = hotzone(HotzoneId::Bottom, true, ActionKind::VolumeAdjust);
+        zone.geometry = Some(HotzoneGeometry::Edge {
+            thickness: 16,
+            length_percent: 100,
+        });
+        config.hotzones = vec![zone];
+        config.show_hotzone_hint = false;
+        let frame = hotzone_frame_for(&config, Point { x: 10, y: 90 }, &[monitor()], false);
+        assert_eq!(frame.detected, Some(HotzoneId::Bottom));
+        assert_eq!(
+            frame.setting.unwrap().actions[0].action.kind,
+            ActionKind::VolumeAdjust
+        );
+        assert_eq!(
+            frame.rect,
+            Some(Rect {
+                left: 0,
+                top: 84,
+                right: 100,
+                bottom: 100
+            })
+        );
+        let paused = hotzone_frame_for(&config, Point { x: 10, y: 90 }, &[monitor()], true);
+        assert!(paused.detected.is_none() && paused.setting.is_none() && paused.rect.is_none());
+        config.hotzones[0].actions[0].action.kind = ActionKind::None;
+        let empty = hotzone_frame_for(&config, Point { x: 10, y: 90 }, &[monitor()], false);
+        assert_eq!(empty.detected, Some(HotzoneId::Bottom));
+        assert!(empty.setting.is_none() && empty.rect.is_none());
+    }
+
+    #[test]
+    fn per_monitor_geometry_drives_hint_and_input_from_the_same_region() {
+        use crate::config::HotzoneGeometry;
+        let first = monitor();
+        let second = Monitor {
+            bounds: Rect {
+                left: 100,
+                top: 0,
+                right: 200,
+                bottom: 100,
+            },
+            work_area: Rect {
+                left: 100,
+                top: 0,
+                right: 200,
+                bottom: 100,
+            },
+            device_id: [1; 128],
+            ..first
+        };
+        let mut first_zone = hotzone(HotzoneId::Bottom, true, ActionKind::VolumeAdjust);
+        first_zone.geometry = Some(HotzoneGeometry::Edge {
+            thickness: 16,
+            length_percent: 100,
+        });
+        let mut config = AppConfig::default();
+        config.hotzones = vec![hotzone(HotzoneId::Bottom, true, ActionKind::VolumeAdjust)];
+        config.monitor_profiles = vec![MonitorProfile {
+            monitor_id: monitor_id(&first),
+            hotzones: vec![first_zone],
+        }];
+        let monitors = [first, second];
+        for (cursor, expected) in [
+            (Point { x: 10, y: 90 }, Some(HotzoneId::Bottom)),
+            (Point { x: 110, y: 90 }, None),
+            (Point { x: 150, y: 99 }, Some(HotzoneId::Bottom)),
+        ] {
+            assert_eq!(
+                hotzone_hint_for(&config, cursor, &monitors, false),
+                expected
+            );
+            assert_eq!(
+                detect_configured_hotzone(
+                    cursor,
+                    &monitors,
+                    config.edge_size,
+                    hotzones_for_cursor(&config, cursor, &monitors)
+                ),
+                expected
+            );
+        }
+        config.show_hotzone_hint = false;
+        assert_eq!(
+            hotzone_hint_for(&config, Point { x: 10, y: 90 }, &monitors, false),
+            None
+        );
+        assert_eq!(
+            detect_configured_hotzone(
+                Point { x: 10, y: 90 },
+                &monitors,
+                config.edge_size,
+                hotzones_for_cursor(&config, Point { x: 10, y: 90 }, &monitors)
+            ),
+            Some(HotzoneId::Bottom)
         );
     }
 

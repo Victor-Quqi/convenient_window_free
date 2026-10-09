@@ -1,7 +1,7 @@
 !define CONVENIENT_WINDOW_SHUTDOWN_EVENT "Local\com.ximizhou.convenientwindow.shutdown"
 !define CONVENIENT_WINDOW_EVENT_MODIFY_STATE 0x0002
 
-!macro CW_STOP_RUNNING
+!macro NSIS_HOOK_PREUNINSTALL
   System::Call 'kernel32::OpenEventW(i ${CONVENIENT_WINDOW_EVENT_MODIFY_STATE}, i 0, w "${CONVENIENT_WINDOW_SHUTDOWN_EVENT}") p.r0'
   ${If} $0 P<> 0
     DetailPrint "Stopping Convenient Window and its helper..."
@@ -26,20 +26,6 @@
   ${EndIf}
 !macroend
 
-!macro NSIS_HOOK_PREUNINSTALL
-  ${If} $UpdateMode <> 1
-  ${AndIf} ${FileExists} "$INSTDIR\${MAINBINARYNAME}.exe"
-    ClearErrors
-    ExecWait '"$INSTDIR\${MAINBINARYNAME}.exe" --remove-admin-startup' $R0
-    ${If} ${Errors}
-    ${OrIf} $R0 <> 0
-      MessageBox MB_OK|MB_ICONSTOP "Could not remove administrator startup. Turn it off in Convenient Window and retry." /SD IDOK
-      Abort
-    ${EndIf}
-  ${EndIf}
-  !insertmacro CW_STOP_RUNNING
-!macroend
-
 
 !define CW_LEGACY_NAME "便捷窗口"
 !define CW_LEGACY_KEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${CW_LEGACY_NAME}"
@@ -48,7 +34,7 @@ Var CwLegacyDirectory
 ; Upgrade the existing installation in place. Its path may be user-selected.
 ; Keep the identifier-based application data directory and WebView profile intact.
 !macro NSIS_HOOK_PREINSTALL
-  !insertmacro CW_STOP_RUNNING
+  !insertmacro NSIS_HOOK_PREUNINSTALL
   StrCpy $CwLegacyDirectory ""
   ReadRegStr $R0 HKCU "${CW_LEGACY_KEY}" "Publisher"
   ReadRegStr $R1 HKCU "${CW_LEGACY_KEY}" "MainBinaryName"
@@ -102,6 +88,7 @@ Var CwLegacyDirectory
 !macro CW_REMOVE_STARTUP_ENTRY NAME
     ReadRegStr $R0 HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${NAME}"
     ${If} $R0 == '$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --autostart'
+    ${OrIf} $R0 == '$\"$INSTDIR\${MAINBINARYNAME}.exe$\" --autostart --request-admin'
     ${OrIf} $R0 == '$INSTDIR\${MAINBINARYNAME}.exe --autostart'
       DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Run" "${NAME}"
       DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "${NAME}"
@@ -113,6 +100,7 @@ Var CwLegacyDirectory
     ; A silent upgrade may be uninstalled before the first application launch.
     !insertmacro CW_REMOVE_STARTUP_ENTRY "${CW_LEGACY_NAME}"
     !insertmacro CW_REMOVE_STARTUP_ENTRY "convenient-window"
+    !insertmacro CW_REMOVE_STARTUP_ENTRY "${PRODUCTNAME}"
     DeleteRegValue HKCU "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run" "${PRODUCTNAME}"
   ${EndIf}
 !macroend
