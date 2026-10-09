@@ -662,10 +662,20 @@ mod tests {
             helper.start(path, path).unwrap_err(),
             "adminLaunchUnconfirmed"
         );
+        #[cfg(windows)]
+        let switch_error = if crate::windows_process::current_elevated().unwrap() {
+            "adminDesktopElevated"
+        } else {
+            "adminLaunchUnconfirmed"
+        };
+        #[cfg(not(windows))]
+        let switch_error = "adminLaunchUnconfirmed";
         assert_eq!(
             helper.switch_mode(path, path, true).unwrap_err(),
-            "adminLaunchUnconfirmed"
+            switch_error
         );
+        assert!(helper.launch_uncertain);
+        assert!(helper.child.is_none());
         assert!(helper.elevated().is_err());
     }
 
