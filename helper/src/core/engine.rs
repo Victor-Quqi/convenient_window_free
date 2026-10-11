@@ -1366,6 +1366,138 @@ mod tests {
 
     #[cfg(target_os = "windows")]
     #[test]
+    fn isolated_edge_hide_recollapses_after_speed_change_and_desktop_hover() {
+        use windows::core::w;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, WS_EX_NOACTIVATE, WS_POPUP, WS_VISIBLE,
+        };
+        struct TestWindow(HWND);
+        impl Drop for TestWindow {
+            fn drop(&mut self) {
+                let _ = unsafe { DestroyWindow(self.0) };
+            }
+        }
+        let fixture = TestWindow(unsafe {
+            CreateWindowExW(
+                WS_EX_NOACTIVATE,
+                w!("STATIC"),
+                w!("WindowRecollapseTest"),
+                WS_POPUP | WS_VISIBLE,
+                0,
+                120,
+                600,
+                400,
+                HWND::default(),
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        let handle = platform::WindowHandle(fixture.0 .0 as isize);
+        let monitor = Monitor {
+            bounds: Rect {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1080,
+            },
+            work_area: Rect {
+                left: 0,
+                top: 0,
+                right: 1920,
+                bottom: 1040,
+            },
+            primary: true,
+            device_id: [0; 128],
+        };
+        let mut desktop = named_window("explorer.exe", "Program Manager", "Progman");
+        desktop.handle = platform::WindowHandle(99);
+        desktop.rect = monitor.bounds;
+        let mut config = AppConfig::default();
+        config.edge_hide.enabled = true;
+        config.edge_hide.collapse_delay_ms = 0;
+        config.edge_hide.restore_delay_ms = 100;
+        let (_, config_rx) = watch::channel(config.clone());
+        let (event_tx, mut events) = broadcast::channel(32);
+        let (_, shutdown_rx) = broadcast::channel(4);
+        let engine = Engine::new(config_rx, event_tx, shutdown_rx);
+        let mut controller = EdgeHideController::new();
+        let mut now = Instant::now();
+        let outside = Point { x: 1200, y: 900 };
+        let mut tick =
+            |config: &AppConfig, now, cursor, foreground: Option<&platform::WindowInfo>| {
+                engine.handle_edge_hide(
+                    config,
+                    &mut controller,
+                    now,
+                    cursor,
+                    std::slice::from_ref(&monitor),
+                    foreground,
+                    EdgeHideInput::default(),
+                    &mut HashMap::new(),
+                );
+            };
+        let target = platform::window_info_for_handle(handle).unwrap().unwrap();
+        tick(&config, now, outside, Some(&target));
+        now += Duration::from_millis(1);
+        tick(&config, now, outside, Some(&target));
+        assert_eq!(
+            events.try_recv().unwrap().data["source"],
+            "edge-hide.collapse"
+        );
+        for duration in [80, 160, 260, 400, 800] {
+            config.edge_hide.animation_duration_ms = duration;
+            let hidden = platform::window_info_for_handle(handle)
+                .unwrap()
+                .unwrap()
+                .rect;
+            assert_eq!(hidden.right, config.edge_hide.strip_size);
+            now += Duration::from_secs(1);
+            tick(&config, now, outside, Some(&desktop));
+            tick(
+                &config,
+                now + Duration::from_millis(1),
+                Point { x: 2, y: 200 },
+                Some(&desktop),
+            );
+            assert_eq!(
+                events.try_recv().unwrap().data["source"],
+                "edge-hide.restore"
+            );
+            assert_eq!(
+                platform::window_info_for_handle(handle)
+                    .unwrap()
+                    .unwrap()
+                    .rect,
+                target.rect
+            );
+            let finished = now + Duration::from_millis(duration + 1);
+            tick(&config, finished, outside, Some(&desktop));
+            tick(
+                &config,
+                finished + Duration::from_millis(100),
+                outside,
+                Some(&desktop),
+            );
+            assert_eq!(
+                events.try_recv().unwrap().data["source"],
+                "edge-hide.collapse"
+            );
+            assert_eq!(
+                platform::window_info_for_handle(handle)
+                    .unwrap()
+                    .unwrap()
+                    .rect,
+                hidden
+            );
+            now = finished + Duration::from_millis(101);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
     fn isolated_drag_pipeline_moves_resizes_and_cancels_a_real_window() {
         use windows::core::w;
         use windows::Win32::Foundation::HWND;

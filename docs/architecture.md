@@ -20,6 +20,8 @@ Native movement requires actual position changes with unchanged dimensions; `GUI
 
 The input hook only merges coordinates and notifies on start/release. The engine consumes them at the configured rate limit, subtracts processing time from its sleep budget, and skips unchanged rectangles while preserving active input arbitration. Final release/cancel updates are never deduplicated. SetWindowPos remains outside the hook and retains the targetZ-order. Invalid-window pruning stays on the existing one-second schedule. No additional drag worker or keyboard hook is introduced. Actual cadence remains bounded by Windows and application processing.
 
+Desktop shell classes `Progman` and `WorkerW` are normal leave targets despite covering a monitor; they do not pause auto-hide as temporary fullscreen overlays do. A foreground activation restore records a pointer already inside its restore region before animation begins, so leaving during a slow animation still arms recollapse. Activation from outside the region continues to wait for pointer entry, and temporary capture/fullscreen protection and the foreground-open option remain intact. Settings place common switches/bindings before numeric tuning, with the same three-segment presets above custom inputs.
+
 ## Product Boundary
 
 ```text

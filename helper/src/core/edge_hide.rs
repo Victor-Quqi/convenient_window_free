@@ -1121,7 +1121,9 @@ impl EdgeHideController {
                     restore_rect,
                     hidden_rect,
                     original_topmost,
-                    false,
+                    restore_rect
+                        .inflate(config.trigger_distance.max(1))
+                        .contains(cursor),
                 )
             } else {
                 let (handle, edge, restore_rect, hidden_rect, original_topmost) = target?;
@@ -1188,7 +1190,13 @@ impl EdgeHideController {
         // the capture surface. Keep the edge-hidden window expanded until a normal
         // foreground window is observed again.
         let foreground_is_overlay = foreground.is_some_and(|window| {
-            window.transient || is_fullscreen_surface(window.rect, monitors, window.maximized)
+            // Clicking the desktop is a normal leave action. Its shell surface
+            // covers the monitor, but is not a temporary capture/game overlay.
+            let desktop = window.class_name.eq_ignore_ascii_case("Progman")
+                || window.class_name.eq_ignore_ascii_case("WorkerW");
+            !desktop
+                && (window.transient
+                    || is_fullscreen_surface(window.rect, monitors, window.maximized))
         });
 
         let target = self.states.iter_mut().find_map(|(handle, state)| {
@@ -2069,6 +2077,114 @@ mod tests {
             },
         );
         controller
+    }
+
+    #[test]
+    fn desktop_click_then_hover_restore_still_recollapses_at_every_animation_speed() {
+        let monitors = [monitor()];
+        for ms in [80, 160, 260, 400, 800] {
+            for class_name in ["Progman", "WorkerW"] {
+                let config = EdgeHideConfig {
+                    enabled: true,
+                    animation_duration_ms: ms,
+                    restore_delay_ms: 100,
+                    strip_size: 8,
+                    ..Default::default()
+                };
+                let mut controller = collapsed_controller_on_left_monitor();
+                let mut desktop = window_with_handle(WindowHandle(99), monitors[0].bounds);
+                desktop.process_name = "explorer.exe".into();
+                desktop.class_name = class_name.into();
+                desktop.title = "Program Manager".into();
+                let start = Instant::now();
+                let outside = Point { x: 1200, y: 900 };
+                assert!(controller
+                    .tick(start, &config, outside, &monitors, Some(&desktop))
+                    .is_none());
+                let restore = controller
+                    .tick(
+                        start + Duration::from_millis(1),
+                        &config,
+                        Point { x: 2, y: 200 },
+                        &monitors,
+                        Some(&desktop),
+                    )
+                    .unwrap();
+                let EdgeHideCommand::Restore { rect, .. } = restore else {
+                    panic!("expected restore");
+                };
+                let finished = start + Duration::from_millis(ms + 1);
+                controller.command_succeeded(restore, EdgeHideLiveState::Visible(rect), finished);
+                assert!(controller
+                    .tick(finished, &config, outside, &monitors, Some(&desktop))
+                    .is_none());
+                assert!(
+                    matches!(
+                        controller.tick(
+                            finished + Duration::from_millis(100),
+                            &config,
+                            outside,
+                            &monitors,
+                            Some(&desktop)
+                        ),
+                        Some(EdgeHideCommand::Collapse { .. })
+                    ),
+                    "desktop foreground must not suppress auto-hide at {ms}ms ({class_name})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn activation_restore_with_pointer_already_inside_arms_auto_hide_before_slow_animation() {
+        let monitors = [monitor()];
+        let config = EdgeHideConfig {
+            enabled: true,
+            animation_duration_ms: 800,
+            restore_delay_ms: 100,
+            strip_size: 8,
+            ..Default::default()
+        };
+        let mut controller = collapsed_controller_on_left_monitor();
+        let mut target = window_with_handle(
+            WindowHandle(42),
+            Rect {
+                left: -592,
+                top: 120,
+                right: 8,
+                bottom: 700,
+            },
+        );
+        let start = Instant::now();
+        let restore = controller
+            .tick(
+                start,
+                &config,
+                Point { x: 2, y: 200 },
+                &monitors,
+                Some(&target),
+            )
+            .unwrap();
+        let EdgeHideCommand::Restore { rect, .. } = restore else {
+            panic!("expected restore");
+        };
+        controller.command_succeeded(
+            restore,
+            EdgeHideLiveState::Visible(rect),
+            start + Duration::from_millis(800),
+        );
+        target.rect = rect;
+        let outside = Point { x: 1200, y: 900 };
+        controller.tick(
+            start + Duration::from_millis(801),
+            &config,
+            outside,
+            &monitors,
+            Some(&target),
+        );
+        assert!(matches!(controller.tick(start + Duration::from_millis(901), &config,
+            outside, &monitors, Some(&target)), Some(EdgeHideCommand::Collapse { .. })),
+            "entering the strip before an activation restore must arm auto-hide even if the pointer leaves during the animation");
     }
 
     #[test]
