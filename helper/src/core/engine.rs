@@ -27,10 +27,11 @@ pub struct Engine {
     runtime_error_times: Mutex<HashMap<String, Instant>>,
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct WindowDragActivity {
     active: bool,
-    target: Option<(platform::WindowHandle, platform::Rect)>,
+    cancelled: bool,
+    released_window: Option<platform::WindowInfo>,
 }
 
 impl Engine {
@@ -70,6 +71,7 @@ impl Engine {
         let mut hotzone_triggers = HotzoneTriggerController::new(Instant::now());
         let mut edge_hide = EdgeHideController::new();
         let mut window_drag = WindowDragController::default();
+        let mut native_drag = NativeDragPreviewTracker::default();
         let mut last_status_at = Instant::now() - Duration::from_secs(5);
         let mut monitor_refresh = RefreshSchedule::new(Duration::from_secs(1));
         let mut window_prune = RefreshSchedule::new(Duration::from_secs(1));
@@ -108,7 +110,6 @@ impl Engine {
             let input = platform::input_state();
 
             if config.enabled {
-                edge_hide.prune_invalid_windows(platform::window_exists);
                 let cursor = platform::cursor_position();
                 let monitors = refresh_monitors(now, &mut monitor_refresh, &mut cached_monitors);
                 let foreground = platform::foreground_window();
@@ -208,6 +209,49 @@ impl Engine {
                             config.mouse_gestures.enabled && !gestures_paused && !dragging,
                         );
 
+                        let native_move_active = foreground.as_ref().is_some_and(|window| {
+                            platform::native_window_move_size_active(window.handle)
+                        });
+                        let preview_cancelled = input.escape_down || drag_activity.cancelled;
+                        let native_preview_active = if preview_cancelled {
+                            native_drag.cancel();
+                            false
+                        } else if dragging {
+                            native_drag.reset();
+                            false
+                        } else {
+                            native_drag.observe(input.left_down, foreground.as_ref())
+                        };
+                        let moving_window = window_drag.moving_window();
+                        let preview_window = moving_window.as_ref().or_else(|| {
+                            native_preview_active
+                                .then_some(foreground.as_ref())
+                                .flatten()
+                        });
+                        let edge_hide_preview = if preview_cancelled {
+                            edge_hide.cancel_drag_preview();
+                            None
+                        } else {
+                            // Validate the final pointer sample before freezing release intent.
+                            // A release may contain a new position that the periodic loop missed.
+                            if let Some(window) = drag_activity.released_window.as_ref() {
+                                edge_hide.update_drag_preview(
+                                    now,
+                                    &config.edge_hide,
+                                    monitors,
+                                    Some(window),
+                                    true,
+                                );
+                            }
+                            edge_hide.update_drag_preview(
+                                now,
+                                &config.edge_hide,
+                                monitors,
+                                preview_window,
+                                moving_window.is_some() || native_preview_active,
+                            )
+                        };
+                        platform::update_edge_hide_preview(edge_hide_preview);
                         let mut edge_hide_live_states = HashMap::new();
                         if !dragging {
                             self.handle_edge_hide(
@@ -218,7 +262,7 @@ impl Engine {
                                 monitors,
                                 foreground.as_ref(),
                                 EdgeHideInput {
-                                    left_button_down: input.left_down,
+                                    left_button_down: input.left_down || native_move_active,
                                     right_button_pressed: input.right_clicked_since(previous_input),
                                     context_menu_dismissed: input
                                         .context_menu_dismissed_since(previous_input),
@@ -227,38 +271,6 @@ impl Engine {
                                 &mut edge_hide_live_states,
                             );
                         }
-                        let edge_hide_preview = if let Some((handle, rect)) = drag_activity.target {
-                            match platform::window_info_for_handle(handle) {
-                                Ok(Some(window)) => edge_hide.collapse_preview(
-                                    &config.edge_hide,
-                                    monitors,
-                                    &window,
-                                    rect,
-                                ),
-                                Ok(None) => None,
-                                Err(error) => {
-                                    self.report_runtime_error(
-                                        ErrorCode::WindowOperationFailed,
-                                        error,
-                                    );
-                                    None
-                                }
-                            }
-                        } else if !dragging
-                            && native_drag_preview_started(input.left_down, cursor, previous_cursor)
-                        {
-                            foreground.as_ref().and_then(|window| {
-                                edge_hide.collapse_preview(
-                                    &config.edge_hide,
-                                    monitors,
-                                    window,
-                                    window.rect,
-                                )
-                            })
-                        } else {
-                            None
-                        };
-                        platform::update_edge_hide_preview(edge_hide_preview);
                         let strip_hints = if config.edge_hide.show_restore_hint {
                             edge_hide.collapsed_strips_with_live_state(monitors, |handle, _| {
                                 cached_edge_hide_live_state(&mut edge_hide_live_states, handle)
@@ -274,6 +286,8 @@ impl Engine {
                             false,
                             config.mouse_gestures.trigger_button,
                         );
+                        native_drag.reset();
+                        edge_hide.cancel_drag_preview();
                         platform::update_edge_hide_preview(None);
                         platform::update_strip_hints(&[]);
                         platform::cancel_window_drag_capture();
@@ -309,6 +323,8 @@ impl Engine {
                     0,
                     &config.window_drag.paused_apps,
                 );
+                native_drag.reset();
+                edge_hide.cancel_drag_preview();
                 platform::update_edge_hide_preview(None);
                 platform::update_strip_hints(&[]);
                 if let Some((handle, rect)) = window_drag.cancel() {
@@ -350,10 +366,16 @@ impl Engine {
                 }
             }
             previous_input = input;
-            let interval = engine_poll_interval(config.poll_interval_ms, window_drag.is_active());
+            let interval = if window_drag.is_active() {
+                Duration::from_nanos(1_000_000_000 / config.window_drag.update_hz.clamp(30, 240))
+            } else {
+                engine_poll_interval(config.poll_interval_ms, false)
+            };
+            let wait = poll_wait(interval, now.elapsed());
 
             tokio::select! {
-                _ = tokio::time::sleep(interval) => {}
+                _ = tokio::time::sleep(wait) => {}
+                _ = platform::window_drag_started_notification().notified() => {}
                 changed = config_rx.changed() => {
                     if changed.is_ok() {
                         config = config_rx.borrow_and_update().clone();
@@ -427,13 +449,18 @@ impl Engine {
         cancel: bool,
     ) -> WindowDragActivity {
         if !config.window_drag.enabled {
+            let cancelled = controller.is_active();
             platform::cancel_window_drag_capture();
             if let Some((handle, rect)) = controller.cancel() {
                 if let Err(error) = platform::set_window_rect(handle, rect) {
                     self.report_runtime_error(ErrorCode::WindowOperationFailed, error);
                 }
             }
-            return WindowDragActivity::default();
+            return WindowDragActivity {
+                active: false,
+                cancelled,
+                ..Default::default()
+            };
         }
         let Some(capture) = capture else {
             return WindowDragActivity::default();
@@ -463,13 +490,21 @@ impl Engine {
             platform::cancel_window_drag_capture();
         }
         let Some(update) = controller.update(capture, cancel) else {
-            return WindowDragActivity::default();
+            return WindowDragActivity {
+                active: controller.is_active(),
+                cancelled: false,
+                ..Default::default()
+            };
         };
         if let Err(error) = platform::set_window_rect(update.handle, update.rect) {
             platform::cancel_window_drag_capture();
             let _ = controller.cancel();
             self.report_runtime_error(ErrorCode::WindowOperationFailed, error);
-            return WindowDragActivity::default();
+            return WindowDragActivity {
+                active: false,
+                cancelled: true,
+                ..Default::default()
+            };
         }
         if update.finished {
             let _ = self.event_tx.send(HelperMessage::new(
@@ -487,7 +522,17 @@ impl Engine {
         }
         WindowDragActivity {
             active: true,
-            target: (!update.finished).then_some((update.handle, update.rect)),
+            cancelled: update.cancelled,
+            released_window: if update.finished
+                && !update.cancelled
+                && capture.mode == platform::WindowDragMode::Move
+            {
+                platform::window_info_for_handle(update.handle)
+                    .ok()
+                    .flatten()
+            } else {
+                None
+            },
         }
     }
 
@@ -700,22 +745,51 @@ impl Engine {
         input: EdgeHideInput,
         live_states: &mut HashMap<platform::WindowHandle, EdgeHideLiveState>,
     ) {
-        if let Some(command) = edge_hide.tick_with_live_state(
+        let drop_window = edge_hide
+            .released_top_handle()
+            .and_then(|handle| platform::window_info_for_handle(handle).ok().flatten());
+        let top_drop = edge_hide.take_top_drop(
             now,
             &config.edge_hide,
-            cursor,
             monitors,
-            foreground,
-            input,
-            |handle, _| cached_edge_hide_live_state(live_states, handle),
-        ) {
-            match execute_edge_hide_command(command, config.edge_hide.animation_enabled) {
+            drop_window.as_ref(),
+            drop_window
+                .as_ref()
+                .is_some_and(|window| platform::native_window_move_size_active(window.handle)),
+        );
+        if let Some(command) = top_drop {
+            if let Err(error) = platform::prepare_top_edge_drop(edge_hide_command_handle(command)) {
+                edge_hide.command_failed(command, now);
+                self.report_runtime_error(ErrorCode::WindowOperationFailed, error);
+                return;
+            }
+        }
+        if let Some(command) = top_drop.or_else(|| {
+            edge_hide.tick_with_live_state(
+                now,
+                &config.edge_hide,
+                cursor,
+                monitors,
+                foreground,
+                input,
+                |handle, _| cached_edge_hide_live_state(live_states, handle),
+            )
+        }) {
+            match execute_edge_hide_command(
+                command,
+                config.edge_hide.animation_enabled,
+                Duration::from_millis(config.edge_hide.animation_duration_ms),
+            ) {
                 Ok((kind, rect)) => {
                     let handle = edge_hide_command_handle(command);
                     let live_state = edge_hide_live_state(handle);
                     live_states.insert(handle, live_state);
                     if let Some(cleanup) = edge_hide.command_succeeded(command, live_state, now) {
-                        match execute_edge_hide_command(cleanup, false) {
+                        match execute_edge_hide_command(
+                            cleanup,
+                            false,
+                            EDGE_HIDE_ANIMATION_DURATION,
+                        ) {
                             Ok(_) => {
                                 let cleanup_live_state = edge_hide_live_state(handle);
                                 edge_hide.command_succeeded(cleanup, cleanup_live_state, now);
@@ -805,6 +879,7 @@ const EDGE_HIDE_ANIMATION_DURATION: Duration = Duration::from_millis(160);
 fn execute_edge_hide_command(
     command: EdgeHideCommand,
     animated: bool,
+    duration: Duration,
 ) -> Result<(&'static str, platform::Rect)> {
     let (handle, rect, topmost, kind) = match command {
         EdgeHideCommand::Collapse { handle, rect } => (handle, rect, true, "edge-hide.collapse"),
@@ -823,7 +898,7 @@ fn execute_edge_hide_command(
     } else {
         rect
     };
-    animate_edge_hide_window(handle, from, rect, topmost, animated)?;
+    animate_edge_hide_window(handle, from, rect, topmost, animated, duration)?;
     Ok((kind, rect))
 }
 
@@ -833,11 +908,13 @@ fn animate_edge_hide_window(
     to: platform::Rect,
     topmost: bool,
     animated: bool,
+    duration: Duration,
 ) -> Result<()> {
     run_edge_hide_transition(
         from,
         to,
         animated,
+        duration,
         |rect, final_frame| {
             if final_frame {
                 platform::set_window_rect_topmost(handle, rect, topmost)
@@ -853,14 +930,15 @@ fn run_edge_hide_transition(
     from: platform::Rect,
     to: platform::Rect,
     animated: bool,
+    duration: Duration,
     mut move_window: impl FnMut(platform::Rect, bool) -> Result<()>,
     mut sleep: impl FnMut(Duration),
 ) -> Result<()> {
     if !animated || from == to {
         return move_window(to, true);
     }
-    let frames = (EDGE_HIDE_ANIMATION_DURATION.as_millis() / 16).clamp(4, 20) as i32;
-    let frame_duration = EDGE_HIDE_ANIMATION_DURATION / frames as u32;
+    let frames = (duration.as_millis() / 16).clamp(4, 50) as i32;
+    let frame_duration = duration / frames as u32;
     for frame in 1..=frames {
         let progress = frame as f64 / frames as f64;
         let eased = 1.0 - (1.0 - progress).powi(3);
@@ -1100,12 +1178,61 @@ fn hotzone_hint_for(
     frame.setting.map(|zone| zone.id)
 }
 
-fn native_drag_preview_started(
-    left_button_down: bool,
-    cursor: platform::Point,
-    previous_cursor: Option<platform::Point>,
-) -> bool {
-    left_button_down && previous_cursor.is_some_and(|previous| previous != cursor)
+fn poll_wait(interval: Duration, processing: Duration) -> Duration {
+    interval.saturating_sub(processing)
+}
+
+#[derive(Default)]
+struct NativeDragPreviewTracker {
+    previous: Option<(platform::WindowHandle, platform::Rect, bool)>,
+    active: bool,
+    resizing: bool,
+    cancelled: bool,
+}
+
+impl NativeDragPreviewTracker {
+    fn reset(&mut self) {
+        self.previous = None;
+        self.active = false;
+        self.resizing = false;
+        self.cancelled = false;
+    }
+    fn cancel(&mut self) {
+        self.reset();
+        self.cancelled = true;
+    }
+    fn observe(&mut self, held: bool, window: Option<&platform::WindowInfo>) -> bool {
+        let Some(window) = window.filter(|_| held) else {
+            self.reset();
+            return false;
+        };
+        if self.cancelled {
+            return false;
+        }
+        if let Some((handle, rect, was_arranged)) = self.previous {
+            if handle != window.handle {
+                self.active = false;
+                self.resizing = false;
+            } else if rect.width() != window.rect.width() || rect.height() != window.rect.height() {
+                // Native dragging first restores a maximized/snapped window.
+                // Treat that layout transition as a fresh movement baseline.
+                if was_arranged && !window.maximized && !window.arranged {
+                    self.active = false;
+                } else {
+                    self.resizing = true;
+                }
+            } else if rect != window.rect {
+                self.active = true;
+            }
+        }
+        self.active &= !self.resizing;
+        self.previous = Some((
+            window.handle,
+            window.rect,
+            window.maximized || window.arranged,
+        ));
+        self.active
+    }
 }
 
 fn hotzones_for_cursor<'a>(
@@ -1237,6 +1364,125 @@ mod tests {
     use crate::core::hotzone::detect_hotzone;
     use crate::platform::{Monitor, Point, Rect};
 
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn isolated_drag_pipeline_moves_resizes_and_cancels_a_real_window() {
+        use windows::core::w;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP,
+        };
+        struct TestWindow(HWND);
+        impl Drop for TestWindow {
+            fn drop(&mut self) {
+                let _ = unsafe { DestroyWindow(self.0) };
+            }
+        }
+        let fixture = TestWindow(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("WindowMotionTest"),
+                WS_POPUP,
+                100,
+                100,
+                600,
+                400,
+                HWND::default(),
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        let read_rect = || {
+            let mut rect = windows::Win32::Foundation::RECT::default();
+            unsafe {
+                windows::Win32::UI::WindowsAndMessaging::GetWindowRect(fixture.0, &mut rect)
+                    .unwrap();
+            }
+            Rect {
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom,
+            }
+        };
+        let mut window = named_window("test.exe", "WindowMotionTest", "STATIC");
+        window.handle = platform::WindowHandle(fixture.0 .0 as isize);
+        window.rect = read_rect();
+        let original = window.rect;
+        let mut config = AppConfig::default();
+        config.window_drag.enabled = true;
+        let (_, config_rx) = watch::channel(config.clone());
+        let (event_tx, mut events) = broadcast::channel(8);
+        let (_, shutdown_rx) = broadcast::channel(4);
+        let engine = Engine::new(config_rx, event_tx, shutdown_rx);
+        let mut controller = WindowDragController::default();
+        let mut capture = platform::WindowDragCapture {
+            sequence: 1,
+            mode: platform::WindowDragMode::Move,
+            start: Point { x: 200, y: 200 },
+            current: Point { x: 200, y: 200 },
+            finished: false,
+        };
+        controller.start(capture, &window);
+        for step in 1..=20 {
+            capture.current = Point {
+                x: 200 + step * 4,
+                y: 200 + step * 2,
+            };
+            assert!(
+                engine
+                    .handle_window_drag(&config, &mut controller, Some(capture), false)
+                    .active
+            );
+            let actual = read_rect();
+            assert_eq!(actual.left, original.left + step * 4);
+            assert_eq!(actual.top, original.top + step * 2);
+        }
+        assert!(
+            engine
+                .handle_window_drag(&config, &mut controller, Some(capture), false)
+                .active,
+            "a stationary drag must still suppress gestures and premature collapse"
+        );
+        let result = engine.handle_window_drag(&config, &mut controller, Some(capture), true);
+        assert!(result.cancelled);
+        assert!(!controller.is_active());
+        assert_eq!(read_rect(), original);
+        assert_eq!(
+            events.try_recv().unwrap().data["source"],
+            "window-drag.cancel"
+        );
+
+        capture.sequence = 2;
+        capture.mode = platform::WindowDragMode::Resize;
+        capture.start = Point {
+            x: original.right - 10,
+            y: original.bottom - 10,
+        };
+        capture.current = Point {
+            x: capture.start.x + 60,
+            y: capture.start.y + 40,
+        };
+        controller.start(capture, &window);
+        assert!(
+            controller.moving_window().is_none(),
+            "resize must not offer a collapse preview"
+        );
+        capture.finished = true;
+        let result = engine.handle_window_drag(&config, &mut controller, Some(capture), false);
+        assert!(!result.cancelled);
+        let resized = read_rect();
+        assert_eq!(resized.width(), original.width() + 60);
+        assert_eq!(resized.height(), original.height() + 40);
+        assert_eq!(
+            events.try_recv().unwrap().data["source"],
+            "window-drag.commit"
+        );
+    }
+
     fn monitor() -> Monitor {
         Monitor {
             bounds: Rect {
@@ -1277,6 +1523,7 @@ mod tests {
                 from,
                 to,
                 animated,
+                EDGE_HIDE_ANIMATION_DURATION,
                 |rect, final_frame| {
                     moves.push((rect, final_frame));
                     Ok(())
@@ -1296,6 +1543,44 @@ mod tests {
                 assert_eq!(moves, vec![(to, true)]);
                 assert!(sleeps.is_empty());
             }
+        }
+    }
+
+    #[test]
+    fn configured_animation_duration_controls_frame_wait_budget() {
+        let from = Rect {
+            left: 100,
+            top: 100,
+            right: 700,
+            bottom: 500,
+        };
+        let to = Rect {
+            left: -584,
+            top: 100,
+            right: 16,
+            bottom: 500,
+        };
+        for ms in [80, 160, 260, 400, 800] {
+            let mut waits = Vec::new();
+            let mut final_rect = None;
+            run_edge_hide_transition(
+                from,
+                to,
+                true,
+                Duration::from_millis(ms),
+                |rect, final_frame| {
+                    if final_frame {
+                        final_rect = Some(rect);
+                    }
+                    Ok(())
+                },
+                |wait| waits.push(wait),
+            )
+            .unwrap();
+            assert_eq!(final_rect, Some(to));
+            let total: Duration = waits.into_iter().sum();
+            assert!(total <= Duration::from_millis(ms));
+            assert!(total + Duration::from_millis(20) >= Duration::from_millis(ms));
         }
     }
 
@@ -1330,27 +1615,92 @@ mod tests {
     }
 
     #[test]
-    fn native_drag_preview_requires_pointer_motion() {
-        assert!(!native_drag_preview_started(
-            true,
-            Point { x: 10, y: 10 },
-            Some(Point { x: 10, y: 10 }),
-        ));
-        assert!(!native_drag_preview_started(
-            true,
-            Point { x: 10, y: 10 },
-            None,
-        ));
-        assert!(native_drag_preview_started(
-            true,
-            Point { x: 11, y: 10 },
-            Some(Point { x: 10, y: 10 }),
-        ));
-        assert!(!native_drag_preview_started(
-            false,
-            Point { x: 11, y: 10 },
-            Some(Point { x: 10, y: 10 }),
-        ));
+    fn native_drag_preview_stays_visible_while_a_drag_pauses() {
+        let mut tracker = NativeDragPreviewTracker::default();
+        let mut window = named_window("editor.exe", "Editor", "Editor");
+        assert!(!tracker.observe(true, Some(&window)));
+        window.rect.left += 10;
+        window.rect.right += 10;
+        for _ in 0..100 {
+            assert!(tracker.observe(true, Some(&window)));
+        }
+        assert!(!tracker.observe(false, Some(&window)));
+    }
+
+    #[test]
+    fn native_drag_preview_requires_window_motion() {
+        let mut tracker = NativeDragPreviewTracker::default();
+        let mut window = named_window("editor.exe", "Editor", "Editor");
+        for _ in 0..100 {
+            assert!(!tracker.observe(true, Some(&window)));
+        }
+        window.rect.left += 10;
+        window.rect.right += 10;
+        assert!(tracker.observe(true, Some(&window)));
+        assert!(!tracker.observe(true, None));
+    }
+
+    #[test]
+    fn native_resize_never_earns_a_collapse_preview() {
+        let mut tracker = NativeDragPreviewTracker::default();
+        let mut window = named_window("editor.exe", "Editor", "Editor");
+        tracker.observe(true, Some(&window));
+        window.rect.right += 20;
+        assert!(!tracker.observe(true, Some(&window)));
+        for _ in 0..100 {
+            assert!(!tracker.observe(true, Some(&window)));
+        }
+        tracker.observe(false, Some(&window));
+        assert!(!tracker.observe(true, Some(&window)));
+        window.rect.left += 10;
+        window.rect.right += 10;
+        assert!(tracker.observe(true, Some(&window)));
+    }
+
+    #[test]
+    fn dragging_a_restored_maximized_window_is_not_mistaken_for_resize() {
+        let mut tracker = NativeDragPreviewTracker::default();
+        let mut window = named_window("editor.exe", "Editor", "Editor");
+        window.maximized = true;
+        assert!(!tracker.observe(true, Some(&window)));
+        window.maximized = false;
+        window.rect.right -= 100;
+        window.rect.bottom -= 100;
+        assert!(!tracker.observe(true, Some(&window)));
+        window.rect.left += 10;
+        window.rect.right += 10;
+        assert!(tracker.observe(true, Some(&window)));
+    }
+
+    #[test]
+    fn cancelled_native_drag_cannot_rearm_until_the_button_is_released() {
+        let mut tracker = NativeDragPreviewTracker::default();
+        let mut window = named_window("editor.exe", "Editor", "Editor");
+        assert!(!tracker.observe(true, Some(&window)));
+        window.rect.left += 10;
+        window.rect.right += 10;
+        assert!(tracker.observe(true, Some(&window)));
+        tracker.cancel();
+        for _ in 0..100 {
+            assert!(!tracker.observe(true, Some(&window)));
+        }
+        assert!(!tracker.observe(false, Some(&window)));
+        assert!(!tracker.observe(true, Some(&window)));
+        window.rect.left += 10;
+        window.rect.right += 10;
+        assert!(tracker.observe(true, Some(&window)));
+    }
+
+    #[test]
+    fn drag_poll_budget_subtracts_processing_instead_of_adding_latency() {
+        assert_eq!(
+            poll_wait(Duration::from_millis(8), Duration::from_millis(3)),
+            Duration::from_millis(5)
+        );
+        assert_eq!(
+            poll_wait(Duration::from_millis(8), Duration::from_millis(20)),
+            Duration::ZERO
+        );
     }
 
     #[test]

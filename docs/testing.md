@@ -1,5 +1,15 @@
 # Testing
 
+## Window Motion Development Acceptance (0.6.5)
+
+The frontend passes 289 tests, zero-error/warning Svelte checks and a production build. The paired integration frontend passes 361 tests. Shared-module/dictionary parity and the development source version audit pass; the helper passes 257 tests with 3 existing ignored tests (two installed-OCR-language requirements and one real audio endpoint test). Public-source audit passes.
+
+Regressions exercise a paused native move, resize/cancel suppression, dragging restored maximized windows, side hysteresis and release parity, growing top hold feedback, early release, movement-reset and native-loop ordering, unchanged-position deduplication, processing-time budgeting and animation durations. An isolated Win 32 fixture exercises 20 real SetWindowPos moves, stationary active arbitration, cancellation back to the original rectangle, resize commit and action events. It installs no global input hook and does not control user windows.
+
+Production-browser checks use isolated host/WebSocket mocks to verify animation presets, off-state controls, drag-rate persistence, Chinese/English and narrow layouts. They are not native Snap, real host lifecycle or subjective responsiveness evidence. Desktop source/configuration is synchronized; no new 0.6.5 installer or portable package has been built in this task.
+
+Manual acceptance: use the matching 0.6.5 helper after normally stopping the currently owned older instance. Verify 160 ms default and custom timing; hold/move along the side thresholds without flashing; release early near the top to retain Snap; hold until the blue line fills to tuck; move away or pressEscape to cancel; drag a maximized window down before testing; compare 60/120/240 Hz with your actual applications. Repeat with signed multi-monitor coordinates, mixedDPI, partial seams and monitor-profile-disabled edges. Full input/IPC smoke is still pending while another installed helper owns the global single-instance lock; do not mark it passed using mocks or the older helper.
+
 ## Startup and scroll-layout follow-up (0.6.4, 2026-10-10)
 
 The desktop frontend passes 25 test files / 272 tests, zero-error/warning Svelte checks and a production frontend build. A compiled geometry DOM regression keeps editor nodes mounted across helper readiness changes while still cancelling drafts at display/area boundaries. Production UI smoke covers 800×544, 359×544, 640×600 and 800×600 layouts with ten power/hint cycles per size, failed-save and duplicate-start protection, unchanged-display snapshot reuse and reachable bottom content. The browser uses mocked host/IPC and does not replace native Windows, DPI or multi-monitor acceptance.

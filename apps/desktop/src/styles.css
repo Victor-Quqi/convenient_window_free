@@ -971,3 +971,8 @@ body, .topbar, .drawer, .drawer-head, .mode-nav, .power-facts, .power-orb,
 .hotzone-connection-note { min-height: 32px; margin: 8px 0; visibility: hidden; }
 .hotzone-connection-note.visible { visibility: visible; }
 .hotzone-connection-note.error { color: var(--danger); }
+
+.edge-motion-settings, .top-edge-intent, .drag-update-settings { margin-block: 14px 18px; }
+.motion-presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.motion-presets button.active { color: var(--accent, #3b82f6); border-color: currentColor; }
+.motion-detail { font-size: 12px; line-height: 1.6; color: var(--muted, #788390); margin: 8px 0 14px; }

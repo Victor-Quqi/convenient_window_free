@@ -674,3 +674,36 @@ describe("schema 9 hotzone geometry", () => {
     expect(future).toEqual(before);
   });
 });
+
+
+describe("0.6.5 window motion settings", () => {
+  it("preserves the old animation speed and supplies safe optional defaults", () => {
+    const settings = normalizeSettings({ schemaVersion: 9 });
+    expect(settings.edgeHide.animationDurationMs).toBe(160);
+    expect(settings.edgeHide.topTriggerDistance).toBe(48);
+    expect(settings.edgeHide.topHoverDelayMs).toBe(600);
+    expect(settings.windowDrag.updateHz).toBe(120);
+  });
+  it("normalizes custom values and preserves them through import/export", () => {
+    const settings = normalizeSettings({ ...defaultSettings,
+      edgeHide: { ...defaultSettings.edgeHide, animationDurationMs: 400, topTriggerDistance: 80, topHoverDelayMs: 1000 },
+      windowDrag: { ...defaultSettings.windowDrag, updateHz: 60 } });
+    const imported = normalizeSettings(JSON.parse(JSON.stringify(settings)));
+    expect(imported.edgeHide.animationDurationMs).toBe(400);
+    expect(imported.edgeHide.topTriggerDistance).toBe(80);
+    expect(imported.edgeHide.topHoverDelayMs).toBe(1000);
+    expect(imported.edgeHide.triggerDistance).toBe(defaultSettings.edgeHide.triggerDistance);
+    expect(imported.windowDrag.updateHz).toBe(60);
+  });
+  it("bounds extreme values and rejects nonnumeric inputs", () => {
+    const settings = normalizeSettings({ edgeHide: { ...defaultSettings.edgeHide, animationDurationMs: 9999, topTriggerDistance: 0, topHoverDelayMs: 1 }, windowDrag: { ...defaultSettings.windowDrag, updateHz: 9999 } });
+    expect(settings.edgeHide.animationDurationMs).toBe(800);
+    expect(settings.edgeHide.topTriggerDistance).toBe(8);
+    expect(settings.edgeHide.topHoverDelayMs).toBe(200);
+    expect(settings.windowDrag.updateHz).toBe(240);
+    const malformed = JSON.parse('{"edgeHide":{"animationDurationMs":"slow"},"windowDrag":{"updateHz":"fast"}}');
+    const invalid = normalizeSettings(malformed);
+    expect(invalid.edgeHide.animationDurationMs).toBe(160);
+    expect(invalid.windowDrag.updateHz).toBe(120);
+  });
+});

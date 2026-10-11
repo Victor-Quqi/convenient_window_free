@@ -10,6 +10,16 @@ Each global or per-display hot-zone record may include a `geometry` override: `{
 
 Protocol v7 is retained, but the frontend requires an explicit schema-v9 ready handshake before flushing configuration. Old/missing/future schema reports cannot silently apply only legacy geometry. The engine resolves one shared frame per tick for both hint and input paths and bypasses display-ID allocation when no profiles exist. New shape calculations introduce no worker, polling or file I/O. Configuration loading migrates earlier supported schemas to v9 without changing actions or timings; downgrade to old hosts is not supported.
 
+## Window Motion (0.6.5)
+
+Schema 9/protocol 7 retains optional incremental settings: `edgeHide.animationDurationMs` (160 default,80–800 ms), `topTriggerDistance` (48 default,8–128 physical px), `topHoverDelayMs` (600 default,200–2000 ms), and `windowDrag.updateHz` (120 default,30–240 Hz). Missing fields use defaults; both hosts and the helper clamp the same ranges and preserve explicit choices through storage and import/export. These interactions require a matching 0.6.5 helper. Turning animation off retains its configured duration and performs only the final move.
+
+Side and bottom edges retain independently enabled distance/ratio triggers. Once a move qualifies,3 px/1 percentage-point hysteresis preserves its line and release eligibility until it moves outside the exit band. Top intent instead uses its own distance and hold time. Its 4 px blue line grows from the center to the final exposed-strip width; movement beyond 8 px restarts the hold, small jitter does not. Only an earned intent may collapse its own window within 500 ms after release, after the native move/size loop ends. If that release just maximized/arranged the window, restore it before moving to the intended hidden rectangle. Existing maximized/arranged windows remain excluded. Early release, Escape, disable, target failure, exclusions and internal display seams cannot submit.
+
+Native movement requires actual position changes with unchanged dimensions; `GUI_INMOVESIZE` also includes resizing and is only a release-order guard. Intent tracks the complete move session, including stationary samples. Arbitrary-position moves use their actual captured target and validate the final release position; resizing and cancellation cannot leave earned collapse intent. `showPreview=false` hides the blue line but retains hold-to-tuck behavior and restore regions.
+
+The input hook only merges coordinates and notifies on start/release. The engine consumes them at the configured rate limit, subtracts processing time from its sleep budget, and skips unchanged rectangles while preserving active input arbitration. Final release/cancel updates are never deduplicated. SetWindowPos remains outside the hook and retains the targetZ-order. Invalid-window pruning stays on the existing one-second schedule. No additional drag worker or keyboard hook is introduced. Actual cadence remains bounded by Windows and application processing.
+
 ## Product Boundary
 
 ```text

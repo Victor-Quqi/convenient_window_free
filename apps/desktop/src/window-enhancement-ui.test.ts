@@ -109,7 +109,7 @@ describe("window enhancement UI wiring", () => {
 
   it("animates one window through drag, collapse, hover and restore", () => {
     expect(source).toContain('ui("edgeHideTutorialBody")');
-    expect(i18n.zh.edgeHideTutorialBody).toBe("拖到屏幕外边缘并松开，窗口自动收起；移到露出区域即可恢复。");
+    expect(i18n.zh.edgeHideTutorialBody).toContain("顶部须停留至蓝线铺满");
     expect(source.match(/class="tutorial-edge-window"/g)).toHaveLength(1);
     expect(source).toContain('class="tutorial-cursor"');
     expect(styles).toContain("animation: tutorial-edge-window-cycle");

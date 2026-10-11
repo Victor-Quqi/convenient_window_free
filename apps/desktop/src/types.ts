@@ -153,6 +153,9 @@ export interface MouseGestureSettings {
 export interface EdgeHideSettings {
   enabled: boolean;
   animationEnabled: boolean;
+  animationDurationMs: number;
+  topTriggerDistance: number;
+  topHoverDelayMs: number;
   showPreview: boolean;
   showRestoreHint: boolean;
   keepExpandedWhenForeground: boolean;
@@ -175,6 +178,7 @@ export interface EdgeHideMonitorProfile {
 
 export interface WindowDragSettings {
   enabled: boolean;
+  updateHz: number;
   moveModifiers: ModifierKey[];
   resizeModifiers: ModifierKey[];
   moveButton: MouseButton;

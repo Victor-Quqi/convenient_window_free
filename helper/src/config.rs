@@ -149,6 +149,9 @@ impl AppConfig {
         }
 
         self.edge_hide.strip_size = self.edge_hide.strip_size.clamp(4, 64);
+        self.edge_hide.animation_duration_ms = self.edge_hide.animation_duration_ms.clamp(80, 800);
+        self.edge_hide.top_trigger_distance = self.edge_hide.top_trigger_distance.clamp(8, 128);
+        self.edge_hide.top_hover_delay_ms = self.edge_hide.top_hover_delay_ms.clamp(200, 2000);
         self.edge_hide.trigger_distance = self.edge_hide.trigger_distance.clamp(4, 96);
         self.edge_hide.trigger_ratio = self.edge_hide.trigger_ratio.clamp(1, 100);
         self.edge_hide.collapse_delay_ms = self.edge_hide.collapse_delay_ms.clamp(0, 5000);
@@ -164,6 +167,7 @@ impl AppConfig {
         self.window_drag.resize_modifiers =
             normalized_drag_modifiers(self.window_drag.resize_modifiers);
         self.window_drag.paused_apps = normalized_string_list(self.window_drag.paused_apps);
+        self.window_drag.update_hz = self.window_drag.update_hz.clamp(30, 240);
         if source_schema_version < 5 {
             migrate_circle_topmost_action(&mut self.mouse_gestures.gestures);
         }
@@ -626,6 +630,8 @@ impl Default for ActionKind {
 pub struct WindowDragConfig {
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default = "default_drag_update_hz")]
+    pub update_hz: u64,
     #[serde(default = "default_drag_modifiers")]
     pub move_modifiers: Vec<ModifierKey>,
     #[serde(default = "default_drag_modifiers")]
@@ -644,6 +650,7 @@ impl Default for WindowDragConfig {
     fn default() -> Self {
         Self {
             enabled: false,
+            update_hz: default_drag_update_hz(),
             move_modifiers: default_drag_modifiers(),
             resize_modifiers: default_drag_modifiers(),
             move_button: MouseButton::Left,
@@ -712,6 +719,12 @@ impl Default for OcrConfig {
 pub struct EdgeHideConfig {
     #[serde(default = "default_true")]
     pub animation_enabled: bool,
+    #[serde(default = "default_animation_duration_ms")]
+    pub animation_duration_ms: u64,
+    #[serde(default = "default_top_trigger_distance")]
+    pub top_trigger_distance: i32,
+    #[serde(default = "default_top_hover_delay_ms")]
+    pub top_hover_delay_ms: u64,
     #[serde(default)]
     pub enabled: bool,
     #[serde(default = "default_true")]
@@ -746,6 +759,9 @@ impl Default for EdgeHideConfig {
     fn default() -> Self {
         Self {
             animation_enabled: true,
+            animation_duration_ms: default_animation_duration_ms(),
+            top_trigger_distance: default_top_trigger_distance(),
+            top_hover_delay_ms: default_top_hover_delay_ms(),
             enabled: false,
             show_preview: true,
             show_restore_hint: true,
@@ -811,6 +827,22 @@ fn default_edge_size() -> i32 {
 
 fn default_hover_delay_ms() -> u64 {
     350
+}
+
+fn default_animation_duration_ms() -> u64 {
+    160
+}
+
+fn default_top_trigger_distance() -> i32 {
+    48
+}
+
+fn default_top_hover_delay_ms() -> u64 {
+    600
+}
+
+fn default_drag_update_hz() -> u64 {
+    120
 }
 
 fn default_poll_interval_ms() -> u64 {
@@ -1131,6 +1163,33 @@ fn normalized_optional_string(value: Option<String>) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn motion_options_keep_the_original_animation_default_and_clamp_custom_values() {
+        let defaults = AppConfig::default();
+        assert_eq!(defaults.edge_hide.animation_duration_ms, 160);
+        assert_eq!(defaults.edge_hide.top_trigger_distance, 48);
+        assert_eq!(defaults.edge_hide.top_hover_delay_ms, 600);
+        assert_eq!(defaults.window_drag.update_hz, 120);
+        let old: AppConfig =
+            serde_json::from_str(r#"{"schemaVersion":9,"edgeHide":{"animationEnabled":false}}"#)
+                .unwrap();
+        assert!(!old.edge_hide.animation_enabled);
+        assert_eq!(old.edge_hide.animation_duration_ms, 160);
+        let mut config = defaults;
+        config.edge_hide.animation_duration_ms = 9999;
+        config.edge_hide.top_trigger_distance = 0;
+        config.edge_hide.top_hover_delay_ms = 1;
+        config.window_drag.update_hz = 9999;
+        let normalized = config.normalized();
+        assert_eq!(normalized.edge_hide.animation_duration_ms, 800);
+        assert_eq!(normalized.edge_hide.top_trigger_distance, 8);
+        assert_eq!(normalized.edge_hide.top_hover_delay_ms, 200);
+        assert_eq!(normalized.window_drag.update_hz, 240);
+        let roundtrip: AppConfig =
+            serde_json::from_value(serde_json::to_value(normalized).unwrap()).unwrap();
+        assert_eq!(roundtrip.window_drag.update_hz, 240);
+    }
 
     #[test]
     fn edge_hide_animation_defaults_on_and_preserves_disabled_on_roundtrip() {

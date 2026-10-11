@@ -73,6 +73,9 @@ export const defaultSettings: AppSettings = {
   edgeHide: {
     enabled: false,
     animationEnabled: true,
+    animationDurationMs: 160,
+    topTriggerDistance: 48,
+    topHoverDelayMs: 600,
     showPreview: true,
     showRestoreHint: true,
     keepExpandedWhenForeground: false,
@@ -89,6 +92,7 @@ export const defaultSettings: AppSettings = {
   },
   windowDrag: {
     enabled: false,
+    updateHz: 120,
     moveModifiers: ["alt"],
     resizeModifiers: ["alt"],
     moveButton: "left",
@@ -171,6 +175,9 @@ export function normalizeSettings(stored: Partial<AppSettings> | null | undefine
     edgeHide: {
       enabled: booleanValue(edgeHide?.enabled, defaultSettings.edgeHide.enabled),
       animationEnabled: booleanValue(edgeHide?.animationEnabled, defaultSettings.edgeHide.animationEnabled),
+      animationDurationMs: integerInRange(edgeHide?.animationDurationMs, 160, 80, 800),
+      topTriggerDistance: integerInRange(edgeHide?.topTriggerDistance, 48, 8, 128),
+      topHoverDelayMs: integerInRange(edgeHide?.topHoverDelayMs, 600, 200, 2000),
       showPreview: booleanValue(edgeHide?.showPreview, defaultSettings.edgeHide.showPreview),
       showRestoreHint: booleanValue(
         edgeHide?.showRestoreHint,
@@ -416,6 +423,7 @@ function normalizeWindowDrag(value: unknown): AppSettings["windowDrag"] {
   const resizeButton = mouseButtons.includes(raw.resizeButton as MouseButton) ? raw.resizeButton as MouseButton : defaultSettings.windowDrag.resizeButton;
   return {
     enabled: booleanValue(raw.enabled, defaultSettings.windowDrag.enabled),
+    updateHz: integerInRange(raw.updateHz, 120, 30, 240),
     moveModifiers: modifierList(raw.moveModifiers, defaultSettings.windowDrag.moveModifiers),
     resizeModifiers: modifierList(raw.resizeModifiers, defaultSettings.windowDrag.resizeModifiers),
     moveButton,

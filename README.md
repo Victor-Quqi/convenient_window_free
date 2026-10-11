@@ -25,7 +25,7 @@ Release assets are currently unsigned. Windows may show an unknown-publisher or 
 
 ## 0.6.4 Stable Release
 
-The development source integrates PRs [#21](https://github.com/ximizhou/convenient_window_free/pull/21), [#22](https://github.com/ximizhou/convenient_window_free/pull/22), [#23](https://github.com/ximizhou/convenient_window_free/pull/23), [#24](https://github.com/ximizhou/convenient_window_free/pull/24), [#25](https://github.com/ximizhou/convenient_window_free/pull/25), and [#26](https://github.com/ximizhou/convenient_window_free/pull/26) on the complete 0.6.3 baseline. The [0.6.4 release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.4) was promoted to stable on October 11, 2026 without rebuilding or replacing its assets; 0.6.3 stable assets remain immutable. The next development target is 0.6.5; its feature scope has not been scheduled, and this documentation cleanup does not change product versions or release artifacts.
+The development source integrates PRs [#21](https://github.com/ximizhou/convenient_window_free/pull/21), [#22](https://github.com/ximizhou/convenient_window_free/pull/22), [#23](https://github.com/ximizhou/convenient_window_free/pull/23), [#24](https://github.com/ximizhou/convenient_window_free/pull/24), [#25](https://github.com/ximizhou/convenient_window_free/pull/25), and [#26](https://github.com/ximizhou/convenient_window_free/pull/26) on the complete 0.6.3 baseline. The [0.6.4 release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.4) was promoted to stable on October 11, 2026 without rebuilding or replacing its assets; 0.6.3 stable assets remain immutable. Development source is now 0.6.5; its first task improves window motion. Stable downloads remain 0.6.4.
 
 - Pins follow both their window position and stacking order without covering unrelated higher windows.
 - Pinned screenshots start at original pixel size. `ocr.pinOffset` defaults to true (16 px down/right); turning it off covers the captured area. Large or edge-adjacent images may extend beyond the screen instead of being automatically resized.
@@ -37,6 +37,12 @@ The development source integrates PRs [#21](https://github.com/ximizhou/convenie
 Only a desktop process launched with both `--autostart --request-admin` attempts helper elevation on its first helper start. Foreground launches and automatic helper recovery do not request UAC. Cancelling authorization falls back to an ordinary helper; an unconfirmed launch does not fall back or repeat UAC. The desktop interface and configured commands stay at ordinary permissions, and owned helpers use the desktop exit-cleanup boundary. No scheduled task is created. See the [first-stage login-request checklist](docs/testing.md#login-administrator-request-first-stage-manual-acceptance); real-user UAC, actual login, upgrade/uninstall and Windows 10 acceptance are not claimed.
 
 Administrator mode does not support protected processes. Host adapters require their own runtime acceptance. Do not run competing hosts on the fixed helper port `56873`. See [candidate notes](docs/release-notes/0.6.4.md), [manual tests](docs/testing.md#064-local-candidate-acceptance), and [local packaging](docs/release.md#develop-acceptance). Automated results and artifact identities must be recorded for the actual candidate; UAC, multi-monitor/DPI, and taskbar recovery still require real-machine checks.
+
+## 0.6.5 Window Motion (Development)
+
+Development settings add animation duration (default 160 ms; presets 160/260/400 and custom 80–800), an independent top-edge distance (48 px) and hold duration (600 ms), and a drag update-rate limit (default 120 Hz; presets 60/120/240, custom 30–240). Existing switches and side/bottom triggers retain their settings.
+
+Qualified side-edge blue lines stay visible during a paused drag. Near the top, the line grows from the center; release after it fills to tuck the window away. Early release leaves native Snap behavior. Drag processing merges unchanged positions and counts processing time toward the update budget. See [implementation](docs/architecture.md#window-motion-065) and [development acceptance](docs/testing.md#window-motion-development-acceptance-065). These changes are not yet a stable download or desktop installer.
 
 ## Features
 

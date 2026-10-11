@@ -1,6 +1,6 @@
 # Release Process
 
-Version 0.6.4 is the stable Windows x64 baseline as of October 11, 2026; it was promoted without rebuilding or replacing assets. The next development target is 0.6.5, with feature scope still unscheduled. Documentation-only preparation does not change product versions, move release tags, or regenerate the accepted artifacts.
+Version 0.6.4 is the stable Windows x64 baseline as of October 11, 2026; it was promoted without rebuilding or replacing assets. Development source and the local desktop helper policy are now 0.6.5 for the first window-motion task. Stable downloads, tags and accepted 0.6.4 artifacts keep their existing identity; no 0.6.5 installer or online assets are asserted.
 
 The standalone desktop has two user acceptance points:
 
@@ -20,7 +20,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/audit-desktop-artifa
 
 `-ArtifactsDir` is restricted to this repository's `artifacts/` tree. The expected installer is `artifacts/0.6.4/convenient-window-0.6.4-windows-x64-setup.exe`; its manifest, checksums and portable output belong in the same selected directory. Runtime and install gates must explicitly select that output; default npm scripts still target root artifacts. See [candidate acceptance](testing.md#064-local-candidate-acceptance). An expected path or an older package's result does not prove a current build.
 
-Development source and the desktop local helper policy use 0.6.4. An integration may retain its immutable, previously published 0.6.3 helper download allow-list while exercising a newly built local helper; that does not create 0.6.4 download assets. `scripts/version-audit.ps1 -DevelopmentOnly -HelperAssetsPath <published-helper-assets.json>` excludes only that explicitly supplied published manifest from source-version equality and labels it as such. This is a development source check, not release freezing or a hash/asset acceptance check. Without `-DevelopmentOnly`, the default strict version comparison is unchanged. Never pass the development switch to the final release-freeze gate or fabricate new URLs/hashes before publication.
+Development source and the desktop local helper policy use 0.6.5. An integration retains its immutable published 0.6.4 download allow-list while exercising the newly built local helper; that does not create 0.6.5 download assets. `scripts/version-audit.ps1 -DevelopmentOnly -HelperAssetsPath <published-helper-assets.json>` excludes only that explicitly supplied published manifest from source-version equality and labels it as such. This is a development source check, not release freezing or a hash/asset acceptance check. Without `-DevelopmentOnly`, the default strict version comparison is unchanged. Never pass the development switch to the final release-freeze gate or fabricate new URLs/hashes before publication.
 
 An existing 0.6.3 installation must remain intact during automatic local preparation: do not run NSIS replacement/uninstall against it. The user performs the first-stage installation/upgrade; automatic installer gates run only in isolated accounts/CI without existing product registrations or processes.
 
