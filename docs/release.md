@@ -1,5 +1,7 @@
 # Release Process
 
+Version 0.6.4 is the stable Windows x64 baseline as of October 11, 2026; it was promoted without rebuilding or replacing assets. The next development target is 0.6.5, with feature scope still unscheduled. Documentation-only preparation does not change product versions, move release tags, or regenerate the accepted artifacts.
+
 The standalone desktop has two user acceptance points:
 
 1. During daily `develop` work, acceptance normally stays in the host integration for faster iteration. Only when the user explicitly requests desktop synchronization, port the applicable shared behavior, preserve desktop-specific lifecycle and UI differences, build the current NSIS package, and give the user its absolute local path. Do not publish this build.

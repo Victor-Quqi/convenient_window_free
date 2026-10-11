@@ -90,7 +90,7 @@ npm run desktop:runtime-conflict-smoke
 npm run desktop:runtime-force-kill-smoke
 ```
 
-The normal gate verifies helper readiness, schema v8 persistence, graceful stop, and zero sidecar residue. The conflict gate creates its own lock-holding helper, requires the desktop log marker `HELPER_INSTANCE_CONFLICT`, and then stops the holder through the authenticated protocol. The force-kill gate waits for the real packaged helper, force-terminates the owning desktop process, and requires the Job Object to remove the assigned sidecar and close port `56873`. All gates require a fresh explicit temporary data root, place WebView data under that root, reject writes to the real application-data directory, and remove their temporary data unless `-KeepData` is requested for diagnosis.
+The normal gate verifies helper readiness, schema v9 persistence, graceful stop, and zero sidecar residue. The conflict gate creates its own lock-holding helper, requires the desktop log marker `HELPER_INSTANCE_CONFLICT`, and then stops the holder through the authenticated protocol. The force-kill gate waits for the real packaged helper, force-terminates the owning desktop process, and requires the Job Object to remove the assigned sidecar and close port `56873`. All gates require a fresh explicit temporary data root, place WebView data under that root, reject writes to the real application-data directory, and remove their temporary data unless `-KeepData` is requested for diagnosis.
 
 ## Release Script API Parameters
 

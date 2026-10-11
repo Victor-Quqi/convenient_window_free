@@ -2,7 +2,7 @@
 
 简体中文 | [English](README.md)
 
-便捷窗口是一款跨平台桌面增强工具，提供触发角、窗口控制、全局鼠标手势和截图贴图。当前 Windows x64 稳定基线为 0.6.3。Windows 保留完整能力，macOS 与 Linux X11 先提供 P0 原生边界，Wayland 只做能力探测和明确降级。
+便捷窗口是一款跨平台桌面增强工具，提供触发角、窗口控制、全局鼠标手势和截图贴图。当前 Windows x64 稳定基线为 0.6.4。Windows 保留完整能力，macOS 与 Linux X11 先提供 P0 原生边界，Wayland 只做能力探测和明确降级。
 
 **把屏幕边缘和鼠标手势变成更快的窗口操作。**
 
@@ -23,9 +23,9 @@
 
 当前发布文件尚未进行代码签名，Windows 可能显示“未知发布者”或 Microsoft Defender SmartScreen 提示。每个 Release 都提供校验和与产物清单，可用于核对下载文件。
 
-## 0.6.4 Pre-release 测试候选
+## 0.6.4 稳定版
 
-开发源码在完整 0.6.3 基线上整合 PR [#21](https://github.com/ximizhou/convenient_window_free/pull/21)、[#22](https://github.com/ximizhou/convenient_window_free/pull/22)、[#23](https://github.com/ximizhou/convenient_window_free/pull/23)、[#24](https://github.com/ximizhou/convenient_window_free/pull/24) 、[#25](https://github.com/ximizhou/convenient_window_free/pull/25) 与 [#26](https://github.com/ximizhou/convenient_window_free/pull/26)。[0.6.4 Pre-release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.4) 用于公开下载安装转测，尚未转正式版；0.6.3 stable 资产保持不可变。
+开发源码在完整 0.6.3 基线上整合 PR [#21](https://github.com/ximizhou/convenient_window_free/pull/21)、[#22](https://github.com/ximizhou/convenient_window_free/pull/22)、[#23](https://github.com/ximizhou/convenient_window_free/pull/23)、[#24](https://github.com/ximizhou/convenient_window_free/pull/24) 、[#25](https://github.com/ximizhou/convenient_window_free/pull/25) 与 [#26](https://github.com/ximizhou/convenient_window_free/pull/26)。[0.6.4 正式版](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.4) 已于 2026-10-11 原地转为 stable，未重建或替换资产；0.6.3 stable 资产保持不可变。下一开发目标为 0.6.5，具体功能尚未排期；本次文档整理不改产品版本或发布产物。
 
 - 图钉同时跟随窗口位置与层级，不被自己的静止窗口盖住，也不盖过其他更上层窗口。
 - 贴图保持原像素尺寸；`ocr.pinOffset` 默认 true，向右下偏移 16 px，关闭后原地覆盖。大图或靠边贴图可能超出屏幕，不再自动缩放。
