@@ -44,6 +44,8 @@ Development settings add animation duration (default 160 ms; presets 160/260/400
 
 Qualified side-edge blue lines stay visible during a paused drag. Near the top, the line grows from the center; release after it fills to tuck the window away. Early release leaves native Snap behavior. Drag processing merges unchanged positions and counts processing time toward the update budget. See [implementation](docs/architecture.md#window-motion-065) and [development acceptance](docs/testing.md#window-motion-development-acceptance-065). These changes are not yet a stable download or desktop installer.
 
+Development also fixes native shortcut capture isolation, stale shortcut displays after region switches, and lost targets for corner-click maximize/minimize. Independent regions may reuse an output combination. Capture cancels on outside interaction, focus loss or teardown; older helpers retain browser fallback. Native isolation requires the new 0.6.5 helper and still needs actual host acceptance.
+
 ## Features
 
 Development source adds an **Appearance** (slim wand-and-sparkle) entry and moves global settings to a circular top-right gear. Taskbar material is an off-by-default Windows 11 x64 technical prototype with transparent, acrylic and tinted modes plus opacity and border controls. Activation is direct; the Explorer risk note remains inside the panel. The illustrated preview is not proof of actual rendering; initial transparency has received positive local acceptance feedback, while material compatibility, icon clarity, and cross-environment recovery still require per-environment acceptance. The prototype was included in 0.6.3; it remains off by default and does not imply universal compatibility.

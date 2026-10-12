@@ -424,6 +424,7 @@
             if (!displays.some((display) => display.id === selectedDisplayId)) {
               selectedDisplayId = displays.find((display) => display.primary)?.id ?? displays[0].id;
             }
+            syncHotzoneEditor();
           }
         }
         if (data.foreground) foregroundApp = data.foreground;
@@ -657,6 +658,7 @@
     hotzoneModifierError = "";
     actionEditorRevision += 1;
     settings = { ...settings };
+    syncHotzoneEditor();
     persist("variantAdded");
   }
 
@@ -669,6 +671,7 @@
     selectedHotzoneModifiers = [...modifiers];
     cancelHotzoneVariant();
     actionEditorRevision += 1;
+    syncHotzoneEditor();
   }
 
   function removeHotzoneVariant(modifiers: ModifierKey[]): void {
@@ -677,7 +680,18 @@
     currentDisplayHotzones = [...ensureProfile()];
     selectedHotzoneModifiers = [];
     actionEditorRevision += 1;
+    syncHotzoneEditor();
     persist("variantDeleted");
+  }
+
+  function syncHotzoneEditor(): void {
+    actionEditorOverrideKey = "";
+    actionEditorOverride = null;
+    const zones = settings.monitorProfiles.find(profile => profile.monitorId === selectedDisplayId)?.hotzones ?? settings.hotzones;
+    const slot = zones.find(zone => zone.id === selectedZone)?.actions.find(slot => slot.trigger === activeTrigger);
+    const action: HotzoneAction = slot ? actionForModifiers(slot, selectedHotzoneModifiers) : { kind: "none" };
+    shortcutDraft = action.kind === "shortcut" ? (action.value ?? "") : "";
+    shortcutError = "";
   }
 
   function selectZone(zone: HotzoneId): void {
@@ -686,6 +700,7 @@
     cancelHotzoneVariant();
     mode = "hotzones";
     if (!["top", "right", "bottom", "left"].includes(zone) && activeTrigger.startsWith("slide")) activeTrigger = "hover";
+    syncHotzoneEditor();
   }
 
   function toggleMode(nextMode: Mode): void {
@@ -708,6 +723,7 @@
     selectedDisplayId = id;
     selectedHotzoneModifiers = [];
     cancelHotzoneVariant();
+    syncHotzoneEditor();
   }
 
   function setActionPreset(index: number): void {
@@ -733,8 +749,9 @@
 
   function setActionShortcut(value: string): void {
     const { action: slotAction } = ensureHotzoneActionTarget();
-    const shown = currentAction();
-    const targets = shown === slotAction ? [shown] : [shown, slotAction];
+    const targets = [slotAction];
+    actionEditorOverrideKey = `${selectedDisplayId}:${selectedZone}:${activeTrigger}:${modifierId(selectedHotzoneModifiers)}`;
+    actionEditorOverride = slotAction;
     if (!value) {
       for (const item of targets) { item.kind = "none"; delete item.value; }
       shortcutDraft = "";
@@ -747,16 +764,7 @@
       persist();
       return;
     }
-    if (settings.hotzones.some((zone) => zone.actions.some((slot) =>
-      [slot.action, ...(slot.modifierActions ?? []).map((entry) => entry.action)]
-        .some((action) => action !== shown && action.kind === "shortcut" && action.value === value)
-    )) || settings.monitorProfiles.some((profile) => profile.hotzones.some((zone) => zone.actions.some((slot) =>
-      [slot.action, ...(slot.modifierActions ?? []).map((entry) => entry.action)]
-        .some((action) => action !== shown && action.kind === "shortcut" && action.value === value)
-    )))) {
-      shortcutError = format(ui("statusShortcutTaken"), { value });
-      return;
-    }
+    // Output actions can be reused across independent regions.
     shortcutError = "";
     for (const item of targets) { item.kind = "shortcut"; item.value = value; }
     // currentAction() 返回的对象不是响应式的，改它的属性界面读不到；
@@ -1238,6 +1246,7 @@
     settings = normalizeSettings(defaultSettings);
     selectedHotzoneModifiers = [];
     cancelHotzoneVariant();
+    syncHotzoneEditor();
     selectGesture(settings.mouseGestures.gestures[0]?.id ?? "");
     const result = await settingsApply.applyNow(settings);
     if (!handleSettingsCommit(result)) return;
@@ -1257,6 +1266,7 @@
       settings = normalizeSettings(imported);
       selectedHotzoneModifiers = [];
       cancelHotzoneVariant();
+      syncHotzoneEditor();
       selectGesture(settings.mouseGestures.gestures[0]?.id ?? "");
       if (!(await savePreparedSettings(settings))) return;
       helper.sendConfig(settings);
@@ -1355,13 +1365,13 @@
                 <div class="monitor-hotzone-settings" inert={!displayReady}>
                 <div class="trigger-tabs">
                   {#each triggerGroups as group}
-                    <button class:active={group.items.includes(activeTrigger)} disabled={group.items.includes("slide-forward") && !["top", "right", "bottom", "left"].includes(selectedZone)} on:click={() => { activeTrigger = group.items[0]; selectedHotzoneModifiers = []; cancelHotzoneVariant(); }} type="button">{triggerGroupLabel(group)}</button>
+                    <button class:active={group.items.includes(activeTrigger)} disabled={group.items.includes("slide-forward") && !["top", "right", "bottom", "left"].includes(selectedZone)} on:click={() => { activeTrigger = group.items[0]; selectedHotzoneModifiers = []; cancelHotzoneVariant(); syncHotzoneEditor(); }} type="button">{triggerGroupLabel(group)}</button>
                   {/each}
                 </div>
                 {#if activeTrigger.startsWith("wheel") || activeTrigger.startsWith("slide")}
                   <div class="direction-tabs">
                     {#each triggerGroups.find((group) => group.items.includes(activeTrigger))?.items ?? [] as trigger}
-                      <button class:active={activeTrigger === trigger} on:click={() => { activeTrigger = trigger; selectedHotzoneModifiers = []; cancelHotzoneVariant(); }} type="button">{triggerLabel(trigger)}</button>
+                      <button class:active={activeTrigger === trigger} on:click={() => { activeTrigger = trigger; selectedHotzoneModifiers = []; cancelHotzoneVariant(); syncHotzoneEditor(); }} type="button">{triggerLabel(trigger)}</button>
                     {/each}
                   </div>
                 {/if}
@@ -1386,7 +1396,7 @@
                   <label><span>{ui("action")}</span><ActionPicker options={actionOptions()} value={presetIndex(currentAction())} onSelect={setActionPreset} /></label>
                   {#if currentAction().kind === "toggle-window-topmost"}{@render topmostPinOption()}{/if}
                   {#if currentAction().kind === "open-command" || (currentAction().kind === "shortcut" && !actionPresets.some((item) => item.kind === "shortcut" && item.value !== undefined && item.value === currentAction().value))}
-                    <label><span>{currentAction().kind === "shortcut" ? ui("shortcut") : ui("command")}</span>{#if currentAction().kind === "shortcut"}<ShortcutRecorder english={english} label={ui("recordShortcut")} value={shortcutDraft} onChange={setActionShortcut} />{#if shortcutError}<p class="modifier-error" role="alert">{shortcutError}</p>{/if}{:else}<input value={currentAction().value ?? ""} on:input={setActionValue} placeholder={ui("enterValue")} />{/if}</label>
+                    <label><span>{currentAction().kind === "shortcut" ? ui("shortcut") : ui("command")}</span>{#if currentAction().kind === "shortcut"}<ShortcutRecorder {helper} english={english} label={ui("recordShortcut")} value={shortcutDraft} onChange={setActionShortcut} />{#if shortcutError}<p class="modifier-error" role="alert">{shortcutError}</p>{/if}{:else}<input value={currentAction().value ?? ""} on:input={setActionValue} placeholder={ui("enterValue")} />{/if}</label>
                   {/if}
                   <div class="action-state"><i class:enabled={currentAction().kind !== "none"}></i><div><strong>{triggerLabel(activeTrigger)}</strong><p>{currentAction().kind === "none" ? ui("noAction") : actionLabel(currentAction())}</p></div></div>
                 </div>
@@ -1533,7 +1543,7 @@
                         <label><span>{ui("recognizeThen")}</span><ActionPicker options={actionOptions()} value={presetIndex(gestureActionDraft)} onSelect={setGestureActionPreset} /></label>
                         {#if gestureActionDraft.kind === "toggle-window-topmost"}{@render topmostPinOption()}{/if}
                         {#if gestureActionDraft.kind === "open-command" || (gestureActionDraft.kind === "shortcut" && !actionPresets.some((item) => item.kind === "shortcut" && item.value !== undefined && item.value === gestureActionDraft.value))}
-                          <label><span>{gestureActionDraft.kind === "shortcut" ? ui("shortcut") : ui("command")}</span>{#if gestureActionDraft.kind === "shortcut"}<ShortcutRecorder english={english} label={ui("recordShortcut")} value={gestureShortcutDraft} onChange={setGestureActionShortcut} />{#if gestureShortcutError}<p class="modifier-error" role="alert">{gestureShortcutError}</p>{/if}{:else}<input value={gestureActionDraft.value ?? ""} on:input={setGestureActionValue} placeholder={ui("enterValue")} />{/if}</label>
+                          <label><span>{gestureActionDraft.kind === "shortcut" ? ui("shortcut") : ui("command")}</span>{#if gestureActionDraft.kind === "shortcut"}<ShortcutRecorder {helper} english={english} label={ui("recordShortcut")} value={gestureShortcutDraft} onChange={setGestureActionShortcut} />{#if gestureShortcutError}<p class="modifier-error" role="alert">{gestureShortcutError}</p>{/if}{:else}<input value={gestureActionDraft.value ?? ""} on:input={setGestureActionValue} placeholder={ui("enterValue")} />{/if}</label>
                         {/if}
                       {/if}
                     </div>

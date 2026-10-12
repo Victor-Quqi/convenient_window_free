@@ -148,6 +148,9 @@ async fn handle_connection(
             .await
             .unwrap_or_default();
     let (mut writer, mut reader) = socket.split();
+    let recording_connection = RecordingConnection(uuid::Uuid::new_v4().to_string());
+    let mut recording_tick = tokio::time::interval(std::time::Duration::from_millis(16));
+    recording_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     writer
         .send(Message::Text(
             serde_json::to_string(&HelperMessage::new(
@@ -160,6 +163,7 @@ async fn handle_connection(
                     "protocolVersion": PROTOCOL_VERSION,
                     "schemaVersion": SCHEMA_VERSION,
                     "platform": crate::platform::platform_info(),
+                    "shortcutRecording": crate::platform::shortcut_recording::supported(),
                     "ocrLanguages": ocr_languages,
                     "usage": usage.snapshot()
                 }),
@@ -170,6 +174,12 @@ async fn handle_connection(
 
     loop {
         tokio::select! {
+            _ = recording_tick.tick(), if crate::platform::shortcut_recording::has_work(&recording_connection.0) => {
+                while let Some(event) = crate::platform::shortcut_recording::take_event(&recording_connection.0) {
+                    let message = HelperMessage::new("shortcut.recording", serde_json::to_value(event)?);
+                    writer.send(Message::Text(serde_json::to_string(&message)?.into())).await?;
+                }
+            }
             incoming = reader.next() => {
                 let Some(message) = incoming else {
                     break;
@@ -193,6 +203,21 @@ async fn handle_connection(
                     text.len()
                 ));
                 match incoming.kind.as_str() {
+                    "shortcut.record.begin" => {
+                        let id = incoming.data.get("sessionId").and_then(Value::as_str).unwrap_or("");
+                        if let Err(error) = crate::platform::shortcut_recording::begin(&recording_connection.0, id) {
+                            let message = HelperMessage::new("shortcut.recording", serde_json::json!({
+                                "sessionId": id, "phase": "cancelled", "reason": "unavailable", "requestId": incoming.id
+                            }));
+                            logging::write_line(format!("shortcut recording unavailable: {error}"));
+                            writer.send(Message::Text(serde_json::to_string(&message)?.into())).await?;
+                        }
+                    }
+                    "shortcut.record.cancel" => {
+                        if let Some(id) = incoming.data.get("sessionId").and_then(Value::as_str) {
+                            crate::platform::shortcut_recording::cancel(&recording_connection.0, Some(id));
+                        }
+                    }
                     "config.update" => {
                         let (config, revision, adjusted) = match parse_config_update(incoming.data) {
                             Ok(update) => update,
@@ -256,6 +281,13 @@ async fn handle_connection(
     }
 
     Ok(())
+}
+
+struct RecordingConnection(String);
+impl Drop for RecordingConnection {
+    fn drop(&mut self) {
+        crate::platform::shortcut_recording::cancel(&self.0, None);
+    }
 }
 
 async fn apply_config_update(

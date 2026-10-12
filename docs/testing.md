@@ -1,5 +1,13 @@
 # Testing
 
+## Shortcut capture and corner-click development acceptance (0.6.5, 2026-10-13)
+
+The desktop frontend passes 290 tests, zero-error/warning Svelte checks and production build. The paired frontend passes 362 tests; helper passes 270 tests with 3 existing ignored tests and format check. Dictionary parity includes the shared recorder/key parser. Public source audit passes. No new desktop installer/portable or stable release is produced.
+
+A production-browser gate covers saved shortcut display after display/region/trigger/modifier switches, duplicate output reuse, outside-click/Escape/blur cancellation, clearing and stale native-session events. It runs in the paired integration CI alongside the eight-viewport switch/focus gate. Host/WebSocket state is mocked, so it does not prove native system interception.
+
+The real isolated Win32 engine click-dispatch fixture maximizes a recorded non-foreground target, restores it on Win+Down, then minimizes it, and checks expired handles and custom keyboard fallback. It does not control user windows. Real helper IPC smoke verifies connection-owned recording begin/cancel, busy rejection and disconnect cleanup, plus ordinary host config/ping/start/stop/restart/owner exit; it does not inject keys or write user data. Actual host/system shortcut interception, keyboard-hook ordering, elevated windows, multiple monitors and mixed DPI still require interactive acceptance. Secure combinations such as Ctrl+Alt+Delete are not supported.
+
 ## Window Motion Development Acceptance (0.6.5)
 
 The frontend passes 289 tests, zero-error/warning Svelte checks and a production build. The paired integration frontend passes 361 tests. Shared-module/dictionary parity and the development source version audit pass; the helper passes 260 tests with 3 existing ignored tests (two installed-OCR-language requirements and one real audio endpoint test). Public-source audit passes.

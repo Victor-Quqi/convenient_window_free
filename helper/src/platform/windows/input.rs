@@ -11,10 +11,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_RETURN, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, PeekMessageW, PostThreadMessageW, SetWindowsHookExW, UnhookWindowsHookEx,
-    HHOOK, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_MOUSE_LL, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    CallNextHookEx, GetForegroundWindow, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
+    UnhookWindowsHookEx, HHOOK, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL,
+    WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 const HOOK_NOT_STARTED: u8 = 0;
@@ -27,11 +27,7 @@ const HOOK_STOPPED: u8 = 5;
 static HOOK_STATE: AtomicU8 = AtomicU8::new(HOOK_NOT_STARTED);
 static HOOK_THREAD_ID: AtomicU32 = AtomicU32::new(0);
 static WHEEL_DELTA: AtomicI64 = AtomicI64::new(0);
-static LEFT_CLICK_COUNT: AtomicU64 = AtomicU64::new(0);
-static RIGHT_CLICK_COUNT: AtomicU64 = AtomicU64::new(0);
 static INPUT_EVENT_SEQUENCE: AtomicU64 = AtomicU64::new(0);
-static LEFT_CLICK_MODIFIER_SEQUENCES: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
-static RIGHT_CLICK_MODIFIER_SEQUENCES: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
 static WHEEL_MODIFIER_SEQUENCES: [AtomicU64; 16] = [const { AtomicU64::new(0) }; 16];
 static GESTURE_CAPTURE_ENABLED: AtomicBool = AtomicBool::new(false);
 static GESTURE_CAPTURE_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -44,6 +40,37 @@ static WINDOW_DRAG_MOVE_MODIFIERS: AtomicU8 = AtomicU8::new(2);
 static WINDOW_DRAG_RESIZE_MODIFIERS: AtomicU8 = AtomicU8::new(2);
 static WINDOW_DRAG_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 static SUPPRESSED_WINDOW_DRAG_UPS: AtomicU8 = AtomicU8::new(0);
+
+#[derive(Clone, Copy, Default)]
+struct ClickSnapshot {
+    count: u64,
+    sequences: [u64; 16],
+    targets: [Option<crate::platform::WindowHandle>; 16],
+}
+impl ClickSnapshot {
+    fn record(&mut self, modifiers: u8, target: isize, sequence: u64) {
+        let index = usize::from(modifiers & 15);
+        self.count = self.count.wrapping_add(1);
+        self.sequences[index] = sequence;
+        self.targets[index] = (target != 0).then_some(crate::platform::WindowHandle(target));
+    }
+}
+static LEFT_CLICKS: Mutex<ClickSnapshot> = Mutex::new(ClickSnapshot {
+    count: 0,
+    sequences: [0; 16],
+    targets: [None; 16],
+});
+static RIGHT_CLICKS: Mutex<ClickSnapshot> = Mutex::new(ClickSnapshot {
+    count: 0,
+    sequences: [0; 16],
+    targets: [None; 16],
+});
+fn record_click(clicks: &Mutex<ClickSnapshot>, modifiers: u8, target: isize) {
+    if let Ok(mut snapshot) = clicks.lock() {
+        let sequence = INPUT_EVENT_SEQUENCE.fetch_add(1, Ordering::Relaxed) + 1;
+        snapshot.record(modifiers, target, sequence);
+    }
+}
 
 #[derive(Default)]
 struct GestureHookState {
@@ -125,6 +152,7 @@ pub fn mouse_hook_is_healthy() -> bool {
 }
 
 pub fn stop_mouse_hook() {
+    crate::platform::shortcut_recording::cancel_all();
     if HOOK_STATE
         .compare_exchange(
             HOOK_HEALTHY,
@@ -156,9 +184,22 @@ fn run_mouse_hook_thread() {
         let mut message = MSG::default();
         let _ = PeekMessageW(&mut message, HWND::default(), 0, 0, PM_NOREMOVE);
         let hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), HINSTANCE::default(), 0)?;
+        let keyboard = match SetWindowsHookExW(
+            WH_KEYBOARD_LL,
+            Some(crate::platform::shortcut_recording::keyboard_proc),
+            HINSTANCE::default(),
+            0,
+        ) {
+            Ok(keyboard) => keyboard,
+            Err(error) => {
+                let _ = UnhookWindowsHookEx(hook);
+                return Err(error);
+            }
+        };
         HOOK_STATE.store(HOOK_HEALTHY, Ordering::Release);
         message_loop();
         let _ = UnhookWindowsHookEx(hook);
+        let _ = UnhookWindowsHookEx(keyboard);
         Ok::<(), windows::core::Error>(())
     });
     let stopping = HOOK_STATE.load(Ordering::Acquire) == HOOK_STOPPING;
@@ -256,6 +297,14 @@ pub fn mark_helper_injected_events(count: u8) {
 }
 
 pub fn input_state() -> InputState {
+    let left = LEFT_CLICKS
+        .lock()
+        .map(|snapshot| *snapshot)
+        .unwrap_or_default();
+    let right = RIGHT_CLICKS
+        .lock()
+        .map(|snapshot| *snapshot)
+        .unwrap_or_default();
     InputState {
         left_down: key_down(VK_LBUTTON),
         right_down: key_down(VK_RBUTTON),
@@ -263,18 +312,16 @@ pub fn input_state() -> InputState {
         escape_down: key_down(VK_ESCAPE),
         enter_down: key_down(VK_RETURN),
         modifiers: current_modifier_mask(),
-        left_click_count: LEFT_CLICK_COUNT.load(Ordering::Relaxed),
-        right_click_count: RIGHT_CLICK_COUNT.load(Ordering::Relaxed),
+        left_click_count: left.count,
+        right_click_count: right.count,
         wheel_delta: WHEEL_DELTA.load(Ordering::Relaxed),
-        left_click_modifier_sequences: std::array::from_fn(|index| {
-            LEFT_CLICK_MODIFIER_SEQUENCES[index].load(Ordering::Acquire)
-        }),
-        right_click_modifier_sequences: std::array::from_fn(|index| {
-            RIGHT_CLICK_MODIFIER_SEQUENCES[index].load(Ordering::Acquire)
-        }),
+        left_click_modifier_sequences: left.sequences,
+        right_click_modifier_sequences: right.sequences,
         wheel_modifier_sequences: std::array::from_fn(|index| {
             WHEEL_MODIFIER_SEQUENCES[index].load(Ordering::Acquire)
         }),
+        left_click_targets: left.targets,
+        right_click_targets: right.targets,
     }
 }
 
@@ -308,18 +355,26 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
     if code >= 0 {
         let hook = &*(lparam.0 as *const MSLLHOOKSTRUCT);
         let message = wparam.0 as u32;
+        if crate::platform::shortcut_recording::active() {
+            if matches!(
+                message,
+                WM_LBUTTONDOWN | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_XBUTTONDOWN
+            ) {
+                crate::platform::shortcut_recording::cancel_all();
+            }
+            // The click is still delivered normally; it must not also launch a configured action.
+            return CallNextHookEx(HHOOK::default(), code, wparam, lparam);
+        }
         if handle_window_drag_message(message, hook) {
             return LRESULT(1);
         }
         let modifiers = current_modifier_mask();
         match message {
             WM_LBUTTONDOWN => {
-                record_modifier_event(&LEFT_CLICK_MODIFIER_SEQUENCES, modifiers);
-                LEFT_CLICK_COUNT.fetch_add(1, Ordering::Relaxed);
+                record_click(&LEFT_CLICKS, modifiers, GetForegroundWindow().0 as isize);
             }
             WM_RBUTTONDOWN => {
-                record_modifier_event(&RIGHT_CLICK_MODIFIER_SEQUENCES, modifiers);
-                RIGHT_CLICK_COUNT.fetch_add(1, Ordering::Relaxed);
+                record_click(&RIGHT_CLICKS, modifiers, GetForegroundWindow().0 as isize);
             }
             WM_MOUSEWHEEL => {
                 record_modifier_event(&WHEEL_MODIFIER_SEQUENCES, modifiers);
@@ -634,6 +689,22 @@ unsafe fn message_loop() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn click_targets_and_modifier_sequences_share_one_coherent_snapshot() {
+        let clicks = Mutex::new(ClickSnapshot::default());
+        record_click(&clicks, 0, 7);
+        let before = *clicks.lock().unwrap();
+        record_click(&clicks, 2, 9);
+        let after = *clicks.lock().unwrap();
+        assert_eq!(after.count, before.count + 1);
+        assert_eq!(before.targets[0], Some(crate::platform::WindowHandle(7)));
+        assert_eq!(after.targets[2], Some(crate::platform::WindowHandle(9)));
+        assert!(after.sequences[2] > before.sequences[0]);
+        assert_eq!(after.targets[0], before.targets[0]);
+        record_click(&clicks, 0, 0);
+        assert_eq!(clicks.lock().unwrap().targets[0], None);
+    }
 
     #[test]
     fn blocked_window_does_not_capture_or_consume_the_configured_mouse_press() {

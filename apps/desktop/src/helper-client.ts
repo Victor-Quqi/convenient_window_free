@@ -27,6 +27,7 @@ export class HelperClient {
   private shouldReconnect = false;
   private stopRequested = false;
   private protocolReady = false;
+  private recordingSupported = false;
   private latestPlatform: HelperPlatformInfo | null = null;
   private generation = 0;
   private readonly messageHandlers = new Set<MessageHandler>();
@@ -46,6 +47,7 @@ export class HelperClient {
     if (shouldReconnect) this.stopRequested = false;
     this.shouldReconnect = shouldReconnect;
     this.protocolReady = false;
+    this.recordingSupported = false;
     this.closeSocket();
     this.clearReconnectTimer();
 
@@ -67,6 +69,7 @@ export class HelperClient {
     socket.addEventListener("close", () => {
       if (gen !== this.generation) return;
       this.socket = null;
+      this.recordingSupported = false;
       this.stopRequested = false;
       this.emitStatus("disconnected");
       if (this.shouldReconnect) this.scheduleReconnect();
@@ -75,6 +78,7 @@ export class HelperClient {
       if (gen !== this.generation) return;
       this.generation++;
       this.socket = null;
+      this.recordingSupported = false;
       this.stopRequested = false;
       this.emitStatus("disconnected");
       if (this.shouldReconnect) this.scheduleReconnect();
@@ -94,6 +98,7 @@ export class HelperClient {
           this.latestPlatform = isPlatformInfo(data?.platform) ? data.platform : null;
           this.protocolReady = isSupportedHelperProtocol(protocolVersion)
             && isSupportedHelperSchema(data?.schemaVersion);
+          this.recordingSupported = this.protocolReady && (message.data as { shortcutRecording?: boolean })?.shortcutRecording === true;
           if (this.protocolReady) this.flushLatestConfig();
         }
         this.messageHandlers.forEach((handler) => handler(message));
@@ -116,7 +121,16 @@ export class HelperClient {
     return this.latestPlatform;
   }
 
+  get supportsShortcutRecording(): boolean { return this.recordingSupported; }
+  beginShortcutRecording(sessionId: string): boolean {
+    return this.recordingSupported && this.send("shortcut.record.begin", { sessionId });
+  }
+  cancelShortcutRecording(sessionId: string): void {
+    this.send("shortcut.record.cancel", { sessionId });
+  }
+
   private closeSocket(): void {
+    this.recordingSupported = false;
     if (this.socket) {
       this.generation++;
       this.socket.close();

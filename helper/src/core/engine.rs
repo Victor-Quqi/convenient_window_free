@@ -98,9 +98,10 @@ impl Engine {
                 break;
             }
             let now = Instant::now();
+            let recording = platform::shortcut_recording::active();
             platform::configure_topmost_pins(config.enabled && config.topmost_pin.enabled);
             platform::configure_window_drag_capture(
-                config.enabled && config.window_drag.enabled,
+                config.enabled && config.window_drag.enabled && !recording,
                 config.window_drag.move_button,
                 modifier_config_mask(&config.window_drag.move_modifiers),
                 config.window_drag.resize_button,
@@ -162,14 +163,16 @@ impl Engine {
                             input.escape_down && !previous_input.escape_down,
                         );
                         let dragging = drag_activity.active;
-                        let paused = foreground
-                            .as_ref()
-                            .is_some_and(|window| is_paused_app(&config.paused_apps, window));
-                        let gestures_paused = foreground.as_ref().is_some_and(|window| {
-                            is_paused_app(&config.mouse_gestures.paused_apps, window)
-                                || (config.mouse_gestures.fullscreen_pause
-                                    && is_fullscreen_window(window, monitors))
-                        });
+                        let paused = recording
+                            || foreground
+                                .as_ref()
+                                .is_some_and(|window| is_paused_app(&config.paused_apps, window));
+                        let gestures_paused = recording
+                            || foreground.as_ref().is_some_and(|window| {
+                                is_paused_app(&config.mouse_gestures.paused_apps, window)
+                                    || (config.mouse_gestures.fullscreen_pause
+                                        && is_fullscreen_window(window, monitors))
+                            });
                         platform::configure_gesture_capture(
                             config.mouse_gestures.enabled && !gestures_paused && !dragging,
                             config.mouse_gestures.trigger_button,
@@ -698,10 +701,16 @@ impl Engine {
             ) {
                 continue;
             }
-            if let Err(error) = dispatcher.dispatch_at_with_modifiers(
+            let target = match trigger_action.trigger {
+                TriggerKind::LeftClick => input.left_click_targets[usize::from(modifiers & 15)],
+                TriggerKind::RightClick => input.right_click_targets[usize::from(modifiers & 15)],
+                _ => None,
+            };
+            if let Err(error) = dispatcher.dispatch_for_window_with_modifiers(
                 action,
                 &format!("{:?}/{:?}", hotzone_id, trigger_action.trigger),
                 Some(cursor),
+                target,
                 modifiers,
             ) {
                 self.report_runtime_error(ErrorCode::ActionFailed, error);
@@ -1363,6 +1372,120 @@ mod tests {
     };
     use crate::core::hotzone::detect_hotzone;
     use crate::platform::{Monitor, Point, Rect};
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn corner_click_dispatch_preserves_the_window_target_after_foreground_changes() {
+        use windows::core::w;
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::{
+            CreateWindowExW, DestroyWindow, GetForegroundWindow, IsIconic, IsZoomed,
+            WS_EX_NOACTIVATE, WS_OVERLAPPEDWINDOW, WS_VISIBLE,
+        };
+        struct Fixture(HWND);
+        impl Drop for Fixture {
+            fn drop(&mut self) {
+                let _ = unsafe { DestroyWindow(self.0) };
+            }
+        }
+        let fixture = Fixture(unsafe {
+            CreateWindowExW(
+                WS_EX_NOACTIVATE,
+                w!("STATIC"),
+                w!("HotzoneTargetTest"),
+                WS_OVERLAPPEDWINDOW | WS_VISIBLE,
+                240,
+                240,
+                500,
+                350,
+                HWND::default(),
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        assert_ne!(unsafe { GetForegroundWindow() }, fixture.0);
+        let handle = platform::WindowHandle(fixture.0 .0 as isize);
+        let mut config = AppConfig::default();
+        config.enabled = true;
+        config.hotzones_enabled = true;
+        config = config.normalized();
+        for zone in &mut config.hotzones {
+            for slot in &mut zone.actions {
+                slot.action.kind = ActionKind::None;
+            }
+        }
+        let (config_tx, config_rx) = watch::channel(config.clone());
+        let (events_tx, mut events) = broadcast::channel(8);
+        let (_shutdown_tx, shutdown_rx) = broadcast::channel(4);
+        let engine = Engine::new(config_rx, events_tx.clone(), shutdown_rx);
+        let dispatcher = ActionDispatcher::new(events_tx);
+        let mut previous = InputState::default();
+        for (index, shortcut) in ["Win+Up", "Win+Down", "Win+Down"].into_iter().enumerate() {
+            let setting = config
+                .hotzones
+                .iter_mut()
+                .find(|zone| zone.id == HotzoneId::TopLeft)
+                .unwrap();
+            setting.actions = vec![TriggerAction {
+                trigger: TriggerKind::LeftClick,
+                action: HotzoneAction {
+                    kind: ActionKind::Shortcut,
+                    value: Some(shortcut.into()),
+                },
+                modifier_actions: Vec::new(),
+                cooldown_ms: Some(10),
+                hover_delay_ms: None,
+            }];
+            let mut input = previous;
+            input.left_click_count += 1;
+            input.left_click_modifier_sequences[0] += 1;
+            input.left_click_targets[0] = Some(handle);
+            let setting = config
+                .hotzones
+                .iter()
+                .find(|zone| zone.id == HotzoneId::TopLeft)
+                .unwrap();
+            let frame = HotzoneFrame {
+                detected: Some(HotzoneId::TopLeft),
+                setting: Some(setting),
+                rect: None,
+            };
+            let now = Instant::now();
+            let mut triggers = HotzoneTriggerController::new(now);
+            engine.handle_hotzone(
+                now,
+                &config,
+                &dispatcher,
+                Point { x: 1, y: 1 },
+                frame,
+                input,
+                previous,
+                None,
+                false,
+                &mut triggers,
+            );
+            let event = events.try_recv().unwrap();
+            assert_eq!(event.kind, "action.triggered");
+            assert!(events.try_recv().is_err());
+            if index == 0 {
+                assert!(unsafe { IsZoomed(fixture.0) }.as_bool());
+            }
+            if index == 1 {
+                assert!(!unsafe { IsZoomed(fixture.0) }.as_bool());
+                assert!(!unsafe { IsIconic(fixture.0) }.as_bool());
+            }
+            if index == 2 {
+                assert!(unsafe { IsIconic(fixture.0) }.as_bool());
+            }
+            previous = input;
+        }
+        assert!(!platform::window_shortcut_at("Ctrl+C", handle).unwrap());
+        drop(fixture);
+        assert!(platform::window_shortcut_at("Win+Up", handle).is_err());
+        drop(config_tx);
+    }
 
     #[cfg(target_os = "windows")]
     #[test]

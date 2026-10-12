@@ -14,6 +14,7 @@ mod linux_audio;
 mod macos_audio;
 #[cfg(any(target_os = "macos", test))]
 mod macos_brightness;
+pub mod shortcut_recording;
 pub use adjustment::{adjust_at, take_adjustment_feedback};
 
 #[cfg(target_os = "windows")]
@@ -242,6 +243,8 @@ pub struct InputState {
     pub left_click_modifier_sequences: [u64; 16],
     pub right_click_modifier_sequences: [u64; 16],
     pub wheel_modifier_sequences: [u64; 16],
+    pub left_click_targets: [Option<WindowHandle>; 16],
+    pub right_click_targets: [Option<WindowHandle>; 16],
 }
 
 #[derive(Clone, Debug)]

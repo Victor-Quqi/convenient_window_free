@@ -153,6 +153,10 @@ pub fn send_shortcut_with_modifiers(shortcut: &str, routing_modifiers: u8) -> Re
     input::send_shortcut(shortcut, routing_modifiers)
 }
 
+pub fn window_shortcut_at(_shortcut: &str, _target: WindowHandle) -> Result<bool> {
+    Ok(false)
+}
+
 pub fn show_desktop_with_modifiers(routing_modifiers: u8) -> Result<()> {
     backend::show_desktop_with_modifiers(routing_modifiers)
 }

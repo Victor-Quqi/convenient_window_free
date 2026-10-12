@@ -197,7 +197,7 @@ describe("shortcut recorder component", () => {
   });
 });
 
-describe("shortcut conflict rejection", () => {
+describe("shortcut output reuse", () => {
   const target: { kind: string; value?: string } = { kind: "none" };
   const settings = {
     hotzones: [{ id: "left", actions: [{ trigger: "hover", action: { kind: "shortcut", value: "Ctrl+Alt+A" } }] }],
@@ -229,6 +229,13 @@ describe("shortcut conflict rejection", () => {
       `let shortcutError = "";
        let shortcutDraft = "";
        let actionEditorRevision = 0;
+       let selectedDisplayId = 'test';
+       let selectedZone = 'top';
+       let activeTrigger = 'hover';
+       let selectedHotzoneModifiers = [];
+       let actionEditorOverrideKey = '';
+       let actionEditorOverride = null;
+       const modifierId = () => '';
        ${handler}
        return {
          setActionShortcut,
@@ -244,15 +251,14 @@ describe("shortcut conflict rejection", () => {
     };
   }
 
-  it("keeps the previous value and reports the clash", () => {
+  it("allows two independent regions to emit the same shortcut", () => {
     const instance = load();
     target.kind = "none";
     delete target.value;
     instance.setActionShortcut("Ctrl+Alt+A");
-    expect(instance.readError()).toContain("Ctrl+Alt+A");
-    expect(instance.readError()).toContain("已被其他动作使用");
-    expect(target.kind).toBe("none");
-    expect(target.value).toBeUndefined();
+    expect(instance.readError()).toBe("");
+    expect(target.value).toBe("Ctrl+Alt+A");
+    expect(settings.hotzones[0].actions[0].action.value).toBe("Ctrl+Alt+A");
   });
 
   it("accepts a fresh combination", () => {

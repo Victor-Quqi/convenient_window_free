@@ -26,6 +26,32 @@ impl ActionDispatcher {
         self.dispatch_scaled_at_with_modifiers(action, source, 1.0, target_point, routing_modifiers)
     }
 
+    pub fn dispatch_for_window_with_modifiers(
+        &self,
+        action: &HotzoneAction,
+        source: &str,
+        point: Option<Point>,
+        target: Option<platform::WindowHandle>,
+        modifiers: u8,
+    ) -> Result<()> {
+        if action.kind == ActionKind::Shortcut {
+            if let Some(target) = target {
+                if platform::window_shortcut_at(required_value(action, "shortcut")?, target)? {
+                    self.report_trigger(action, source);
+                    return Ok(());
+                }
+            }
+        }
+        self.dispatch_at_with_modifiers(action, source, point, modifiers)
+    }
+
+    fn report_trigger(&self, action: &HotzoneAction, source: &str) {
+        let _ = self.event_tx.send(HelperMessage::new(
+            "action.triggered",
+            json!({ "source": source, "kind": action.kind, "value": action.value }),
+        ));
+    }
+
     pub fn dispatch_scaled_at_with_modifiers(
         &self,
         action: &HotzoneAction,
@@ -90,14 +116,7 @@ impl ActionDispatcher {
             }
         }?;
 
-        let _ = self.event_tx.send(HelperMessage::new(
-            "action.triggered",
-            json!({
-                "source": source,
-                "kind": action.kind,
-                "value": action.value
-            }),
-        ));
+        self.report_trigger(action, source);
 
         Ok(())
     }

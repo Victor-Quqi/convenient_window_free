@@ -16,7 +16,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     IsIconic, IsWindow, IsWindowArranged, IsWindowVisible, IsZoomed, SetWindowPos, ShowWindow,
     WindowFromPoint, GA_ROOT, GUITHREADINFO, GUI_INMOVESIZE, GWL_EXSTYLE, GW_OWNER, HWND_NOTOPMOST,
     HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
-    SW_RESTORE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 };
 
 use crate::platform::{Point, Rect as AppRect, WindowHandle, WindowInfo};
@@ -86,6 +86,49 @@ fn window_info(hwnd: HWND, include_tool_window: bool) -> Result<Option<WindowInf
 
 pub fn window_info_for_handle(handle: WindowHandle) -> Result<Option<WindowInfo>> {
     window_info(HWND(handle.0 as *mut core::ffi::c_void), false)
+}
+
+/// Preserve the keyboard meaning of the existing presets, but use the click's
+/// original target instead of whichever window receives foreground afterwards.
+pub fn window_shortcut_at(shortcut: &str, target: WindowHandle) -> Result<bool> {
+    let command = match shortcut.to_ascii_lowercase().replace(' ', "").as_str() {
+        "win+up" => SW_MAXIMIZE,
+        "win+down" => SW_MINIMIZE,
+        _ => return Ok(false),
+    };
+    let hwnd = HWND(target.0 as *mut core::ffi::c_void);
+    let Some(window) = window_info(hwnd, false)? else {
+        bail!("window action target is no longer available");
+    };
+    if window.transient
+        || matches!(
+            window.class_name.as_str(),
+            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "#32768"
+        )
+    {
+        bail!("window action target is not an ordinary window");
+    }
+    let command = if command == SW_MINIMIZE && window.maximized {
+        SW_RESTORE
+    } else {
+        command
+    };
+    unsafe {
+        let _ = ShowWindow(hwnd, command);
+    }
+    let applied = unsafe {
+        if command == SW_MAXIMIZE {
+            IsZoomed(hwnd).as_bool()
+        } else if command == SW_MINIMIZE {
+            IsIconic(hwnd).as_bool()
+        } else {
+            !IsZoomed(hwnd).as_bool() && !IsIconic(hwnd).as_bool()
+        }
+    };
+    if !applied {
+        bail!("window state change did not apply");
+    }
+    Ok(true)
 }
 
 /// 找出鼠标下可用于拖拽的窗口。

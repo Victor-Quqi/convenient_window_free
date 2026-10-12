@@ -100,6 +100,33 @@ describe("HelperClient", () => {
     expect(JSON.parse(socket.sent[1]).data.revision).toBe(6);
   });
 
+  it("gates native recording on capability and revokes it on disconnect", () => {
+    const client = new HelperClient();
+    client.connect();
+    const socket = MockWebSocket.instances[0];
+    expect(client.supportsShortcutRecording).toBe(false);
+    expect(client.beginShortcutRecording('session')).toBe(false);
+    socket.receive('helper.ready', { protocolVersion: 7, schemaVersion: 9, shortcutRecording: true });
+    expect(client.supportsShortcutRecording).toBe(true);
+    expect(client.beginShortcutRecording('session')).toBe(true);
+    client.cancelShortcutRecording('session');
+    expect(socket.sent.map(raw => JSON.parse(raw))).toMatchObject([
+      { type: 'shortcut.record.begin', data: { sessionId: 'session' } },
+      { type: 'shortcut.record.cancel', data: { sessionId: 'session' } }
+    ]);
+    socket.receive('helper.ready', { protocolVersion: 6, schemaVersion: 9, shortcutRecording: true });
+    expect(client.supportsShortcutRecording).toBe(false);
+    socket.receive('helper.ready', { protocolVersion: 7, schemaVersion: 9, shortcutRecording: true });
+    socket.close();
+    expect(client.supportsShortcutRecording).toBe(false);
+    expect(client.beginShortcutRecording('other')).toBe(false);
+    vi.advanceTimersByTime(1500);
+    const reconnect = MockWebSocket.instances[1];
+    reconnect.receive('helper.ready', { protocolVersion: 7, schemaVersion: 9 });
+    expect(client.supportsShortcutRecording).toBe(false);
+    client.disconnect();
+  });
+
   beforeEach(() => {
     vi.useFakeTimers();
     MockWebSocket.instances = [];

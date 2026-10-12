@@ -7,6 +7,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_SHIFT, VK_SPACE, VK_TAB, VK_UP, VK_VOLUME_DOWN, VK_VOLUME_MUTE, VK_VOLUME_UP,
 };
 
+pub(crate) const KEYBOARD_INJECT_TAG: usize = 0x43575F4B;
+
 pub fn send_shortcut_with_modifiers(shortcut: &str, routing_modifiers: u8) -> Result<()> {
     let keys = parse_shortcut(shortcut)?;
     send_key_sequence(&keys, &active_routing_keys(routing_modifiers))
@@ -233,7 +235,7 @@ pub(super) fn key_input(key: VIRTUAL_KEY, key_up: bool) -> INPUT {
                     Default::default()
                 },
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: KEYBOARD_INJECT_TAG,
             },
         },
     }

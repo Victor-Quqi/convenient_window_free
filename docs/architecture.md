@@ -98,6 +98,14 @@ The desktop host and helper never write the same file:
 
 The UI awaits a successful durable desktop-settings write before sending that exact revision to the helper. Migration uses the same atomic writer and rolling `.bak` file; later saves replace that backup. A failed write is visible to the UI and is never applied to the helper. On first launch after upgrading from the early shared-file layout, the desktop host copies the legacy helper configuration into `desktop-settings.json` only when the new file does not exist; it never overwrites an existing desktop settings file.
 
+## Shortcut recording and click targets (0.6.5)
+
+Windows input installs `WH_KEYBOARD_LL` on the existing mouse-hook thread. Outside recording it passes keys through. An authenticated connection starts/cancels a UUID session with `shortcut.record.begin/cancel`; capability `helper.ready.shortcutRecording` is optional under protocol v7/schema v9. `shortcut.recording` events carry sessionId, phase (started/progress/committed/cancelled), value/hint and reason. Unavailable begin requests are correlated with requestId. Other connections cannot cancel or replace a session. Escape, focus loss, outside clicks, 15-second timeout, disconnect and helper stop cancel it. Progress/terminal events use an eight-entry mailbox; consumed key-down/up remain paired after cancellation, and helper-tagged keyboard injections pass through. Unsupported keys never save partial combinations. Older/non-Windows helpers retain browser recording; secure system combinations such as Ctrl+Alt+Delete are not capturable through this path.
+
+Recording pauses the helper's own hot-zone, gesture and drag actions. Hosts cancel on focus/visibility/connection changes, outside control interaction and component teardown, and reject late results by session ID. Shortcut display drafts and override references synchronize by display, region, trigger and modifier variant, including import/reset and topology changes. Independent triggers may emit the same shortcut; these are output actions rather than competing global registrations.
+
+Mouse press count, modifier sequence and original foreground HWND use one coherent fixed snapshot per button. For click dispatch only, existing Win+Up/Win+Down bindings act on that validated HWND: maximize, restore a maximized window, or minimize a restored one. Shell/tool/expired targets fail visibly instead of redirecting to another foreground window. Other custom shortcuts, hover and Show Desktop keep their keyboard/global behavior. Window calls stay outside the hook.
+
 ## Gesture settings navigation (0.6.4)
 
 Gesture settings use the library as the single selection surface and its New button for creation; no redundant three-card overview is rendered. Removing those shortcuts does not change templates, recording, recognition, action binding, or screenshot settings, and adds no runtime work.

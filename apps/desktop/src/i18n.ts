@@ -226,6 +226,7 @@ export const zh = {
   statusRuntimeIdle: "等待 helper 上报显示器", statusNoAction: "尚无动作", statusConnectionLost: "连接已断开", statusHelperRecoveringConnection: "后台助手连接已断开，正在尝试恢复", statusHelperRecoveryStopped: "后台助手连续异常退出，已停止自动恢复", statusHelperStartFailed: "无法启动 helper",
 
   // 带占位符的状态与提示（用 format() 填值）
+  shortcutRecordingUnavailable: "录制暂不可用，请松开按键并确认助手连接后重试", shortcutRecordingReconnect: "请重新连接助手后录制", shortcutRecordingUnsupported: "此按键暂不支持，请换一个组合",
   moreSettings: "更多设置", masterStateDetail: "同时控制规则与助手生命周期", removeHelper: "删除助手文件", recordShortcut: "录制快捷键", cancelGestureVariant: "取消新增手势组合", runtimeRunningDetail: "{summary}，已启用规则正在生效",
   triggerSlideDown: "向下移动", triggerSlideUp: "向上移动", triggerSlideLeft: "向左移动", triggerSlideRight: "向右移动",
   statusHelperProtocol: "helper 协议不兼容，需要协议 v{min}-v{max}", statusOcrCopiedCount: "已识别并复制 {count} 个字符", statusConfigSaveFailed: "配置保存失败：{error}",
@@ -428,6 +429,7 @@ export const en: Record<keyof typeof zh, string> = {
   statusGestureLimit: "Gesture limit reached", statusHelperRecovering: "Helper exited; recovering (1/1)", statusHelperRestarting: "Helper restarted; checking connection", statusHelperStarting: "Connecting to helper", statusHelperStopping: "Stopping helper…",
   statusRuntimeIdle: "Waiting for helper display data", statusNoAction: "No action yet", statusConnectionLost: "Connection lost", statusHelperRecoveringConnection: "Helper connection lost; attempting recovery", statusHelperRecoveryStopped: "Helper exited repeatedly; recovery stopped", statusHelperStartFailed: "Unable to start helper",
 
+  shortcutRecordingUnavailable: "Recording is unavailable. Release held keys and check the helper connection.", shortcutRecordingReconnect: "Reconnect the helper to record", shortcutRecordingUnsupported: "This key is unsupported. Try another combination.",
   moreSettings: "More settings", masterStateDetail: "Controls rules and the helper lifecycle", removeHelper: "Remove helper files", recordShortcut: "Record shortcut", cancelGestureVariant: "Cancel gesture keys", runtimeRunningDetail: "{summary}; enabled rules are active",
   triggerSlideDown: "Slide down", triggerSlideUp: "Slide up", triggerSlideLeft: "Slide left", triggerSlideRight: "Slide right",
   statusHelperProtocol: "Helper protocol incompatible; needs protocol v{min}-v{max}", statusOcrCopiedCount: "Copied {count} characters", statusConfigSaveFailed: "Could not save settings: {error}",
