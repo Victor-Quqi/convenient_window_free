@@ -14,6 +14,14 @@ The paired host's native adapter smoke passes with the new 0.6.5 payload and iso
 
 Manual acceptance: use the matching 0.6.5 helper after normally stopping the currently owned older instance. Verify 160 ms default and custom timing; hold/move along the side thresholds without flashing; release early near the top to retain Snap; hold until the blue line fills to tuck; move away or press Escape to cancel; drag a maximized window down before testing; compare 60/120/240 Hz with your actual applications. Repeat with signed multi-monitor coordinates, mixed DPI, partial seams and monitor-profile-disabled edges.
 
+## Switch focus and complete settings viewport (0.6.5, 2026-10-12)
+
+The old production UI reproduces a truncated drawer by scrolling the animation label into view and focusing its native checkbox, without changing configuration. The transparent input stayed at its original off-screen coordinates, so focus scrolled the outer drawer by 270 px. Native switch inputs now stay within their labels, including the master switch, with a visible keyboard focus indication.
+
+Production-browser regressions measure input/label bounds, fixed header and full-height pane alignment, zero outer scroll offsets and final-control hit testing. They exercise actual label clicks, Space and Shift+Tab in corners, edge hide, drag and gestures, with ten animation cycles per viewport and paired hosts at 800×544, 359×544, 640×600 and 800×600. The companion UI checks cover English/Chinese, light/dark and narrow layouts. Host and WebSocket mocks remain isolated; this is browser layout evidence rather than real host lifecycle or native window motion acceptance. Frontend check/test/build passes (289 desktop tests, 361 paired tests); the helper and installers are unchanged.
+
+Future UI/CSS changes must verify the complete vertical viewport and actual native focus, not only synthetic change events, stored settings or horizontal overflow. The paired integration CI executes the browser gate and keeps reports/screenshots.
+
 ## Startup and scroll-layout follow-up (0.6.4, 2026-10-10)
 
 The desktop frontend passes 25 test files / 272 tests, zero-error/warning Svelte checks and a production frontend build. A compiled geometry DOM regression keeps editor nodes mounted across helper readiness changes while still cancelling drafts at display/area boundaries. Production UI smoke covers 800×544, 359×544, 640×600 and 800×600 layouts with ten power/hint cycles per size, failed-save and duplicate-start protection, unchanged-display snapshot reuse and reachable bottom content. The browser uses mocked host/IPC and does not replace native Windows, DPI or multi-monitor acceptance.

@@ -22,6 +22,10 @@ The input hook only merges coordinates and notifies on start/release. The engine
 
 Desktop shell classes `Progman` and `WorkerW` are normal leave targets despite covering a monitor; they do not pause auto-hide as temporary fullscreen overlays do. A foreground activation restore records a pointer already inside its restore region before animation begins, so leaving during a slow animation still arms recollapse. Activation from outside the region continues to wait for pointer entry, and temporary capture/fullscreen protection and the foreground-open option remain intact. Settings place common switches/bindings before numeric tuning, with the same three-segment presets above custom inputs.
 
+## Settings focus and scrolling
+
+Custom switch checkboxes remain native and keyboard focusable. Each transparent input is positioned within its own label with matching focus/hit bounds, so it moves with the visible control when a settings pane scrolls. Positioning an input against an outer ancestor leaves it off-screen and can cause native focus to scroll the whole drawer, shifting the pane out of view. The same positioning and visible focus indication apply to master and mini switches. Settings retain one inner scrolling pane; browser validation must check the fixed header, full-height pane, outer scroll offsets and reachable final controls after mouse and keyboard input.
+
 ## Product Boundary
 
 ```text

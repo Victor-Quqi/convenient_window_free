@@ -132,8 +132,11 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 .connection.connected { color: var(--green); }
 .connection.connected i { background: var(--green); box-shadow: 0 0 0 3px rgba(62, 207, 142, .15); }
 .connection span { margin-left: 6px; color: var(--faint); font-size: 11px; }
-.master { margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; font-weight: 500; }
-.master input, .mini-switch input { position: absolute; opacity: 0; }
+.master { position: relative; margin-left: auto; display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.mini-switch { position: relative; display: block; flex: none; }
+/* Keep native focus and hit bounds on the visible switch when its pane scrolls. */
+.master input, .mini-switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; }
+.master input:focus-visible + span, .mini-switch input:focus-visible + span, .mini-switch input:focus-visible + i { outline: 2px solid var(--accent); outline-offset: 3px; }
 .master > span, .mini-switch > span {
   display: block;
   position: relative;
