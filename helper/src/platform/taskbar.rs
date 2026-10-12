@@ -911,8 +911,20 @@ mod tests {
         assert_eq!(status.backgrounds, 2);
     }
     #[test]
-    fn inactive_is_eligible_for_explicit_enable() {
-        assert!(decode_status(NativeSnapshot::default()).available);
+    fn inactive_is_eligible_only_when_a_backend_is_available() {
+        let status = decode_status(NativeSnapshot::default());
+        assert_eq!(status.state, "inactive");
+        assert_eq!(status.available, taskbar_backend().is_some());
+        assert_eq!(status.backend.as_deref(), taskbar_backend());
+    }
+    #[test]
+    fn unsupported_snapshot_is_unavailable_even_with_a_supported_backend() {
+        let status = decode_status(NativeSnapshot {
+            state: 5,
+            ..Default::default()
+        });
+        assert_eq!(status.state, "unsupported");
+        assert!(!status.available);
     }
     #[test]
     fn material_parameters_have_distinct_modes_and_bounded_native_values() {
