@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | English
 
-Convenient Window is a desktop utility for hot zones, window control, global mouse gestures, screenshots, and topmost-window control. Version 0.6.4 is the stable Windows x64 release baseline; macOS and Linux X11 platform boundaries remain in the codebase but are not release-verified.
+Convenient Window is a desktop utility for hot zones, window control, global mouse gestures, screenshots, and topmost-window control. Version 0.6.5 is the stable Windows x64 release; macOS and Linux X11 platform boundaries remain in the codebase but are not release-verified.
 
 **Turn screen edges and mouse gestures into faster window controls.**
 
@@ -23,30 +23,21 @@ Download the Windows installer or portable archive from the [latest stable relea
 
 Release assets are currently unsigned. Windows may show an unknown-publisher or Microsoft Defender SmartScreen warning. Checksums and an artifact manifest are included with each release so the downloaded files can be verified.
 
-## 0.6.4 Stable Release
+## 0.6.5 Stable Release
 
-The development source integrates PRs [#21](https://github.com/ximizhou/convenient_window_free/pull/21), [#22](https://github.com/ximizhou/convenient_window_free/pull/22), [#23](https://github.com/ximizhou/convenient_window_free/pull/23), [#24](https://github.com/ximizhou/convenient_window_free/pull/24), [#25](https://github.com/ximizhou/convenient_window_free/pull/25), and [#26](https://github.com/ximizhou/convenient_window_free/pull/26) on the complete 0.6.3 baseline. The [0.6.4 release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.4) was promoted to stable on October 11, 2026 without rebuilding or replacing its assets; 0.6.3 stable assets remain immutable. Development source is now 0.6.5; its first task improves window motion. Stable downloads remain 0.6.4.
+The Windows x64 [0.6.5 release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.5) was promoted on October 13, 2026 after user acceptance. Its installer, portable archive, manifest and checksums are unchanged from the accepted candidate. Previous stable assets remain available.
 
-- Pins follow both their window position and stacking order without covering unrelated higher windows.
-- Pinned screenshots start at original pixel size. `ocr.pinOffset` defaults to true (16 px down/right); turning it off covers the captured area. Large or edge-adjacent images may extend beyond the screen instead of being automatically resized.
-- Number inputs preserve incomplete drafts until blur/Enter, and monitor-specific hot-zone edits wait for real display identities.
-- Early helper shutdown signals remain queued for the original engine subscription.
-- Windows administrator mode is selected under Settings (top-right gear) and elevates only the helper for the current session; configured commands remain in the ordinary-permission host. Failed state queries display unknown rather than a cached permission label.
-- The separate Windows **Request administrator access at login** preference is off by default. Enabling it also enables start at login, but saving it does not elevate the running helper. Settings and the tray share the startup control; Task Manager disabling retains the registered administrator argument for re-enabling, and disabling startup in the app removes only entries owned by the current executable.
+- Customize hide/restore timing and fix windows failing to tuck away after duration changes or desktop clicks.
+- Keep qualified side-edge blue lines visible during paused drags. Near the top, release after the growing line fills to tuck the window away; early release preserves native Snap.
+- Reduce redundant anywhere-move/resize updates and provide an adjustable update-rate limit.
+- Isolate ordinary shortcuts during native capture, preserve displayed bindings across region changes, and fix corner-click maximize/minimize targets.
+- Refresh settings surfaces and spacing, place common choices before numeric tuning, and fix clipped settings after disabling animation or focusing switches.
 
-Only a desktop process launched with both `--autostart --request-admin` attempts helper elevation on its first helper start. Foreground launches and automatic helper recovery do not request UAC. Cancelling authorization falls back to an ordinary helper; an unconfirmed launch does not fall back or repeat UAC. The desktop interface and configured commands stay at ordinary permissions, and owned helpers use the desktop exit-cleanup boundary. No scheduled task is created. See the [first-stage login-request checklist](docs/testing.md#login-administrator-request-first-stage-manual-acceptance); real-user UAC, actual login, upgrade/uninstall and Windows 10 acceptance are not claimed.
+Animation defaults to 160 ms, with 160/260/400 presets and custom 80–800 ms. The top-edge distance defaults to 48 px and hold duration to 600 ms. The drag-rate limit defaults to 120 Hz, with 60/120/240 presets and custom 30–240 Hz. See [implementation](docs/architecture.md#window-motion-065), [release notes](docs/release-notes/0.6.5.md), and [acceptance scope](docs/testing.md#065-online-acceptance). User acceptance does not certify every UAC, monitor, DPI or host-shortcut environment.
 
-Administrator mode does not support protected processes. Host adapters require their own runtime acceptance. Do not run competing hosts on the fixed helper port `56873`. See [candidate notes](docs/release-notes/0.6.4.md), [manual tests](docs/testing.md#064-local-candidate-acceptance), and [local packaging](docs/release.md#develop-acceptance). Automated results and artifact identities must be recorded for the actual candidate; UAC, multi-monitor/DPI, and taskbar recovery still require real-machine checks.
+Independent regions may reuse an output combination. Capture cancels on outside interaction, focus loss or teardown; native isolation needs the matching 0.6.5 helper. Secure combinations such as Ctrl+Alt+Delete are unsupported.
 
-## 0.6.5 Online Acceptance
-
-The Windows x64 [0.6.5 pre-release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.5) is the second-stage candidate once publication completes. Use its installer or portable archive and follow the [acceptance checklist](docs/testing.md#065-online-acceptance). The latest stable download remains 0.6.4 until this candidate is accepted and promoted.
-
-Development settings add animation duration (default 160 ms; presets 160/260/400 and custom 80–800), an independent top-edge distance (48 px) and hold duration (600 ms), and a drag update-rate limit (default 120 Hz; presets 60/120/240, custom 30–240). Existing switches and side/bottom triggers retain their settings.
-
-Qualified side-edge blue lines stay visible during a paused drag. Near the top, the line grows from the center; release after it fills to tuck the window away. Early release leaves native Snap behavior. Drag processing merges unchanged positions and counts processing time toward the update budget. See [implementation](docs/architecture.md#window-motion-065) and [acceptance](docs/testing.md#065-online-acceptance). These changes remain a testing candidate until promotion.
-
-Development also fixes native shortcut capture isolation, stale shortcut displays after region switches, and lost targets for corner-click maximize/minimize. Independent regions may reuse an output combination. Capture cancels on outside interaction, focus loss or teardown; older helpers retain browser fallback. Native isolation requires the new 0.6.5 helper and still needs actual host acceptance.
+Run one host at a time. Keep the desktop interface at ordinary permissions; Settings can elevate only the helper for the current session. The separate login administrator request is off by default, uses explicit UAC, and creates no scheduled task. Protected processes are unsupported. Permission and lifecycle details are in [architecture](docs/architecture.md#optional-administrator-helper-on-windows); inherited 0.6.4 changes are in its [release notes](docs/release-notes/0.6.4.md).
 
 ## Features
 
@@ -115,7 +106,7 @@ See [SECURITY.md](SECURITY.md) to report a vulnerability privately.
 - macOS (x64 and arm64) has a native helper boundary for global input, accessibility window control, monitor discovery, and screen capture. Accessibility and Screen Recording permissions are required. OCR, edge hiding, and arbitrary-window topmost are explicitly unavailable.
 - Linux x64 under X11 has native helper support for global input, window control, monitor discovery, screen capture, and EWMH topmost. OCR and edge hiding are explicitly unavailable.
 - Volume uses Windows/macOS Core Audio and `pactl` on Linux, including PipeWire with its PulseAudio service. Volume and brightness share a passive desktop indicator with device readback, mute state, and errors. See [adjustment feedback](docs/architecture.md#adjustment-feedback). The Windows path is release-accepted; the macOS and Linux audio backends and the indicator placement there are implemented but not yet verified on real hardware.
-- The desktop indicator is built into the standalone app; the uTools plugin reports the same state as status text instead.
+- The standalone app includes the passive indicator. Host integrations can render the same feedback and retain status text when their overlay is unavailable.
 - Linux Wayland is detected and reports unavailable capabilities; the helper does not pretend to provide global input or arbitrary-window control there.
 - macOS and Linux release assets remain unverified until native runner and real-machine smoke evidence is recorded.
 - The installer and executable are not currently code-signed.
@@ -156,11 +147,11 @@ Build the Svelte frontend, Rust helper sidecar, Tauri application, per-user NSIS
 npm run desktop:build
 ```
 
-For the 0.6.4 local candidate, preserve existing 0.6.3 outputs with `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -ArtifactsDir artifacts/0.6.4`. The path must stay inside this repository's `artifacts/` directory. The expected installer is `artifacts/0.6.4/convenient-window-0.6.4-windows-x64-setup.exe`; a path alone is not build evidence. Use explicit paths for the matching audit/runtime/install gates in [Testing](docs/testing.md#064-local-candidate-acceptance), because the default npm smoke commands below still target root `artifacts/`.
+Use `scripts/build-desktop.ps1 -ArtifactsDir artifacts/<candidate>` to preserve existing outputs. The path must stay inside this repository's `artifacts/` directory. Use explicit paths for the matching audit/runtime/install gates in [Testing](docs/testing.md#local-gates); the default npm smoke commands below target root `artifacts/`. A path alone is not build evidence.
 
 Run the packaged lifecycle and artifact checks:
 
-Installer automation requires an isolated account/CI with no existing product installation. Keep an installed 0.6.3 intact during local candidate preparation; give the setup to the user for actual installation/upgrade acceptance instead of automatically replacing or uninstalling it.
+Installer automation requires an isolated account/CI with no existing product installation. Preserve existing user installations during local preparation; give the setup to the user for actual installation/upgrade acceptance.
 
 ```powershell
 npm run desktop:runtime-smoke

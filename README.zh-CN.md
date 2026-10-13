@@ -2,7 +2,7 @@
 
 简体中文 | [English](README.md)
 
-便捷窗口是一款跨平台桌面增强工具，提供触发角、窗口控制、全局鼠标手势和截图贴图。当前 Windows x64 稳定基线为 0.6.4。Windows 保留完整能力，macOS 与 Linux X11 先提供 P0 原生边界，Wayland 只做能力探测和明确降级。
+便捷窗口是一款跨平台桌面增强工具，提供触发角、窗口控制、全局鼠标手势和截图贴图。当前 Windows x64 正式版为 0.6.5。Windows 保留完整能力，macOS 与 Linux X11 先提供 P0 原生边界，Wayland 只做能力探测和明确降级。
 
 **把屏幕边缘和鼠标手势变成更快的窗口操作。**
 
@@ -23,27 +23,21 @@
 
 当前发布文件尚未进行代码签名，Windows 可能显示“未知发布者”或 Microsoft Defender SmartScreen 提示。每个 Release 都提供校验和与产物清单，可用于核对下载文件。
 
-## 0.6.4 稳定版
+## 0.6.5 正式版
 
-开发源码在完整 0.6.3 基线上整合 PR [#21](https://github.com/ximizhou/convenient_window_free/pull/21)、[#22](https://github.com/ximizhou/convenient_window_free/pull/22)、[#23](https://github.com/ximizhou/convenient_window_free/pull/23)、[#24](https://github.com/ximizhou/convenient_window_free/pull/24) 、[#25](https://github.com/ximizhou/convenient_window_free/pull/25) 与 [#26](https://github.com/ximizhou/convenient_window_free/pull/26)。[0.6.4 正式版](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.4) 已于 2026-10-11 原地转为 stable，未重建或替换资产；0.6.3 stable 资产保持不可变。开发源码已进入0.6.5，首项任务为窗口运动体验；稳定下载仍为0.6.4。
+[0.6.5 正式版](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.5) 已于 2026-10-13 在用户转测通过后原地转正。安装包、便携版、清单与校验和均保持验收候选的文件身份，历史正式资产保留。
 
-- 图钉同时跟随窗口位置与层级，不被自己的静止窗口盖住，也不盖过其他更上层窗口。
-- 贴图保持原像素尺寸；`ocr.pinOffset` 默认 true，向右下偏移 16 px，关闭后原地覆盖。大图或靠边贴图可能超出屏幕，不再自动缩放。
-- 数字输入保留未完成草稿，失焦/Enter 才规范化；热区设置等真实显示器身份到达后再编辑。
-- helper 保留 engine 的原始退出订阅，不遗漏刚启动时收到的停止要求。
-- Windows 管理员模式只在当前会话提权 helper，配置命令仍由普通宿主执行；失败查询无法确认时显示 unknown，不沿用旧权限缓存。
+- 收起/展开动画时长可调，修复调速或点击桌面后不再自动收纳。
+- 侧边达标蓝线在拖动停住时保持稳定；顶部等进度线铺满后松手收纳，提前松手保留系统 Snap。
+- 任意位置移动/缩放减少重复更新，提供更新频率调节。
+- 隔离原生快捷键录制，修复切换区域后显示串值和角落点击最大化/最小化目标丢失。
+- 统一设置层次与间距，常用选项靠前、数字调节在底部，修复关闭动画或聚焦开关后的内容半屏。
 
-桌面另有默认关闭的“登录时请求管理员权限”，开启时同时启用自启，保存设置不替换当前 helper。仅 `--autostart --request-admin` 登录实例第一次启动 helper 时弹 UAC；取消回退普通模式，启动未确认则阻止替代启动或重复授权。设置与托盘同步自启，任务管理器禁用后重新启用保留请求参数；应用内关闭自启则清除请求，只删除当前可执行文件所属条目。不创建计划任务、不静默提权，普通前台启动和自动恢复不弹登录授权。管理员模式不支持保护进程；真实登录、UAC 与升级卸载仍待转测。宿主 adapter 需要各自 runtime 验收，两宿主不能同时占用固定 56873。详见 [候选说明](docs/release-notes/0.6.4.md)、[测试清单](docs/testing.md#064-local-candidate-acceptance) 与 [本地打包](docs/release.md#develop-acceptance)。自动结果和产物身份应按实际候选记录，真人 UAC、多屏/DPI 和任务栏恢复仍需实机检查。
+动画默认 160ms，可选 160/260/400 预设和 80–800ms 自定义；顶部距离默认 48px、停留 600ms。拖拽更新频率上限默认 120Hz，可选 60/120/240 或自定义 30–240Hz。参数与状态边界见 [架构](docs/architecture.md#window-motion-065)，变化见 [更新说明](docs/release-notes/0.6.5.md)，证据边界见 [验收清单](docs/testing.md#065-online-acceptance)。用户转测通过不代表所有 UAC、多屏/DPI 或宿主快捷键环境均逐项验收。
 
-## 0.6.5 线上转测候选
+不同区域可复用同一输出组合；录制遇到外部点击、失焦或退出会取消，原生隔离需要匹配的 0.6.5 助手。Ctrl+Alt+Delete 等安全组合不支持录制。
 
-0.6.5 进入第二次线上转测，发布完成后从 [0.6.5 Pre-release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.5) 下载安装包或 portable，并按 [验收清单](docs/testing.md#065-online-acceptance) 测试。用户确认并转正前，latest stable 仍为 0.6.4。
-
-动画默认仍为160ms，新增160/260/400预设和80–800ms自定义。左、右、下保留独立的距离/移出比例触发；顶部距离默认48px、停留600ms，蓝线从中心增长至铺满后松手收纳，提前松手保留系统Snap。拖动暂停时侧边蓝线不闪烁。
-
-任意位置移动/缩放默认更新频率上限120Hz，可选60/120/240或自定义30–240Hz；开始/松手唤醒、重复位置去重，处理耗时计入等待预算。参数与状态边界见[架构](docs/architecture.md#window-motion-065)，自动证据和真机未决项见[验收清单](docs/testing.md#065-online-acceptance)。真实跟手度仍待反馈。
-
-开发版同时修复快捷键录制隔离、切换区域后键帽显示串值和角落点击最大化/最小化目标丢失；不同区域可复用同一输出组合。录制遇到外部点击、失焦或退出会取消，旧助手保留浏览器回退。原生隔离须使用新0.6.5助手，实际宿主快捷键环境仍需本地转测。
+一次只运行一个宿主。桌面界面保持普通权限，需要时在设置中仅提升当前会话助手；登录管理员请求默认关闭，每次须显式 UAC，不创建计划任务，不支持保护进程。权限与生命周期见 [架构](docs/architecture.md#optional-administrator-helper-on-windows)，继承的 0.6.4 改动见其 [更新说明](docs/release-notes/0.6.4.md)。
 
 ## 主要功能
 
@@ -111,7 +105,7 @@
 - macOS x64/arm64：支持全局输入、辅助功能窗口控制、显示器和截图；需要辅助功能与屏幕录制权限。OCR、贴边隐藏和任意窗口置顶暂不支持，真实权限与窗口验收待 native runner/机器证据。
 - Linux x64 X11：支持全局输入、窗口控制、显示器、截图和 EWMH 置顶；OCR 和贴边隐藏暂不支持，真实窗口验收待 native runner/机器证据。
 - 音量使用 Windows/macOS Core Audio，Linux 使用 `pactl`，支持 PulseAudio 和提供 PulseAudio 服务的 PipeWire。音量、亮度共用桌面提示条，显示设备读回值、静音状态和错误，见[实现说明](docs/architecture.md#adjustment-feedback)。Windows 路径已通过发布验收；macOS 与 Linux 的音频后端及提示条位置**已接入、未真机验证**。
-- 提示条是独立桌面版的内置能力；uTools 插件以状态栏文字显示同一份结果。
+- 独立桌面内置提示条；宿主集成可显示同一份反馈，并在覆盖窗不可用时保留状态栏文字。
 - Linux Wayland：只报告能力并明确降级，不承诺全局输入或任意窗口控制。
 - macOS/Linux 发布资产在 native 验收前保持未验证，不会进入下载清单。
 - 当前安装包和可执行文件尚未进行代码签名。
@@ -152,11 +146,11 @@ npm run desktop:frontend
 npm run desktop:build
 ```
 
-0.6.4 本地候选使用 `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -ArtifactsDir artifacts/0.6.4`，保留已有 0.6.3 输出。路径必须位于本仓库 `artifacts/` 内；预定 setup 为 `artifacts/0.6.4/convenient-window-0.6.4-windows-x64-setup.exe`，仅有路径不代表已经构建。audit、runtime 和安装门须使用 [测试文档](docs/testing.md#064-local-candidate-acceptance) 的显式目录/EXE；下列默认 npm smoke 命令仍指向根 artifacts，不代表本轮候选。
+使用 `scripts/build-desktop.ps1 -ArtifactsDir artifacts/<candidate>` 保留既有输出，路径必须位于本仓库 `artifacts/` 内。audit、runtime 与安装门须按 [测试文档](docs/testing.md#local-gates) 显式指定同一目录/EXE；下列默认 npm smoke 命令指向根 `artifacts/`，仅有路径不代表已经构建。
 
 运行打包后的生命周期和产物检查：
 
-自动安装门仅用于无现有产品安装的隔离账户/CI。本地准备候选时保留已安装的 0.6.3，不自动覆盖/卸载；最终 setup 交用户做实际安装/升级验收。
+自动安装门仅用于无现有产品安装的隔离账户/CI。本地准备时保留用户既有安装，最终 setup 交用户做实际安装/升级验收。
 
 ```powershell
 npm run desktop:runtime-smoke

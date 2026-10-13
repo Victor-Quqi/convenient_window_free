@@ -1,6 +1,6 @@
 # Release Process
 
-Version 0.6.4 remains the stable Windows x64 baseline. Version 0.6.5 is being frozen for the second online-acceptance stage: build from clean `main`, publish the installer and portable archive as a Pre-release, then complete the [0.6.5 acceptance checklist](testing.md#065-online-acceptance). Stable downloads and accepted 0.6.4 artifacts retain their identity.
+Version 0.6.5 is the stable Windows x64 release. It was promoted in place on October 13, 2026 after user acceptance; the four assets and the tag retain their accepted identities, with build source `57c52d8c4d3beed12fdc2b9ae1ba3a91bfa9fa16`. Later documentation commits do not change this source identity. All stable releases remain immutable; see the [0.6.5 acceptance scope](testing.md#065-online-acceptance).
 
 The standalone desktop has two user acceptance points:
 
@@ -11,20 +11,20 @@ The standalone desktop has two user acceptance points:
 
 Desktop packaging is not repeated for every host-integration change. When desktop synchronization is requested, build the current package and relevant lifecycle gates, then hand off the exact installer with its version, source commit, size and SHA-256. Local acceptance is not release evidence and does not consume a tag.
 
-For the 0.6.4 candidate, preserve existing 0.6.3 local artifacts:
+For a new local candidate, select a separate output directory to preserve existing artifacts. This placeholder must be replaced with the actual candidate name:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -ArtifactsDir artifacts/0.6.4
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts/audit-desktop-artifacts.ps1 -ArtifactsDir artifacts/0.6.4
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-desktop.ps1 -ArtifactsDir artifacts/<candidate>
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/audit-desktop-artifacts.ps1 -ArtifactsDir artifacts/<candidate>
 ```
 
-`-ArtifactsDir` is restricted to this repository's `artifacts/` tree. The expected installer is `artifacts/0.6.4/convenient-window-0.6.4-windows-x64-setup.exe`; its manifest, checksums and portable output belong in the same selected directory. Runtime and install gates must explicitly select that output; default npm scripts still target root artifacts. See [candidate acceptance](testing.md#064-local-candidate-acceptance). An expected path or an older package's result does not prove a current build.
+`-ArtifactsDir` is restricted to this repository's `artifacts/` tree. The installer, manifest, checksums and portable output belong in the same selected directory. Runtime and install gates must explicitly select that output; default npm scripts target root artifacts. See [packaging tests](testing.md#local-gates). An expected path or an older package's result does not prove a current build.
 
-Development source and the desktop local helper policy use 0.6.5. An integration retains its immutable published 0.6.4 download allow-list while exercising the newly built local helper; that does not create 0.6.5 download assets. `scripts/version-audit.ps1 -DevelopmentOnly -HelperAssetsPath <published-helper-assets.json>` excludes only that explicitly supplied published manifest from source-version equality and labels it as such. This is a development source check, not release freezing or a hash/asset acceptance check. Without `-DevelopmentOnly`, the default strict version comparison is unchanged. Never pass the development switch to the final release-freeze gate or fabricate new URLs/hashes before publication.
+An integration may retain its existing immutable published download allow-list while exercising a newly built development helper. `scripts/version-audit.ps1 -DevelopmentOnly -HelperAssetsPath <published-helper-assets.json>` excludes only that explicitly supplied published manifest from source-version equality and labels it as such. This is a development source check, not release freezing or a hash/asset acceptance check. Without `-DevelopmentOnly`, the default strict version comparison is unchanged. Never pass the development switch to the final release-freeze gate or fabricate new URLs/hashes before publication.
 
-An existing 0.6.3 installation must remain intact during automatic local preparation: do not run NSIS replacement/uninstall against it. The user performs the first-stage installation/upgrade; automatic installer gates run only in isolated accounts/CI without existing product registrations or processes.
+Existing user installations must remain intact during automatic local preparation. The user performs installation/upgrade acceptance; automatic installer gates run only in isolated accounts/CI without existing product registrations or processes.
 
-0.6.3 stable assets remain immutable. This 0.6.4 local phase publishes nothing and does not advance the stable branch. The [draft notes](release-notes/0.6.4.md) describe the candidate; automated results and artifact identities must be added only after verification. UAC, mixed-DPI/multi-monitor behavior and taskbar restoration still require real-machine acceptance.
+Local preparation publishes nothing and does not advance the stable branch. Update release notes for the actual candidate; automated results and artifact identities must be recorded only after verification. UAC, mixed-DPI/multi-monitor behavior and taskbar restoration still require real-machine acceptance.
 
 ## Prepare Final Online Acceptance
 

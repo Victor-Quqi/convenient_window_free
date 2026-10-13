@@ -2,7 +2,7 @@
 
 ## 0.6.5 Online Acceptance
 
-Use the 0.6.5 Pre-release installer and portable archive from the same frozen candidate. Export existing settings first. Exit the other host normally before each run; the helper port is shared. Automatic tests do not replace the following interactive checks.
+The 0.6.5 candidate was accepted by the user and promoted in place on October 13, 2026. Its installer, portable archive, manifest and checksums retain their identity. The following list is the acceptance scope and a regression reference, not a claim that every hardware/UAC scenario has an individual record; no new build or extra acceptance round is required by promotion. Export existing settings before regression checks, and exit the other host normally; the helper port is shared.
 
 1. Upgrade from the existing stable installation, confirm version 0.6.5 and preserved settings, then verify restart, tray exit and uninstall. Test portable from a separate folder after closing the installed app.
 2. Compare 160/260/400 ms and custom 80/800 ms animation durations. After each change, restore from the edge, leave the window, click the desktop and repeat at least five times. Disable/re-enable animation and confirm complete settings and reachable final controls.
@@ -12,7 +12,7 @@ Use the 0.6.5 Pre-release installer and portable archive from the same frozen ca
 6. Test corner left-click maximize, restore/minimize and Show desktop against a separate target window. Compare hover and confirm the intended window receives the action.
 7. Verify language/theme/narrow layouts, master-switch cycles, UAC approval/cancellation, ordinary-permission commands, existing gestures/pins/OCR and taskbar restoration. Record system build, DPI, exact asset identity, steps and expected/actual behavior.
 
-Publication, interactive acceptance and stable promotion are separate states. Keep 0.6.4 assets immutable and do not silently replace an existing installation during automatic tests.
+Publication, interactive acceptance and stable promotion are separate states. All stable assets, including 0.6.5 and earlier versions, are immutable. Do not silently replace an existing installation during automatic tests. Development acceptance sections below preserve their original task scope and artifact state; they do not describe the current release status.
 
 ## Shortcut capture and corner-click development acceptance (0.6.5, 2026-10-13)
 
