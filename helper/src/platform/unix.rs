@@ -24,7 +24,7 @@ pub fn prepare_top_edge_drop(_handle: WindowHandle) -> Result<()> {
 }
 
 pub use input::{
-    active_gesture_points, cancel_window_drag_capture, configure_gesture_capture,
+    active_gesture, cancel_window_drag_capture, configure_gesture_capture,
     configure_window_drag_capture, input_state, install_mouse_hook, mouse_hook_is_healthy,
     send_trigger_click, stop_mouse_hook, take_gesture_capture, take_window_drag_capture,
 };

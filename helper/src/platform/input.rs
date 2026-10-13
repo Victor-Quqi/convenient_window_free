@@ -61,6 +61,7 @@ struct GestureInProgress {
     trigger: GestureTriggerButton,
     modifiers: u8,
     points: Vec<Point>,
+    travel: f32,
 }
 
 fn store() -> &'static Mutex<InputStore> {
@@ -179,12 +180,18 @@ pub fn take_gesture_capture() -> Option<GestureCapture> {
     store().lock().ok()?.completed_gestures.pop_front()
 }
 
-pub fn active_gesture_points() -> Vec<Point> {
-    store()
-        .lock()
-        .ok()
-        .and_then(|state| state.gesture.as_ref().map(|gesture| gesture.points.clone()))
-        .unwrap_or_default()
+pub fn active_gesture() -> Option<GestureCapture> {
+    let state = store().lock().ok()?;
+    let gesture = state
+        .gesture
+        .as_ref()
+        .filter(|gesture| !gesture.cancelled)?;
+    Some(GestureCapture {
+        trigger: gesture.trigger,
+        modifiers: gesture.modifiers,
+        points: gesture.points.clone(),
+        travel: gesture.travel,
+    })
 }
 
 pub fn mark_helper_injected_events(count: u8) {
@@ -244,7 +251,7 @@ fn handle_event(event: Event) {
                 }
                 if let Some(gesture) = state.gesture.as_mut() {
                     if !gesture.cancelled {
-                        append_gesture_point(&mut gesture.points, cursor, false);
+                        gesture.travel += append_gesture_point(&mut gesture.points, cursor, false);
                     }
                 }
             }
@@ -311,6 +318,7 @@ fn handle_button(state: &mut InputStore, button: Button, down: bool) {
                 trigger,
                 modifiers: state.modifiers,
                 points: vec![state.cursor],
+                travel: 0.0,
                 cancelled: false,
             });
         }
@@ -319,7 +327,7 @@ fn handle_button(state: &mut InputStore, button: Button, down: bool) {
             if gesture.cancelled {
                 return;
             }
-            append_gesture_point(&mut gesture.points, state.cursor, true);
+            gesture.travel += append_gesture_point(&mut gesture.points, state.cursor, true);
             if state.completed_gestures.len() >= 8 {
                 state.completed_gestures.pop_front();
             }
@@ -327,6 +335,7 @@ fn handle_button(state: &mut InputStore, button: Button, down: bool) {
                 trigger,
                 modifiers: gesture.modifiers,
                 points: gesture.points,
+                travel: gesture.travel,
             });
         } else {
             state.gesture = Some(gesture);

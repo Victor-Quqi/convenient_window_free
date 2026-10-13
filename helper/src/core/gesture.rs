@@ -4,25 +4,35 @@ use crate::platform::{Point, Rect};
 const SAMPLE_COUNT: usize = 64;
 
 /// Keep the whole stroke within a bounded buffer, including its release point.
-pub fn append_gesture_point(points: &mut Vec<Point>, point: Point, release: bool) {
-    if let Some(last) = points.last() {
-        let distance = distance_i32(*last, point);
-        if distance == 0.0 || (!release && distance < 2.0) {
-            return;
-        }
+///
+/// Returns the distance moved by an accepted sample. Compaction can shorten the
+/// stored path, so callers sum this to tell a click from a stroke.
+pub fn append_gesture_point(points: &mut Vec<Point>, point: Point, release: bool) -> f32 {
+    let distance = points.last().map_or(0.0, |last| distance_i32(*last, point));
+    if !points.is_empty() && (distance == 0.0 || (!release && distance < 2.0)) {
+        return 0.0;
     }
     if points.len() >= 512 {
-        let mut tolerance = 0.5;
-        loop {
-            let simplified = simplify_stroke(points, tolerance);
-            if simplified.len() <= 256 {
-                *points = simplified;
-                break;
-            }
-            tolerance *= 2.0;
-        }
+        compact_stroke(points, 256);
     }
     points.push(point);
+    distance
+}
+
+/// Simplify with the smallest tolerance, from half a pixel up, that leaves at most `limit` points.
+pub fn compact_stroke(points: &mut Vec<Point>, limit: usize) {
+    if points.len() <= limit {
+        return;
+    }
+    let mut tolerance = 0.5;
+    loop {
+        let simplified = simplify_stroke(points, tolerance);
+        if simplified.len() <= limit {
+            *points = simplified;
+            return;
+        }
+        tolerance *= 2.0;
+    }
 }
 
 fn simplify_stroke(points: &[Point], tolerance: f32) -> Vec<Point> {
@@ -35,18 +45,28 @@ fn simplify_stroke(points: &[Point], tolerance: f32) -> Vec<Point> {
         let b = points[end];
         let dx = b.x as f32 - a.x as f32;
         let dy = b.y as f32 - a.y as f32;
-        let length_squared = dx * dx + dy * dy;
+        let length = dx.hypot(dy);
         let mut farthest = None;
         let mut maximum = tolerance * tolerance;
+        // A stroke that doubles back along its chord stays close to it, so turning
+        // back is measured too; otherwise retraced segments would vanish.
+        let mut reached = 0.0f32;
         for (index, p) in points.iter().enumerate().take(end).skip(start + 1) {
             let px = p.x as f32 - a.x as f32;
             let py = p.y as f32 - a.y as f32;
-            let t = if length_squared > 0.0 {
-                ((px * dx + py * dy) / length_squared).clamp(0.0, 1.0)
+            let along = if length > 0.0 {
+                (px * dx + py * dy) / length
             } else {
                 0.0
             };
-            let distance = (px - t * dx).powi(2) + (py - t * dy).powi(2);
+            let t = if length > 0.0 {
+                (along / length).clamp(0.0, 1.0)
+            } else {
+                0.0
+            };
+            let back = (reached - along).max(0.0);
+            reached = reached.max(along);
+            let distance = ((px - t * dx).powi(2) + (py - t * dy).powi(2)).max(back * back);
             if distance > maximum {
                 maximum = distance;
                 farthest = Some(index);
@@ -409,6 +429,52 @@ mod tests {
         assert_eq!(points.len(), 1);
         append_gesture_point(&mut points, Point { x: 1, y: 0 }, true);
         assert_eq!(points.last(), Some(&Point { x: 1, y: 0 }));
+    }
+
+    #[test]
+    fn compaction_keeps_strokes_that_double_back_along_a_line() {
+        let config = MouseGestureConfig::default();
+        let mut stroke = vec![Point { x: 0, y: 0 }];
+        for (from, to) in [(0, 170), (170, 0), (0, 170), (170, 0), (0, 170), (170, 120)] {
+            let step = if to > from { 2 } else { -2 };
+            stroke.extend((1..=(to - from) / step).map(|i| Point {
+                x: 0,
+                y: from + i * step,
+            }));
+        }
+        // Then a clean L, long enough to compact the retraced start.
+        stroke.extend((61..=300).map(|i| Point { x: 0, y: 2 * i }));
+        stroke.extend((1..=260).map(|i| Point { x: 2 * i, y: 600 }));
+        let mut points = Vec::new();
+        for (index, &point) in stroke.iter().enumerate() {
+            append_gesture_point(&mut points, point, index + 1 == stroke.len());
+        }
+        assert!(points.len() < stroke.len());
+        assert!(points.contains(&Point { x: 0, y: 170 }));
+        // Compaction must not turn a scribble into the Alt+F4 gesture.
+        let sparse: Vec<_> = stroke.iter().step_by(4).copied().collect();
+        assert!(recognize(&sparse, &config).is_none());
+        assert!(recognize(&points, &config).is_none());
+    }
+
+    #[test]
+    fn small_round_trips_keep_their_travel_after_compaction() {
+        let mut points = Vec::new();
+        let mut travel = 0.0;
+        for i in 0..512 {
+            travel += append_gesture_point(
+                &mut points,
+                Point {
+                    x: 3 * (i % 2),
+                    y: 0,
+                },
+                false,
+            );
+        }
+        travel += append_gesture_point(&mut points, Point { x: 0, y: 0 }, true);
+        // The stored path collapses to two round trips; the hand moved 1.5k pixels.
+        assert!(path_length_pixels(&points) < MouseGestureConfig::default().min_distance as f32);
+        assert_eq!(travel, 1536.0);
     }
 
     #[test]

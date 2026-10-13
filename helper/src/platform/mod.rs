@@ -252,6 +252,8 @@ pub struct GestureCapture {
     pub trigger: crate::config::GestureTriggerButton,
     pub modifiers: u8,
     pub points: Vec<Point>,
+    /// Distance actually moved; `points` may be compacted to a shorter path.
+    pub travel: f32,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
