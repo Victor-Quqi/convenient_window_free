@@ -1,6 +1,6 @@
 # Release Process
 
-Version 0.6.4 is the stable Windows x64 baseline as of October 11, 2026; it was promoted without rebuilding or replacing assets. Development source and the local desktop helper policy are now 0.6.5 for the first window-motion task. Stable downloads, tags and accepted 0.6.4 artifacts keep their existing identity; no 0.6.5 installer or online assets are asserted.
+Version 0.6.4 remains the stable Windows x64 baseline. Version 0.6.5 is being frozen for the second online-acceptance stage: build from clean `main`, publish the installer and portable archive as a Pre-release, then complete the [0.6.5 acceptance checklist](testing.md#065-online-acceptance). Stable downloads and accepted 0.6.4 artifacts retain their identity.
 
 The standalone desktop has two user acceptance points:
 

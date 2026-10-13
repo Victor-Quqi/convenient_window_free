@@ -38,11 +38,13 @@ Only a desktop process launched with both `--autostart --request-admin` attempts
 
 Administrator mode does not support protected processes. Host adapters require their own runtime acceptance. Do not run competing hosts on the fixed helper port `56873`. See [candidate notes](docs/release-notes/0.6.4.md), [manual tests](docs/testing.md#064-local-candidate-acceptance), and [local packaging](docs/release.md#develop-acceptance). Automated results and artifact identities must be recorded for the actual candidate; UAC, multi-monitor/DPI, and taskbar recovery still require real-machine checks.
 
-## 0.6.5 Window Motion (Development)
+## 0.6.5 Online Acceptance
+
+The Windows x64 [0.6.5 pre-release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.5) is the second-stage candidate once publication completes. Use its installer or portable archive and follow the [acceptance checklist](docs/testing.md#065-online-acceptance). The latest stable download remains 0.6.4 until this candidate is accepted and promoted.
 
 Development settings add animation duration (default 160 ms; presets 160/260/400 and custom 80–800), an independent top-edge distance (48 px) and hold duration (600 ms), and a drag update-rate limit (default 120 Hz; presets 60/120/240, custom 30–240). Existing switches and side/bottom triggers retain their settings.
 
-Qualified side-edge blue lines stay visible during a paused drag. Near the top, the line grows from the center; release after it fills to tuck the window away. Early release leaves native Snap behavior. Drag processing merges unchanged positions and counts processing time toward the update budget. See [implementation](docs/architecture.md#window-motion-065) and [development acceptance](docs/testing.md#window-motion-development-acceptance-065). These changes are not yet a stable download or desktop installer.
+Qualified side-edge blue lines stay visible during a paused drag. Near the top, the line grows from the center; release after it fills to tuck the window away. Early release leaves native Snap behavior. Drag processing merges unchanged positions and counts processing time toward the update budget. See [implementation](docs/architecture.md#window-motion-065) and [acceptance](docs/testing.md#065-online-acceptance). These changes remain a testing candidate until promotion.
 
 Development also fixes native shortcut capture isolation, stale shortcut displays after region switches, and lost targets for corner-click maximize/minimize. Independent regions may reuse an output combination. Capture cancels on outside interaction, focus loss or teardown; older helpers retain browser fallback. Native isolation requires the new 0.6.5 helper and still needs actual host acceptance.
 

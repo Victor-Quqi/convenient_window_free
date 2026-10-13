@@ -1,5 +1,19 @@
 # Testing
 
+## 0.6.5 Online Acceptance
+
+Use the 0.6.5 Pre-release installer and portable archive from the same frozen candidate. Export existing settings first. Exit the other host normally before each run; the helper port is shared. Automatic tests do not replace the following interactive checks.
+
+1. Upgrade from the existing stable installation, confirm version 0.6.5 and preserved settings, then verify restart, tray exit and uninstall. Test portable from a separate folder after closing the installed app.
+2. Compare 160/260/400 ms and custom 80/800 ms animation durations. After each change, restore from the edge, leave the window, click the desktop and repeat at least five times. Disable/re-enable animation and confirm complete settings and reachable final controls.
+3. Hold a window at a side threshold, pause and move along the edge: the qualified blue line remains stable. Near the top, release before completion to retain Snap; wait until the line fills to tuck. Moving away or Escape cancels. Test a maximized window dragged down first.
+4. Compare anywhere-move/resize at 60/120/240 Hz in a real browser and editor. Check stationary updates, Escape, rapid release, negative-coordinate displays and mixed DPI.
+5. Record Alt+1, Ctrl+W, Alt+Tab and Win+Up, including an output already configured elsewhere. During capture, ordinary shortcut actions must not fire. Outside click, Escape or focus loss cancels. Ctrl+Alt+Delete is unsupported. Assign Alt+1 to the top edge and maximize to the top-left corner, switch contexts and restart: both display and behavior remain correct.
+6. Test corner left-click maximize, restore/minimize and Show desktop against a separate target window. Compare hover and confirm the intended window receives the action.
+7. Verify language/theme/narrow layouts, master-switch cycles, UAC approval/cancellation, ordinary-permission commands, existing gestures/pins/OCR and taskbar restoration. Record system build, DPI, exact asset identity, steps and expected/actual behavior.
+
+Publication, interactive acceptance and stable promotion are separate states. Keep 0.6.4 assets immutable and do not silently replace an existing installation during automatic tests.
+
 ## Shortcut capture and corner-click development acceptance (0.6.5, 2026-10-13)
 
 The desktop frontend passes 290 tests, zero-error/warning Svelte checks and production build. The paired frontend passes 362 tests; helper passes 270 tests with 3 existing ignored tests and format check. Dictionary parity includes the shared recorder/key parser. Public source audit passes. No new desktop installer/portable or stable release is produced.
