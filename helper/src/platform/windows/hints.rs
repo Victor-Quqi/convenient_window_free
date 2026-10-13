@@ -1,7 +1,5 @@
 use super::gesture_overlay::GestureHintManager;
-use super::input::{take_gesture_trail, GestureTrail};
-#[cfg(test)]
-use crate::platform::Point as AppPoint;
+use super::input::take_gesture_trail;
 use crate::platform::Rect;
 use std::sync::{mpsc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -37,8 +35,8 @@ struct HintRequestState {
     hotzone: Option<Rect>,
     edge_hide_preview: Option<Rect>,
     strips: Vec<Rect>,
-    gesture: Option<GestureTrail>,
-    gesture_label: Option<String>,
+    /// `Some` while the trail is shown, holding the matched action's name.
+    gesture: Option<Option<String>>,
     gesture_dirty: bool,
 }
 
@@ -121,33 +119,24 @@ pub fn hide_hotzone_hints() {
     }
 }
 
+/// Shows the active gesture; the hint thread takes its undrawn points from the input hook.
 pub fn update_gesture_overlay(label: Option<&str>) {
-    let Some(trail) = take_gesture_trail() else {
-        return;
-    };
     let Ok(mut state) = HINT_REQUESTS
         .get_or_init(|| Mutex::new(HintRequestState::default()))
         .lock()
     else {
         return;
     };
-    let label = label.map(str::to_string);
-    state.append_trail(trail, label);
-    // The mailbox retains every segment if the wake-up queue is full.
-    let _ = send_hint_command(HintCommand::UpdateGesture);
-}
-
-impl HintRequestState {
-    fn append_trail(&mut self, trail: GestureTrail, label: Option<String>) {
-        let same = self.gesture.as_ref().is_some_and(|old| old.id == trail.id);
-        self.gesture_dirty |= !same || !trail.points.is_empty() || self.gesture_label != label;
-        if same {
-            self.gesture.as_mut().unwrap().points.extend(trail.points);
-        } else {
-            self.gesture = Some(trail);
-        }
-        self.gesture_label = label;
+    if state
+        .gesture
+        .as_ref()
+        .is_none_or(|shown| shown.as_deref() != label)
+    {
+        state.gesture = Some(label.map(str::to_owned));
     }
+    state.gesture_dirty = true;
+    // A dropped wake-up loses nothing: the points stay queued in the hook.
+    let _ = send_hint_command(HintCommand::UpdateGesture);
 }
 
 pub fn hide_gesture_overlay() {
@@ -161,7 +150,6 @@ pub fn hide_gesture_overlay() {
         return;
     }
     state.gesture = None;
-    state.gesture_label = None;
     state.gesture_dirty = true;
     let _ = send_hint_command(HintCommand::UpdateGesture);
 }
@@ -172,7 +160,6 @@ pub fn hide_gesture_overlay_before_capture() {
         .lock()
     {
         state.gesture = None;
-        state.gesture_label = None;
         state.gesture_dirty = true;
     }
     let (reply, response) = mpsc::channel();
@@ -245,21 +232,16 @@ fn run_hint_thread(receiver: mpsc::Receiver<HintCommand>) {
         }
         let pending = HINT_REQUESTS.get().and_then(|state| {
             let mut state = state.lock().ok()?;
-            if !std::mem::take(&mut state.gesture_dirty) {
-                return None;
-            }
-            let trail = state.gesture.as_mut().map(|trail| GestureTrail {
-                id: trail.id,
-                points: std::mem::take(&mut trail.points),
-            });
-            Some((trail, state.gesture_label.clone()))
+            std::mem::take(&mut state.gesture_dirty).then(|| state.gesture.clone())
         });
-        if let Some((trail, label)) = pending {
-            if let Some(trail) = trail {
-                gesture_hint.update(trail.id, &trail.points, label.as_deref());
-            } else {
-                gesture_hint.hide();
+        match pending {
+            Some(Some(label)) => {
+                if let Some(trail) = take_gesture_trail() {
+                    gesture_hint.update(trail.id, &trail.points, label.as_deref());
+                }
             }
+            Some(None) => gesture_hint.hide(),
+            None => {}
         }
         ocr_toast.tick();
         pump_window_messages();
@@ -679,47 +661,6 @@ fn replace_if_changed<T: PartialEq>(current: &mut T, next: T) -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn gesture_mailbox_merges_pending_segments_and_replaces_previous_capture() {
-        let mut state = HintRequestState::default();
-        for x in 0..2000 {
-            state.append_trail(
-                GestureTrail {
-                    id: 1,
-                    points: vec![AppPoint { x, y: 10 }],
-                },
-                None,
-            );
-        }
-        assert!(state.gesture_dirty);
-        let trail = state.gesture.as_mut().unwrap();
-        let delivered = std::mem::take(&mut trail.points);
-        assert_eq!(delivered.len(), 2000);
-        for (x, point) in delivered.iter().enumerate() {
-            assert_eq!(point.x, x as i32);
-        }
-        state.gesture_dirty = false;
-        state.append_trail(
-            GestureTrail {
-                id: 1,
-                points: vec![],
-            },
-            None,
-        );
-        assert!(!state.gesture_dirty);
-        state.append_trail(
-            GestureTrail {
-                id: 2,
-                points: vec![AppPoint { x: 4, y: 8 }],
-            },
-            Some("复制".into()),
-        );
-        assert_eq!(
-            state.gesture.as_ref().unwrap().points,
-            vec![AppPoint { x: 4, y: 8 }]
-        );
-        assert!(state.gesture_dirty);
-    }
     use std::time::Duration;
     use windows::Win32::UI::WindowsAndMessaging::{DestroyWindow, GetWindowDisplayAffinity};
 

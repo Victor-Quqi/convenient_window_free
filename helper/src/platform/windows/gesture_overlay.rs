@@ -9,46 +9,31 @@ use windows::Win32::Graphics::Gdi::{
     DIB_RGB_COLORS, DT_END_ELLIPSIS, DT_NOPREFIX, DT_SINGLELINE, HBITMAP, HDC, HGDIOBJ, HMONITOR,
     MONITORINFO, TRANSPARENT,
 };
-use windows::Win32::UI::HiDpi::GetDpiForWindow;
+use windows::Win32::UI::HiDpi::{GetDpiForMonitor, MDT_EFFECTIVE_DPI};
 use windows::Win32::UI::WindowsAndMessaging::{
-    SetWindowPos, ShowWindow, UpdateLayeredWindow, SWP_NOACTIVATE, SWP_NOZORDER, SW_SHOWNA,
-    ULW_ALPHA,
+    ShowWindow, UpdateLayeredWindow, SW_SHOWNA, ULW_ALPHA,
 };
 
+/// Straight RGBA and radius in DIPs: a soft dark halo under a blue core.
+const HALO: ([u8; 4], f32) = ([20, 28, 43, 48], 2.0);
+const CORE: ([u8; 4], f32) = ([80, 143, 235, 238], 1.25);
+
 pub(super) struct GestureHintManager {
-    windows: Vec<GestureLayer>,
+    layers: Vec<GestureLayer>,
     text_cache: Option<(String, u32, i32, TextMask)>,
     gesture_id: Option<u64>,
     last: Option<Point>,
-}
-
-struct GestureLayer {
-    window: HintWindow,
-    bounds: Rect,
-    dpi: u32,
-    dib: Option<Dib>,
-    stroke: Option<StrokeSurface>,
-    badge: Option<Rect>,
-    presented: bool,
-}
-
-impl GestureLayer {
-    fn reset(&mut self) {
-        self.window.hide();
-        self.dib = None;
-        self.stroke = None;
-        self.badge = None;
-        self.presented = false;
-    }
+    label: Option<String>,
 }
 
 impl GestureHintManager {
     pub(super) fn new() -> Self {
         Self {
-            windows: Vec::new(),
+            layers: Vec::new(),
             text_cache: None,
             gesture_id: None,
             last: None,
+            label: None,
         }
     }
 
@@ -57,136 +42,334 @@ impl GestureHintManager {
             self.hide();
             self.gesture_id = Some(id);
         }
-        let previous = self.last;
-        let Some(cursor) = points.last().copied().or(previous) else {
+        let label = label.filter(|label| !label.trim().is_empty());
+        if points.is_empty() && self.label.as_deref() == label {
+            return;
+        }
+        self.label = label.map(str::to_owned);
+        // The last drawn point joins the new segments to the stroke.
+        let path: Vec<_> = self
+            .last
+            .into_iter()
+            .chain(points.iter().copied())
+            .collect();
+        let Some(&cursor) = path.last() else {
             return;
         };
         self.last = Some(cursor);
-        let mut monitors = Vec::<(Rect, Rect)>::new();
-        unsafe {
-            let _ = EnumDisplayMonitors(
-                HDC::default(),
-                None,
-                Some(collect_monitor),
-                LPARAM((&mut monitors as *mut Vec<(Rect, Rect)>) as isize),
-            );
+        let screens = screens();
+        let badge = label
+            .zip(screens.iter().find(|screen| screen.bounds.contains(cursor)))
+            .and_then(|(label, screen)| {
+                let text = cached_text(&mut self.text_cache, label, screen)?;
+                Some((text, badge_rect(cursor, text, screen.work, screen.dpi)))
+            });
+        let count = self.layers.len().max(screens.len());
+        self.layers.resize_with(count, GestureLayer::new);
+        for (layer, screen) in self.layers.iter_mut().zip(&screens) {
+            layer.draw(screen, &path, badge);
         }
-        for (index, (bounds, work)) in monitors.iter().copied().enumerate() {
-            if index == self.windows.len() {
-                self.windows.push(GestureLayer {
-                    window: HintWindow::create(),
-                    bounds: Rect {
-                        left: 0,
-                        top: 0,
-                        right: 0,
-                        bottom: 0,
-                    },
-                    dpi: 96,
-                    dib: None,
-                    stroke: None,
-                    badge: None,
-                    presented: false,
-                });
-            }
-            let layer = &mut self.windows[index];
-            let hwnd = HWND(layer.window.hwnd as *mut core::ffi::c_void);
-            if layer.bounds != bounds {
-                layer.reset();
-                unsafe {
-                    let _ = SetWindowPos(
-                        hwnd,
-                        HWND::default(),
-                        bounds.left,
-                        bounds.top,
-                        1,
-                        1,
-                        SWP_NOACTIVATE | SWP_NOZORDER,
-                    );
-                }
-                layer.bounds = bounds;
-            }
-            let dpi = unsafe { GetDpiForWindow(hwnd).max(96) };
-            if layer.dpi != dpi {
-                layer.reset();
-                layer.dpi = dpi;
-            }
-            let label = label.filter(|s| bounds.contains(cursor) && !s.trim().is_empty());
-            let text = if let Some(label) = label {
-                if !self
-                    .text_cache
-                    .as_ref()
-                    .is_some_and(|(name, scale, width, _)| {
-                        name == label && *scale == dpi && *width == work.width()
-                    })
-                {
-                    self.text_cache = text_mask(label, dpi, work.width())
-                        .map(|mask| (label.to_owned(), dpi, work.width(), mask));
-                }
-                self.text_cache.as_ref().map(|(_, _, _, mask)| mask)
-            } else {
-                None
-            };
-            let badge = text.map(|text| badge_rect(cursor, text, work, dpi));
-            if layer.stroke.is_none() {
-                let margin = dip(3.0, dpi).ceil() as i32;
-                let touches = previous.iter().chain(points).any(|p| {
-                    p.x >= bounds.left - margin
-                        && p.x < bounds.right + margin
-                        && p.y >= bounds.top - margin
-                        && p.y < bounds.bottom + margin
-                });
-                // A segment can cross a monitor even when both endpoints are outside it.
-                let crosses = previous
-                    .into_iter()
-                    .chain(points.iter().copied())
-                    .collect::<Vec<_>>()
-                    .windows(2)
-                    .any(|pair| {
-                        segment_bounds(pair[0], pair[1], margin)
-                            .and_then(|r| intersect(r, bounds))
-                            .is_some()
-                    });
-                if !touches && !crosses && badge.is_none() {
-                    continue;
-                }
-                layer.stroke = Some(StrokeSurface::new(bounds));
-                layer.dib = Dib::new(bounds.width(), bounds.height());
-            }
-            let Some(dib) = layer.dib.as_mut() else {
-                continue;
-            };
-            let stroke = layer.stroke.as_mut().unwrap();
-            let mut dirty = stroke.append(previous, points, dpi);
-            let pixels = dib.pixels();
-            for &offset in &stroke.changed {
-                pixels[offset * 4..offset * 4 + 4]
-                    .copy_from_slice(&stroke.pixels[offset * 4..offset * 4 + 4]);
-            }
-            if let Some(old) = layer.badge {
-                copy_rect(pixels, &stroke.pixels, bounds, old);
-                dirty = union(dirty, Some(old));
-            }
-            if let (Some(text), Some(badge)) = (text, badge) {
-                paint_badge(pixels, bounds, text, badge, dpi);
-                dirty = union(dirty, intersect(badge, bounds));
-            }
-            layer.badge = badge;
-            if dirty.is_some() {
-                layer.presented = present(layer.window, dib, bounds, layer.presented);
-            }
-        }
-        for layer in self.windows.iter_mut().skip(monitors.len()) {
+        for layer in self.layers.iter_mut().skip(screens.len()) {
             layer.reset();
         }
     }
 
     pub(super) fn hide(&mut self) {
-        for layer in &mut self.windows {
+        for layer in &mut self.layers {
             layer.reset();
         }
         self.gesture_id = None;
         self.last = None;
+        self.label = None;
     }
+}
+
+fn cached_text<'a>(
+    cache: &'a mut Option<(String, u32, i32, TextMask)>,
+    label: &str,
+    screen: &Screen,
+) -> Option<&'a TextMask> {
+    let width = screen.work.width();
+    if !cache.as_ref().is_some_and(|(name, dpi, cached_width, _)| {
+        name == label && *dpi == screen.dpi && *cached_width == width
+    }) {
+        *cache = text_mask(label, screen.dpi, width)
+            .map(|mask| (label.to_owned(), screen.dpi, width, mask));
+    }
+    cache.as_ref().map(|(.., mask)| mask)
+}
+
+/// One click-through window per monitor, presenting that monitor's surface.
+struct GestureLayer {
+    window: HintWindow,
+    surface: Option<Surface>,
+    presented: bool,
+}
+
+impl GestureLayer {
+    fn new() -> Self {
+        Self {
+            window: HintWindow::create(),
+            surface: None,
+            presented: false,
+        }
+    }
+
+    fn draw(&mut self, screen: &Screen, path: &[Point], badge: Option<(&TextMask, Rect)>) {
+        if self
+            .surface
+            .as_ref()
+            .is_some_and(|surface| surface.monitor != screen.bounds || surface.dpi != screen.dpi)
+        {
+            self.reset();
+        }
+        let surface = self
+            .surface
+            .get_or_insert_with(|| Surface::new(screen.bounds, screen.dpi));
+        if surface.draw(path, badge) {
+            if let Some(canvas) = &surface.canvas {
+                self.presented = present(self.window, &canvas.dib, canvas.rect, self.presented);
+            }
+        }
+    }
+
+    fn reset(&mut self) {
+        self.window.hide();
+        self.surface = None;
+        self.presented = false;
+    }
+}
+
+/// What one monitor shows of the current stroke.
+struct Surface {
+    monitor: Rect,
+    dpi: u32,
+    pen: Pen,
+    canvas: Option<Canvas>,
+    badge: Option<Rect>,
+}
+
+impl Surface {
+    fn new(monitor: Rect, dpi: u32) -> Self {
+        Self {
+            monitor,
+            dpi,
+            pen: Pen::new(dpi),
+            canvas: None,
+            badge: None,
+        }
+    }
+
+    /// Draws new segments and moves the badge; returns whether any pixel changed.
+    fn draw(&mut self, path: &[Point], badge: Option<(&TextMask, Rect)>) -> bool {
+        let badge = badge.filter(|(_, rect)| intersect(*rect, self.monitor).is_some());
+        let reach = self.pen.reach.ceil() as i32;
+        let needed = path
+            .windows(2)
+            .map(|pair| segment_bounds(pair[0], pair[1], reach))
+            .chain(badge.map(|(_, rect)| rect))
+            .filter_map(|rect| intersect(rect, self.monitor))
+            .fold(None, |all, rect| union(all, Some(rect)));
+        if let Some(needed) = needed {
+            self.reserve(needed);
+        }
+        let Some(canvas) = self.canvas.as_mut() else {
+            return false;
+        };
+        let mut changed = false;
+        if let Some(old) = self.badge.take() {
+            canvas.repaint(&self.pen, old);
+            changed = true;
+        }
+        for pair in path.windows(2) {
+            changed |= canvas.stroke(&self.pen, pair[0], pair[1]);
+        }
+        if let Some((text, rect)) = badge {
+            paint_badge(canvas.dib.pixels(), canvas.rect, text, rect, self.dpi);
+            self.badge = Some(rect);
+            changed = true;
+        }
+        changed
+    }
+
+    /// Grows the canvas over `needed` with headroom, so a stroke that keeps extending
+    /// reallocates only a logarithmic number of times; it never outgrows the monitor.
+    fn reserve(&mut self, needed: Rect) {
+        let current = self.canvas.as_ref().map(|canvas| canvas.rect);
+        if current.is_some_and(|rect| intersect(rect, needed) == Some(needed)) {
+            return;
+        }
+        let step = dip(128.0, self.dpi).round() as i32;
+        let wanted = match current {
+            None => needed.inflate(step),
+            Some(rect) => {
+                let x = step.max(rect.width() / 2);
+                let y = step.max(rect.height() / 2);
+                Rect {
+                    left: if needed.left < rect.left {
+                        needed.left - x
+                    } else {
+                        rect.left
+                    },
+                    top: if needed.top < rect.top {
+                        needed.top - y
+                    } else {
+                        rect.top
+                    },
+                    right: if needed.right > rect.right {
+                        needed.right + x
+                    } else {
+                        rect.right
+                    },
+                    bottom: if needed.bottom > rect.bottom {
+                        needed.bottom + y
+                    } else {
+                        rect.bottom
+                    },
+                }
+            }
+        };
+        let Some(mut canvas) = intersect(wanted, self.monitor).and_then(Canvas::new) else {
+            return;
+        };
+        if let Some(old) = &self.canvas {
+            canvas.adopt(&self.pen, old);
+        }
+        self.canvas = Some(canvas);
+    }
+}
+
+/// The stroke as a function of distance from its path. Overlapping segments keep the
+/// nearest one, so joints and retraced lines never darken.
+struct Pen {
+    reach: f32,
+    step: f32,
+    /// Premultiplied BGRA for each nearness.
+    colors: [[u8; 4]; 256],
+}
+
+impl Pen {
+    fn new(dpi: u32) -> Self {
+        // Coverage falls off linearly across one pixel around each edge.
+        let edge = |(_, radius): ([u8; 4], f32)| dip(radius, dpi) + 0.5;
+        let reach = edge(HALO);
+        let step = reach / 255.0;
+        let colors = std::array::from_fn(|nearness| {
+            let distance = (255 - nearness) as f32 * step;
+            let mut pixel = [0; 4];
+            for layer in [HALO, CORE] {
+                blend(
+                    &mut pixel,
+                    layer.0,
+                    (edge(layer) - distance).clamp(0.0, 1.0),
+                );
+            }
+            pixel
+        });
+        Self {
+            reach,
+            step,
+            colors,
+        }
+    }
+
+    /// 255 on the path, 0 at and beyond the halo's outer edge.
+    fn nearness(&self, distance: f32) -> u8 {
+        (255.0 - distance / self.step).round().max(0.0) as u8
+    }
+}
+
+/// The part of a monitor the stroke has reached: one nearness byte per pixel, plus
+/// the bitmap handed to the window.
+struct Canvas {
+    rect: Rect,
+    /// Zero where the stroke never came, so untouched pages are never committed.
+    nearness: Vec<u8>,
+    dib: Dib,
+}
+
+impl Canvas {
+    fn new(rect: Rect) -> Option<Self> {
+        Some(Self {
+            rect,
+            nearness: vec![0; rect.width() as usize * rect.height() as usize],
+            dib: Dib::new(rect.width(), rect.height())?,
+        })
+    }
+
+    /// Takes over the stroke drawn on a smaller canvas inside this one.
+    fn adopt(&mut self, pen: &Pen, old: &Canvas) {
+        let width = old.rect.width() as usize;
+        for (row, y) in (old.rect.top..old.rect.bottom).enumerate() {
+            let target = offset(self.rect, old.rect.left, y);
+            self.nearness[target..target + width]
+                .copy_from_slice(&old.nearness[row * width..(row + 1) * width]);
+        }
+        self.repaint(pen, old.rect);
+    }
+
+    fn repaint(&mut self, pen: &Pen, area: Rect) {
+        let Some(area) = intersect(area, self.rect) else {
+            return;
+        };
+        let pixels = self.dib.pixels();
+        for y in area.top..area.bottom {
+            let row = offset(self.rect, area.left, y);
+            for offset in row..row + area.width() as usize {
+                pixels[offset * 4..offset * 4 + 4]
+                    .copy_from_slice(&pen.colors[self.nearness[offset] as usize]);
+            }
+        }
+    }
+
+    /// Brings pixels near `a`–`b` closer to the stroke; returns whether any changed.
+    fn stroke(&mut self, pen: &Pen, a: Point, b: Point) -> bool {
+        let rect = self.rect;
+        let pixels = self.dib.pixels();
+        let dx = (b.x - a.x) as f32;
+        let dy = (b.y - a.y) as f32;
+        let length = dx * dx + dy * dy;
+        let reach = pen.reach;
+        let top = ((a.y.min(b.y) as f32 - reach).floor() as i32).max(rect.top);
+        let bottom = ((a.y.max(b.y) as f32 + reach).ceil() as i32).min(rect.bottom);
+        let mut changed = false;
+        for y in top..bottom {
+            let py = y as f32 + 0.5 - a.y as f32;
+            // Bound each scanline, avoiding a full rectangular scan for long diagonals.
+            let (t0, t1) = if dy.abs() > f32::EPSILON {
+                let u = (py - reach) / dy;
+                let v = (py + reach) / dy;
+                (u.min(v).clamp(0.0, 1.0), u.max(v).clamp(0.0, 1.0))
+            } else {
+                (0.0, 1.0)
+            };
+            let x0 = a.x as f32 + dx * t0;
+            let x1 = a.x as f32 + dx * t1;
+            let left = ((x0.min(x1) - reach).floor() as i32).max(rect.left);
+            let right = ((x0.max(x1) + reach).ceil() as i32).min(rect.right);
+            for x in left..right {
+                let px = x as f32 + 0.5 - a.x as f32;
+                let t = if length > 0.0 {
+                    ((px * dx + py * dy) / length).clamp(0.0, 1.0)
+                } else {
+                    0.0
+                };
+                let nearness = pen.nearness((px - t * dx).hypot(py - t * dy));
+                let offset = offset(rect, x, y);
+                if nearness > self.nearness[offset] {
+                    self.nearness[offset] = nearness;
+                    pixels[offset * 4..offset * 4 + 4]
+                        .copy_from_slice(&pen.colors[nearness as usize]);
+                    changed = true;
+                }
+            }
+        }
+        changed
+    }
+}
+
+fn offset(rect: Rect, x: i32, y: i32) -> usize {
+    (y - rect.top) as usize * rect.width() as usize + (x - rect.left) as usize
 }
 
 fn union(a: Option<Rect>, b: Option<Rect>) -> Option<Rect> {
@@ -201,91 +384,12 @@ fn union(a: Option<Rect>, b: Option<Rect>) -> Option<Rect> {
     }
 }
 
-fn segment_bounds(a: Point, b: Point, margin: i32) -> Option<Rect> {
-    Some(Rect {
+fn segment_bounds(a: Point, b: Point, margin: i32) -> Rect {
+    Rect {
         left: a.x.min(b.x) - margin,
         top: a.y.min(b.y) - margin,
         right: a.x.max(b.x) + margin + 1,
         bottom: a.y.max(b.y) + margin + 1,
-    })
-}
-
-struct StrokeSurface {
-    bounds: Rect,
-    coverage: [Vec<u8>; 2],
-    pixels: Vec<u8>,
-    changed: Vec<usize>,
-}
-
-impl StrokeSurface {
-    fn new(bounds: Rect) -> Self {
-        let count = bounds.width() as usize * bounds.height() as usize;
-        Self {
-            bounds,
-            coverage: [vec![0; count], vec![0; count]],
-            pixels: vec![0; count * 4],
-            changed: Vec::new(),
-        }
-    }
-
-    fn append(&mut self, previous: Option<Point>, points: &[Point], dpi: u32) -> Option<Rect> {
-        self.changed.clear();
-        let mut last = previous;
-        for &point in points {
-            if let Some(last) = last {
-                for (index, radius) in [2.0, 1.25].into_iter().enumerate() {
-                    raster_segment(
-                        &mut self.coverage[index],
-                        &mut self.changed,
-                        self.bounds,
-                        last,
-                        point,
-                        dip(radius, dpi),
-                    );
-                }
-            }
-            last = Some(point);
-        }
-        let width = self.bounds.width() as usize;
-        let mut dirty = None;
-        for &offset in &self.changed {
-            let pixel = &mut self.pixels[offset * 4..offset * 4 + 4];
-            pixel.fill(0);
-            blend(
-                pixel,
-                [20, 28, 43, 48],
-                self.coverage[0][offset] as f32 / 255.0,
-            );
-            blend(
-                pixel,
-                [80, 143, 235, 238],
-                self.coverage[1][offset] as f32 / 255.0,
-            );
-            let x = self.bounds.left + (offset % width) as i32;
-            let y = self.bounds.top + (offset / width) as i32;
-            dirty = union(
-                dirty,
-                Some(Rect {
-                    left: x,
-                    top: y,
-                    right: x + 1,
-                    bottom: y + 1,
-                }),
-            );
-        }
-        dirty
-    }
-}
-
-fn copy_rect(destination: &mut [u8], source: &[u8], bounds: Rect, rect: Rect) {
-    if let Some(rect) = intersect(bounds, rect) {
-        for y in rect.top..rect.bottom {
-            let offset = ((y - bounds.top) as usize * bounds.width() as usize
-                + (rect.left - bounds.left) as usize)
-                * 4;
-            let end = offset + rect.width() as usize * 4;
-            destination[offset..end].copy_from_slice(&source[offset..end]);
-        }
     }
 }
 
@@ -299,7 +403,26 @@ fn badge_rect(cursor: Point, text: &TextMask, work: Rect, dpi: u32) -> Rect {
     )
 }
 
-unsafe extern "system" fn collect_monitor(
+struct Screen {
+    bounds: Rect,
+    work: Rect,
+    dpi: u32,
+}
+
+fn screens() -> Vec<Screen> {
+    let mut screens = Vec::<Screen>::new();
+    unsafe {
+        let _ = EnumDisplayMonitors(
+            HDC::default(),
+            None,
+            Some(collect_screen),
+            LPARAM((&mut screens as *mut Vec<Screen>) as isize),
+        );
+    }
+    screens
+}
+
+unsafe extern "system" fn collect_screen(
     monitor: HMONITOR,
     _: HDC,
     _: *mut RECT,
@@ -316,16 +439,16 @@ unsafe extern "system" fn collect_monitor(
             right: r.right,
             bottom: r.bottom,
         };
-        let monitors = &mut *(data.0 as *mut Vec<(Rect, Rect)>);
-        monitors.push((convert(info.rcMonitor), convert(info.rcWork)));
+        let (mut dpi, mut dpi_y) = (96, 96);
+        let _ = GetDpiForMonitor(monitor, MDT_EFFECTIVE_DPI, &mut dpi, &mut dpi_y);
+        let screens = &mut *(data.0 as *mut Vec<Screen>);
+        screens.push(Screen {
+            bounds: convert(info.rcMonitor),
+            work: convert(info.rcWork),
+            dpi: dpi.max(96),
+        });
     }
     true.into()
-}
-
-#[cfg(test)]
-struct Frame {
-    rect: Rect,
-    pixels: Vec<u8>,
 }
 
 fn dip(value: f32, dpi: u32) -> f32 {
@@ -371,99 +494,6 @@ fn label_rect(cursor: Point, width: i32, height: i32, work: Rect, dpi: u32) -> R
     }
 }
 
-#[cfg(test)]
-fn render(
-    points: &[Point],
-    label: Option<&str>,
-    bounds: Rect,
-    work: Rect,
-    dpi: u32,
-) -> Option<Frame> {
-    let text = label
-        .filter(|s| !s.trim().is_empty())
-        .and_then(|s| text_mask(s, dpi, work.width()));
-    let mut stroke = StrokeSurface::new(bounds);
-    stroke.append(None, points, dpi);
-    if let Some(text) = text.as_ref() {
-        let badge = badge_rect(*points.last()?, text, work, dpi);
-        paint_badge(&mut stroke.pixels, bounds, text, badge, dpi);
-    }
-    Some(Frame {
-        rect: bounds,
-        pixels: stroke.pixels,
-    })
-}
-
-#[cfg(test)]
-fn render_with_text(
-    points: &[Point],
-    text: Option<&TextMask>,
-    bounds: Rect,
-    work: Rect,
-    dpi: u32,
-) -> Option<Frame> {
-    if points.len() < 2 {
-        return None;
-    }
-    let margin = dip(3.0, dpi).ceil() as i32;
-    let stroke = Rect {
-        left: points.iter().map(|p| p.x).min()? - margin,
-        top: points.iter().map(|p| p.y).min()? - margin,
-        right: points.iter().map(|p| p.x).max()? + margin + 1,
-        bottom: points.iter().map(|p| p.y).max()? + margin + 1,
-    };
-    let badge = text.as_ref().map(|text| {
-        let pad_x = dip(9.0, dpi).round() as i32;
-        let pad_y = dip(6.0, dpi).round() as i32;
-        label_rect(
-            *points.last().unwrap(),
-            text.width + 2 * pad_x,
-            text.height + 2 * pad_y,
-            work,
-            dpi,
-        )
-    });
-    let mut rect = intersect(stroke, bounds)?;
-    if let Some(badge) = badge {
-        rect = intersect(
-            Rect {
-                left: rect.left.min(badge.left),
-                top: rect.top.min(badge.top),
-                right: rect.right.max(badge.right),
-                bottom: rect.bottom.max(badge.bottom),
-            },
-            bounds,
-        )?;
-    }
-    let width = rect.width() as usize;
-    let height = rect.height() as usize;
-    let mut pixels = vec![0; width * height * 4];
-    // Coverage is combined before compositing, so joints never become darker.
-    for (radius, color) in [
-        (dip(2.0, dpi), [20, 28, 43, 48]),
-        (dip(1.25, dpi), [80, 143, 235, 238]),
-    ] {
-        let mut coverage = vec![0u8; width * height];
-        let mut touched = Vec::new();
-        for pair in points.windows(2) {
-            raster_segment(&mut coverage, &mut touched, rect, pair[0], pair[1], radius);
-        }
-        touched.sort_unstable();
-        touched.dedup();
-        for offset in touched {
-            blend(
-                &mut pixels[offset * 4..offset * 4 + 4],
-                color,
-                coverage[offset] as f32 / 255.0,
-            );
-        }
-    }
-    if let (Some(text), Some(badge)) = (text, badge) {
-        paint_badge(&mut pixels, rect, text, badge, dpi);
-    }
-    Some(Frame { rect, pixels })
-}
-
 fn paint_badge(pixels: &mut [u8], rect: Rect, text: &TextMask, badge: Rect, dpi: u32) {
     let width = rect.width() as usize;
     let radius = dip(6.0, dpi);
@@ -502,55 +532,6 @@ fn paint_badge(pixels: &mut [u8], rect: Rect, text: &TextMask, badge: Rect, dpi:
                 [248, 249, 251, 255],
                 coverage,
             );
-        }
-    }
-}
-
-fn raster_segment(
-    coverage: &mut [u8],
-    touched: &mut Vec<usize>,
-    rect: Rect,
-    a: Point,
-    b: Point,
-    radius: f32,
-) {
-    let dx = (b.x - a.x) as f32;
-    let dy = (b.y - a.y) as f32;
-    let length = dx * dx + dy * dy;
-    let extent = radius + 0.5;
-    let top = ((a.y.min(b.y) as f32 - extent).floor() as i32).max(rect.top);
-    let bottom = ((a.y.max(b.y) as f32 + extent).ceil() as i32).min(rect.bottom);
-    for y in top..bottom {
-        let py = y as f32 + 0.5;
-        // Bound each scanline, avoiding a full rectangular scan for long diagonals.
-        let (t0, t1) = if dy.abs() > f32::EPSILON {
-            let u = (py - extent - a.y as f32) / dy;
-            let v = (py + extent - a.y as f32) / dy;
-            (u.min(v).clamp(0.0, 1.0), u.max(v).clamp(0.0, 1.0))
-        } else {
-            (0.0, 1.0)
-        };
-        let x0 = a.x as f32 + dx * t0;
-        let x1 = a.x as f32 + dx * t1;
-        let left = ((x0.min(x1) - extent).floor() as i32).max(rect.left);
-        let right = ((x0.max(x1) + extent).ceil() as i32).min(rect.right);
-        for x in left..right {
-            let px = x as f32 + 0.5 - a.x as f32;
-            let py = py - a.y as f32;
-            let t = if length > 0.0 {
-                ((px * dx + py * dy) / length).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-            let ex = px - t * dx;
-            let ey = py - t * dy;
-            let distance = (ex * ex + ey * ey).sqrt();
-            let value = ((extent - distance).clamp(0.0, 1.0) * 255.0).round() as u8;
-            let offset = (y - rect.top) as usize * rect.width() as usize + (x - rect.left) as usize;
-            if value > coverage[offset] {
-                touched.push(offset);
-            }
-            coverage[offset] = coverage[offset].max(value);
         }
     }
 }
@@ -749,289 +730,229 @@ fn present(window: HintWindow, dib: &Dib, bounds: Rect, initialized: bool) -> bo
 mod tests {
     use super::*;
 
-    #[test]
-    #[ignore = "requires an interactive Windows desktop for screen pixel checks"]
-    fn gesture_native_trail_survives_message_pumps_and_updates() {
-        use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
-        use windows::Win32::UI::HiDpi::{
-            SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
-        };
-        use windows::Win32::UI::WindowsAndMessaging::{
-            DestroyWindow, DispatchMessageW, PeekMessageW, SetWindowDisplayAffinity,
-            TranslateMessage, MSG, PM_REMOVE, WDA_NONE,
-        };
-        let old_dpi =
-            unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
-        let mut hint = GestureHintManager::new();
-        let mut monitors = Vec::<(Rect, Rect)>::new();
-        unsafe {
-            let _ = EnumDisplayMonitors(
-                HDC::default(),
-                None,
-                Some(collect_monitor),
-                LPARAM((&mut monitors as *mut Vec<(Rect, Rect)>) as isize),
-            );
-        }
-        let bounds = monitors[0].0;
-        let x = bounds.left + 160;
-        let y = bounds.top + 120;
-        let mut samples = Vec::new();
-        for step in 0..6 {
-            let points = if step == 0 {
-                vec![Point { x, y }, Point { x, y: y + 40 }]
-            } else {
-                vec![Point {
-                    x,
-                    y: y + 40 + step * 40,
-                }]
-            };
-            hint.update(77, &points, None);
-            for layer in &hint.windows {
-                unsafe {
-                    SetWindowDisplayAffinity(HWND(layer.window.hwnd as *mut _), WDA_NONE).unwrap();
-                }
+    /// Screen-space pixel of a surface; transparent where it has no canvas.
+    fn pixel(surface: &mut Surface, x: i32, y: i32) -> [u8; 4] {
+        match surface.canvas.as_mut() {
+            Some(canvas) if canvas.rect.contains(Point { x, y }) => {
+                let offset = offset(canvas.rect, x, y) * 4;
+                canvas.dib.pixels()[offset..offset + 4].try_into().unwrap()
             }
-            let mut message = MSG::default();
-            unsafe {
-                while PeekMessageW(&mut message, HWND::default(), 0, 0, PM_REMOVE).as_bool() {
-                    let _ = TranslateMessage(&message);
-                    DispatchMessageW(&message);
-                }
-            }
-            std::thread::sleep(std::time::Duration::from_millis(40));
-            unsafe {
-                let dc = GetDC(HWND::default());
-                let old = GetPixel(dc, x, y + 20).0;
-                let new = GetPixel(dc, x, y + 30 + step * 40).0;
-                let _ = ReleaseDC(HWND::default(), dc);
-                samples.push((old, new));
-            }
-        }
-        hint.hide();
-        for layer in &hint.windows {
-            unsafe {
-                let _ = DestroyWindow(HWND(layer.window.hwnd as *mut _));
-            }
-        }
-        unsafe {
-            SetThreadDpiAwarenessContext(old_dpi);
-        }
-        for (step, (old, new)) in samples.into_iter().enumerate() {
-            let blue = |color: u32| ((color >> 16) & 255) > (color & 255) + 80;
-            assert!(
-                blue(old) && blue(new),
-                "frame {step}: old={old:06x}, new={new:06x}"
-            );
+            _ => [0; 4],
         }
     }
 
-    #[test]
-    fn gesture_incremental_batches_match_whole_stroke_and_keep_old_pixels() {
-        let bounds = Rect {
-            left: -640,
-            top: -400,
-            right: 0,
-            bottom: 80,
-        };
-        let points: Vec<_> = (0..1600)
+    /// Screen-space BGRA over `area`; transparent where the surface has no canvas.
+    fn snapshot(surface: &mut Surface, area: Rect) -> Vec<u8> {
+        let mut pixels = vec![0; area.width() as usize * area.height() as usize * 4];
+        if let Some(canvas) = surface.canvas.as_mut() {
+            if let Some(shared) = intersect(canvas.rect, area) {
+                let row = shared.width() as usize * 4;
+                for y in shared.top..shared.bottom {
+                    let from = offset(canvas.rect, shared.left, y) * 4;
+                    let to = offset(area, shared.left, y) * 4;
+                    pixels[to..to + row].copy_from_slice(&canvas.dib.pixels()[from..from + row]);
+                }
+            }
+        }
+        pixels
+    }
+
+    fn assert_same_pixels(actual: &mut Surface, expected: &mut Surface) {
+        let area = union(
+            actual.canvas.as_ref().map(|canvas| canvas.rect),
+            expected.canvas.as_ref().map(|canvas| canvas.rect),
+        )
+        .unwrap();
+        let (actual, expected) = (snapshot(actual, area), snapshot(expected, area));
+        if let Some(index) = actual.iter().zip(&expected).position(|(a, b)| a != b) {
+            let pixel = (index / 4) as i32;
+            let x = area.left + pixel % area.width();
+            let y = area.top + pixel / area.width();
+            panic!("pixel ({x}, {y}) differs");
+        }
+    }
+
+    fn single_pass(
+        monitor: Rect,
+        dpi: u32,
+        points: &[Point],
+        badge: Option<(&TextMask, Rect)>,
+    ) -> Surface {
+        let mut surface = Surface::new(monitor, dpi);
+        surface.draw(points, badge);
+        surface
+    }
+
+    fn uhd(left: i32, top: i32) -> Rect {
+        Rect {
+            left,
+            top,
+            right: left + 3840,
+            bottom: top + 2160,
+        }
+    }
+
+    fn wave(count: i32) -> Vec<Point> {
+        (0..count)
             .map(|i| Point {
-                x: -600 + (i % 550),
+                x: -600 + i % 550,
                 y: -200 + ((i as f32 * 0.05).sin() * 140.0) as i32,
             })
-            .collect();
+            .collect()
+    }
+
+    /// Draws like the hint thread does, returning how often the canvas was reallocated.
+    fn draw_in_batches(surface: &mut Surface, points: &[Point], batch: usize) -> usize {
+        let mut last = None;
+        let mut reallocations = 0;
+        for chunk in points.chunks(batch) {
+            let before = surface.canvas.as_ref().map(|canvas| canvas.rect);
+            let path: Vec<_> = last.into_iter().chain(chunk.iter().copied()).collect();
+            surface.draw(&path, None);
+            last = chunk.last().copied();
+            let after = surface.canvas.as_ref().map(|canvas| canvas.rect);
+            reallocations += usize::from(before.is_some() && before != after);
+        }
+        reallocations
+    }
+
+    #[test]
+    fn incremental_batches_match_a_single_pass_while_the_canvas_grows() {
+        let monitor = uhd(-1920, -1080);
+        let points = wave(1600);
         for dpi in [96, 144, 192] {
-            let mut stroke = StrokeSurface::new(bounds);
-            let mut last = None;
-            for batch in points.chunks(17) {
-                stroke.append(last, batch, dpi);
-                last = batch.last().copied();
-            }
-            let expected = render_with_text(&points, None, bounds, bounds, dpi).unwrap();
-            for y in bounds.top..bounds.bottom {
-                for x in bounds.left..bounds.right {
-                    let offset = ((y - bounds.top) * bounds.width() + x - bounds.left) as usize * 4;
-                    let value = if expected.rect.contains(Point { x, y }) {
-                        let source = ((y - expected.rect.top) * expected.rect.width() + x
-                            - expected.rect.left) as usize
-                            * 4;
-                        &expected.pixels[source..source + 4]
-                    } else {
-                        &[0; 4]
-                    };
-                    assert_eq!(&stroke.pixels[offset..offset + 4], value);
+            let mut incremental = Surface::new(monitor, dpi);
+            draw_in_batches(&mut incremental, &points, 17);
+            let mut expected = single_pass(monitor, dpi, &points, None);
+            assert_same_pixels(&mut incremental, &mut expected);
+            // A further segment touches only its own neighbourhood.
+            let before = incremental.canvas.as_ref().unwrap().nearness.clone();
+            let end = *points.last().unwrap();
+            let next = Point {
+                x: end.x + 10,
+                y: end.y + 10,
+            };
+            assert!(incremental.draw(&[end, next], None));
+            let near = segment_bounds(end, next, incremental.pen.reach.ceil() as i32);
+            let canvas = incremental.canvas.as_ref().unwrap();
+            for y in canvas.rect.top..canvas.rect.bottom {
+                for x in canvas.rect.left..canvas.rect.right {
+                    if !near.contains(Point { x, y }) {
+                        let offset = offset(canvas.rect, x, y);
+                        assert_eq!(canvas.nearness[offset], before[offset]);
+                    }
                 }
             }
-            let before = stroke.pixels.clone();
-            stroke.append(
-                Some(Point { x: -30, y: 40 }),
-                &[Point { x: -20, y: 50 }],
-                dpi,
-            );
-            assert!(stroke.changed.len() < 600);
-            let unchanged_rows = (30 - bounds.top) as usize * bounds.width() as usize * 4;
-            assert_eq!(&stroke.pixels[..unchanged_rows], &before[..unchanged_rows]);
-            assert!(stroke.append(last, &[], dpi).is_none());
+            assert!(!incremental.draw(&[next], None));
         }
     }
 
     #[test]
-    fn gesture_native_layers_are_click_through_and_hide_together() {
-        use windows::Win32::UI::WindowsAndMessaging::{
-            DestroyWindow, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, IsWindowVisible,
-            GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
-        };
-        let foreground = unsafe { GetForegroundWindow() };
-        let mut hint = GestureHintManager::new();
-        hint.update(
-            1,
-            &[Point { x: 80, y: 80 }, Point { x: 80, y: 180 }],
-            Some("粘贴"),
-        );
-        assert!(!hint.windows.is_empty());
-        assert_eq!(unsafe { GetForegroundWindow() }, foreground);
-        for layer in &hint.windows {
-            let flags =
-                unsafe { GetWindowLongPtrW(HWND(layer.window.hwnd as *mut _), GWL_EXSTYLE) } as u32;
-            assert_ne!(flags & WS_EX_TRANSPARENT.0, 0);
-            assert_ne!(flags & WS_EX_NOACTIVATE.0, 0);
-        }
-        let bounds = hint.windows[0].bounds;
-        let mut monitors = Vec::<(Rect, Rect)>::new();
-        unsafe {
-            let _ = EnumDisplayMonitors(
-                HDC::default(),
-                None,
-                Some(collect_monitor),
-                LPARAM((&mut monitors as *mut Vec<(Rect, Rect)>) as isize),
-            );
-        }
-        let work = monitors.iter().find(|(rect, _)| *rect == bounds).unwrap().1;
-        let mut points = vec![Point { x: 80, y: 80 }, Point { x: 80, y: 180 }];
-        for (x, y, label) in [
-            (180, 180, None),
-            (60, 180, Some("复制")),
-            (60, 60, Some("关闭窗口")),
-            (bounds.width() - 10, bounds.height() - 10, Some("粘贴")),
-            (220, 220, None),
-        ] {
-            points.push(Point {
-                x: bounds.left + x,
-                y: bounds.top + y,
-            });
-            hint.update(1, &points[points.len() - 1..], label);
-            let layer = &mut hint.windows[0];
-            assert!(layer.presented);
-            let mut actual = RECT::default();
-            unsafe { GetWindowRect(HWND(layer.window.hwnd as *mut _), &mut actual).unwrap() };
-            assert_eq!(
-                (actual.left, actual.top, actual.right, actual.bottom),
-                (bounds.left, bounds.top, bounds.right, bounds.bottom)
-            );
-            let expected = render(&points, label, bounds, work, layer.dpi).unwrap();
-            assert_eq!(
-                layer.dib.as_mut().unwrap().pixels(),
-                expected.pixels.as_slice()
-            );
-        }
-        hint.hide();
-        for layer in &hint.windows {
-            let hwnd = HWND(layer.window.hwnd as *mut _);
-            assert!(!unsafe { IsWindowVisible(hwnd).as_bool() });
-            unsafe {
-                let _ = DestroyWindow(hwnd);
-            }
-        }
-    }
-
-    #[test]
-    #[ignore = "manual release-mode rendering benchmark"]
-    fn gesture_large_stroke_render_budget() {
-        use std::time::Instant;
-        let bounds = Rect {
+    fn canvas_follows_the_stroke_instead_of_the_monitor() {
+        let monitor = Rect {
             left: 0,
             top: 0,
-            right: 3840,
-            bottom: 2160,
+            right: 7680,
+            bottom: 4320,
         };
-        let points: Vec<_> = (0..40_000)
+        // A typical gesture on an 8K monitor at 200%.
+        let points: Vec<_> = (0..=300)
+            .map(|i| Point {
+                x: 3000 + i,
+                y: 2000 + (i * i) / 450,
+            })
+            .collect();
+        let mut surface = Surface::new(monitor, 192);
+        draw_in_batches(&mut surface, &points, 16);
+        let rect = surface.canvas.as_ref().unwrap().rect;
+        let bytes = rect.width() as usize * rect.height() as usize * 5;
+        assert!(bytes < 6 << 20, "{rect:?} uses {bytes} bytes");
+
+        // A spiral over a whole 4K monitor stays inside it after few reallocations.
+        let monitor = uhd(-3840, 0);
+        let sweep: Vec<_> = (0..2400)
             .map(|i| {
-                let row = i / 1800;
-                let x = if row % 2 == 0 {
-                    i % 1800
-                } else {
-                    1799 - i % 1800
-                };
+                let angle = i as f32 * 0.02;
+                let radius = i as f32 * 0.5;
                 Point {
-                    x: 60 + 2 * x,
-                    y: 60 + row * 80,
+                    x: -1920 + (angle.cos() * radius * 1.7) as i32,
+                    y: 1080 + (angle.sin() * radius) as i32,
                 }
             })
             .collect();
-        let mut stroke = StrokeSurface::new(bounds);
-        let mut previous = None;
-        let mut times = Vec::new();
-        for batch in points.chunks(16) {
-            let start = Instant::now();
-            std::hint::black_box(stroke.append(previous, batch, 192));
-            times.push(start.elapsed().as_secs_f64() * 1000.0);
-            previous = batch.last().copied();
-        }
-        let mean = |slice: &[f64]| slice.iter().sum::<f64>() / slice.len() as f64;
-        eprintln!("4K incremental CPU, 16 new points/frame: first 100 {:.3} ms; last 100 {:.3} ms; total 40000 points",
-            mean(&times[..100]), mean(&times[times.len()-100..]));
-        let mut old = Vec::new();
-        for &point in &points {
-            crate::core::gesture::append_gesture_point(&mut old, point, false);
-        }
-        let start = Instant::now();
-        for _ in 0..5 {
-            std::hint::black_box(render_with_text(&old, None, bounds, bounds, 192).unwrap());
-        }
-        eprintln!(
-            "4K full historical redraw CPU: {:.3} ms/frame, {} recognition points",
-            start.elapsed().as_secs_f64() * 200.0,
-            old.len()
-        );
+        let mut surface = Surface::new(monitor, 192);
+        let reallocations = draw_in_batches(&mut surface, &sweep, 16);
+        let canvas = surface.canvas.as_ref().unwrap().rect;
+        assert_eq!(intersect(canvas, monitor), Some(canvas));
+        assert!(reallocations <= 12, "{reallocations} reallocations");
+        assert_same_pixels(&mut surface, &mut single_pass(monitor, 192, &sweep, None));
+    }
 
-        let mut hint = GestureHintManager::new();
-        let mut monitors = Vec::<(Rect, Rect)>::new();
-        unsafe {
-            let _ = EnumDisplayMonitors(
-                HDC::default(),
-                None,
-                Some(collect_monitor),
-                LPARAM((&mut monitors as *mut Vec<(Rect, Rect)>) as isize),
-            );
+    #[test]
+    fn strokes_split_across_monitors_and_stay_within_each() {
+        let left = uhd(-3840, 0);
+        let right = Rect {
+            left: 0,
+            top: 0,
+            right: 2560,
+            bottom: 1440,
+        };
+        let points = [Point { x: -200, y: 300 }, Point { x: 200, y: 340 }];
+        for (monitor, dpi, inside) in [(left, 192, -100), (right, 120, 100)] {
+            let mut surface = single_pass(monitor, dpi, &points, None);
+            let canvas = surface.canvas.as_ref().unwrap().rect;
+            assert_eq!(intersect(canvas, monitor), Some(canvas));
+            let y = 300 + (inside + 200) / 10;
+            assert_ne!(pixel(&mut surface, inside, y)[3], 0);
         }
-        let native_bounds = monitors[0].0;
-        let native_points: Vec<_> = points
-            .iter()
-            .map(|point| Point {
-                x: native_bounds.left + 30 + point.x * (native_bounds.width() - 60) / 3840,
-                y: native_bounds.top + 30 + point.y * (native_bounds.height() - 60) / 2160,
+        let mut elsewhere = single_pass(right, 120, &[Point { x: -900, y: 10 }, points[0]], None);
+        assert!(elsewhere.canvas.is_none());
+        assert!(!elsewhere.draw(&[], None));
+    }
+
+    #[test]
+    fn moving_badge_restores_the_stroke_beneath_it() {
+        let monitor = uhd(0, 0);
+        let points: Vec<_> = wave(900)
+            .into_iter()
+            .map(|p| Point {
+                x: p.x + 800,
+                y: p.y + 600,
             })
             .collect();
-        let start = Instant::now();
-        hint.update(42, &native_points[..32000], Some("复制"));
-        eprintln!(
-            "Native initial backlog (32000 points): {:.1} ms",
-            start.elapsed().as_secs_f64() * 1000.0
-        );
-        let start = Instant::now();
-        for batch in native_points[32000..].chunks(16) {
-            hint.update(42, batch, Some("复制"));
-        }
-        eprintln!(
-            "Native incremental draw + label + upload: {:.3} ms/frame",
-            start.elapsed().as_secs_f64() * 2.0
-        );
-        hint.hide();
-        for layer in &hint.windows {
-            unsafe {
-                let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(HWND(
-                    layer.window.hwnd as *mut _,
-                ));
+        for dpi in [96, 144] {
+            let text = text_mask("关闭窗口", dpi, monitor.width()).unwrap();
+            let mut surface = single_pass(monitor, dpi, &points, None);
+            for cursor in [points[100], points[450], points[899]] {
+                let badge = badge_rect(cursor, &text, monitor, dpi);
+                assert!(surface.draw(&[], Some((&text, badge))));
+                let mut expected = single_pass(monitor, dpi, &points, Some((&text, badge)));
+                assert_same_pixels(&mut surface, &mut expected);
             }
+            assert!(surface.draw(&[], None));
+            assert_same_pixels(&mut surface, &mut single_pass(monitor, dpi, &points, None));
+        }
+    }
+
+    #[test]
+    fn stroke_is_antialiased_premultiplied_and_never_darkens_when_retraced() {
+        for dpi in [96, 144, 192] {
+            let pen = Pen::new(dpi);
+            assert_eq!(pen.colors[0], [0; 4]);
+            assert!(pen
+                .colors
+                .iter()
+                .all(|pixel| pixel[..3].iter().all(|&c| c <= pixel[3])));
+            let a = Point { x: 10, y: 10 };
+            let b = Point { x: 80, y: 65 };
+            let mut surface = single_pass(uhd(0, 0), dpi, &[a, b], None);
+            let canvas = surface.canvas.as_ref().unwrap();
+            assert!(canvas.nearness.iter().any(|&nearness| {
+                let alpha = pen.colors[nearness as usize][3];
+                alpha > 0 && alpha < pen.colors[255][3]
+            }));
+            assert!(!surface.draw(&[b, a], None));
+            assert!(!surface.draw(&[a, b, a], None));
         }
     }
 
@@ -1082,47 +1003,310 @@ mod tests {
     }
 
     #[test]
-    fn gesture_stroke_has_partial_coverage_and_no_dark_joints() {
-        let rect = Rect {
-            left: 0,
-            top: 0,
-            right: 100,
-            bottom: 100,
-        };
-        let a = Point { x: 10, y: 10 };
-        let b = Point { x: 80, y: 65 };
-        let mut pixels = vec![0; 10000];
-        raster_segment(&mut pixels, &mut Vec::new(), rect, a, b, 1.25);
-        assert!(pixels.iter().any(|&v| v > 0 && v < 255));
-        let once = pixels.clone();
-        raster_segment(&mut pixels, &mut Vec::new(), rect, b, a, 1.25);
-        assert_eq!(once, pixels);
-        assert_eq!(pixels[0], 0);
+    fn gesture_text_and_stroke_scale_with_dpi() {
+        let mut previous = (0, 0.0);
+        for dpi in [96, 144, 192] {
+            let text = text_mask("粘贴", dpi, 1280).unwrap();
+            let reach = Pen::new(dpi).reach;
+            assert!(text.width > previous.0 && reach > previous.1);
+            previous = (text.width, reach);
+            assert!(text.coverage.iter().any(|&c| c > 0));
+            assert_eq!(text.height, dip(17.0, dpi).ceil() as i32);
+            let long = text_mask(&"很长的自定义手势名称".repeat(12), dpi, 1280).unwrap();
+            assert!(long.width <= dip(180.0, dpi).round() as i32);
+        }
     }
 
     #[test]
-    fn gesture_render_scales_text_and_stroke_and_clips_to_monitor() {
-        let mut previous_width = 0;
-        for dpi in [96, 144, 192] {
-            let text = text_mask("粘贴", dpi, 1280).unwrap();
-            assert!(text.width > previous_width);
-            previous_width = text.width;
-            assert!(text.coverage.iter().any(|&c| c > 0));
-            assert_eq!(text.height, dip(17.0, dpi).ceil() as i32);
-            let bounds = Rect {
-                left: -1280,
-                top: 0,
-                right: 0,
-                bottom: 720,
-            };
-            let points = [Point { x: -100, y: 100 }, Point { x: 100, y: 300 }];
-            let frame = render(&points, None, bounds, bounds, dpi).unwrap();
-            assert!(frame.rect.left >= bounds.left && frame.rect.right <= bounds.right);
-            for p in frame.pixels.chunks_exact(4) {
-                assert!(p[..3].iter().all(|&c| c <= p[3]));
+    fn gesture_native_layers_are_click_through_and_hide_together() {
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DestroyWindow, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, IsWindowVisible,
+            GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
+        };
+        let screens = screens();
+        let index = screens
+            .iter()
+            .position(|screen| screen.bounds.contains(Point { x: 80, y: 80 }))
+            .unwrap();
+        let screen = &screens[index];
+        let bounds = screen.bounds;
+        let foreground = unsafe { GetForegroundWindow() };
+        let mut hint = GestureHintManager::new();
+        let mut points = vec![Point { x: 80, y: 80 }, Point { x: 80, y: 180 }];
+        hint.update(1, &points, Some("粘贴"));
+        assert_eq!(unsafe { GetForegroundWindow() }, foreground);
+        for layer in &hint.layers {
+            let flags =
+                unsafe { GetWindowLongPtrW(HWND(layer.window.hwnd as *mut _), GWL_EXSTYLE) } as u32;
+            assert_ne!(flags & WS_EX_TRANSPARENT.0, 0);
+            assert_ne!(flags & WS_EX_NOACTIVATE.0, 0);
+        }
+        for (x, y, label) in [
+            (180, 180, None),
+            (60, 180, Some("复制")),
+            (60, 60, Some("关闭窗口")),
+            (bounds.width() - 10, bounds.height() - 10, Some("粘贴")),
+            (220, 220, None),
+        ] {
+            points.push(Point {
+                x: bounds.left + x,
+                y: bounds.top + y,
+            });
+            hint.update(1, &points[points.len() - 1..], label);
+            let layer = &mut hint.layers[index];
+            assert!(layer.presented);
+            let surface = layer.surface.as_mut().unwrap();
+            let canvas = surface.canvas.as_ref().unwrap().rect;
+            let mut actual = RECT::default();
+            unsafe { GetWindowRect(HWND(layer.window.hwnd as *mut _), &mut actual).unwrap() };
+            assert_eq!(
+                (actual.left, actual.top, actual.right, actual.bottom),
+                (canvas.left, canvas.top, canvas.right, canvas.bottom)
+            );
+            let text = label.and_then(|label| text_mask(label, screen.dpi, screen.work.width()));
+            let badge = text.as_ref().map(|text| {
+                let cursor = *points.last().unwrap();
+                (text, badge_rect(cursor, text, screen.work, screen.dpi))
+            });
+            let mut expected = single_pass(bounds, screen.dpi, &points, badge);
+            assert_same_pixels(surface, &mut expected);
+        }
+        hint.hide();
+        for layer in &hint.layers {
+            let hwnd = HWND(layer.window.hwnd as *mut _);
+            assert!(layer.surface.is_none());
+            assert!(!unsafe { IsWindowVisible(hwnd).as_bool() });
+            unsafe {
+                let _ = DestroyWindow(hwnd);
             }
-            let long = text_mask(&"很长的自定义手势名称".repeat(12), dpi, 1280).unwrap();
-            assert!(long.width <= dip(180.0, dpi).round() as i32);
+        }
+    }
+
+    #[test]
+    #[ignore = "requires an interactive Windows desktop for screen pixel checks"]
+    fn gesture_native_trail_survives_message_pumps_and_updates() {
+        use windows::Win32::Graphics::Gdi::{GetDC, GetPixel, ReleaseDC};
+        use windows::Win32::UI::HiDpi::{
+            SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+        };
+        use windows::Win32::UI::WindowsAndMessaging::{
+            DestroyWindow, DispatchMessageW, PeekMessageW, SetWindowDisplayAffinity,
+            TranslateMessage, MSG, PM_REMOVE, WDA_NONE,
+        };
+        let old_dpi =
+            unsafe { SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+        let mut hint = GestureHintManager::new();
+        let bounds = screens()[0].bounds;
+        let x = bounds.left + 160;
+        let y = bounds.top + 120;
+        let mut samples = Vec::new();
+        for step in 0..12 {
+            // The stroke keeps leaving its canvas, so presenting must survive growth.
+            let points = if step == 0 {
+                vec![Point { x, y }, Point { x, y: y + 40 }]
+            } else {
+                vec![Point {
+                    x: x + step * step * 12,
+                    y: y + 40 + step * 40,
+                }]
+            };
+            hint.update(77, &points, None);
+            for layer in &hint.layers {
+                unsafe {
+                    SetWindowDisplayAffinity(HWND(layer.window.hwnd as *mut _), WDA_NONE).unwrap();
+                }
+            }
+            let mut message = MSG::default();
+            unsafe {
+                while PeekMessageW(&mut message, HWND::default(), 0, 0, PM_REMOVE).as_bool() {
+                    let _ = TranslateMessage(&message);
+                    DispatchMessageW(&message);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            let end = *points.last().unwrap();
+            unsafe {
+                let dc = GetDC(HWND::default());
+                let old = GetPixel(dc, x, y + 20).0;
+                let new = GetPixel(dc, end.x, end.y).0;
+                let _ = ReleaseDC(HWND::default(), dc);
+                samples.push((old, new));
+            }
+        }
+        hint.hide();
+        for layer in &hint.layers {
+            unsafe {
+                let _ = DestroyWindow(HWND(layer.window.hwnd as *mut _));
+            }
+        }
+        unsafe {
+            SetThreadDpiAwarenessContext(old_dpi);
+        }
+        for (step, (old, new)) in samples.into_iter().enumerate() {
+            let blue = |color: u32| ((color >> 16) & 255) > (color & 255) + 80;
+            assert!(
+                blue(old) && blue(new),
+                "frame {step}: old={old:06x}, new={new:06x}"
+            );
+        }
+    }
+
+    /// Strokes over the union of `monitors`: an L of 400 x 300 DIPs, a wavy swipe
+    /// across every monitor, and a spiral reaching the edges.
+    fn sample_strokes(monitors: &[Rect], dpi: u32) -> [(&'static str, Vec<Point>); 3] {
+        let all = monitors
+            .iter()
+            .fold(None, |all, &monitor| union(all, Some(monitor)))
+            .unwrap();
+        let (cx, cy) = ((all.left + all.right) / 2, (all.top + all.bottom) / 2);
+        let unit = |value: f32| dip(value, dpi);
+        let gesture = (0..700)
+            .map(|i| match i {
+                0..400 => Point {
+                    x: cx,
+                    y: cy + unit(i as f32 * 0.75) as i32,
+                },
+                _ => Point {
+                    x: cx + unit((i - 400) as f32 * 1.33) as i32,
+                    y: cy + unit(300.0) as i32,
+                },
+            })
+            .collect();
+        let swipe = (0..4000)
+            .map(|i| Point {
+                x: all.left + 40 + (all.width() - 80) * i / 4000,
+                y: cy + (unit(200.0) * (i as f32 * 0.01).sin()) as i32,
+            })
+            .collect();
+        let sweep = (0..6000)
+            .map(|i| {
+                let turn = i as f32 / 6000.0;
+                let angle = turn * 40.0;
+                Point {
+                    x: cx + (angle.cos() * turn * (all.width() / 2 - 20) as f32) as i32,
+                    y: cy + (angle.sin() * turn * (all.height() / 2 - 20) as f32) as i32,
+                }
+            })
+            .collect();
+        [("gesture", gesture), ("swipe", swipe), ("sweep", sweep)]
+    }
+
+    #[test]
+    #[ignore = "manual working-set measurement; run alone"]
+    fn gesture_canvas_working_set() {
+        use windows::Win32::System::ProcessStatus::{
+            GetProcessMemoryInfo, PROCESS_MEMORY_COUNTERS,
+        };
+        use windows::Win32::System::Threading::GetCurrentProcess;
+        let working_set = || {
+            let mut counters = PROCESS_MEMORY_COUNTERS::default();
+            let size = std::mem::size_of_val(&counters) as u32;
+            unsafe { GetProcessMemoryInfo(GetCurrentProcess(), &mut counters, size).unwrap() };
+            counters.WorkingSetSize as f64 / f64::from(1 << 20)
+        };
+        let uhd8 = Rect {
+            left: 0,
+            top: 0,
+            right: 7680,
+            bottom: 4320,
+        };
+        for (name, monitors, dpi) in [
+            ("4K 150%", vec![uhd(0, 0)], 144),
+            ("8K 300%", vec![uhd8], 288),
+            (
+                "3x4K 150%",
+                vec![uhd(-3840, 0), uhd(0, 0), uhd(3840, 0)],
+                144,
+            ),
+        ] {
+            for (stroke, points) in sample_strokes(&monitors, dpi) {
+                let before = working_set();
+                let mut surfaces: Vec<_> = monitors
+                    .iter()
+                    .map(|&monitor| Surface::new(monitor, dpi))
+                    .collect();
+                for surface in &mut surfaces {
+                    draw_in_batches(surface, &points, 16);
+                }
+                let grown = working_set() - before;
+                let canvases: f64 = surfaces
+                    .iter()
+                    .filter_map(|surface| surface.canvas.as_ref())
+                    .map(|canvas| f64::from(canvas.rect.width() * canvas.rect.height()))
+                    .sum();
+                eprintln!(
+                    "{name:10} {stroke:8} canvas {:6.2} Mpx, working set +{grown:6.1} MiB",
+                    canvases / 1e6
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "manual release-mode rendering benchmark"]
+    fn gesture_large_stroke_render_budget() {
+        use std::time::Instant;
+        let points: Vec<_> = (0..40_000)
+            .map(|i| {
+                let row = i / 1800;
+                let x = if row % 2 == 0 {
+                    i % 1800
+                } else {
+                    1799 - i % 1800
+                };
+                Point {
+                    x: 60 + 2 * x,
+                    y: 60 + row * 80,
+                }
+            })
+            .collect();
+        let mut surface = Surface::new(uhd(0, 0), 192);
+        let mut previous = None;
+        let mut times = Vec::new();
+        for batch in points.chunks(16) {
+            let path: Vec<_> = previous.into_iter().chain(batch.iter().copied()).collect();
+            let start = Instant::now();
+            std::hint::black_box(surface.draw(&path, None));
+            times.push(start.elapsed().as_secs_f64() * 1000.0);
+            previous = batch.last().copied();
+        }
+        let mean = |slice: &[f64]| slice.iter().sum::<f64>() / slice.len() as f64;
+        eprintln!(
+            "4K incremental CPU, 16 new points/frame: first 100 {:.3} ms; last 100 {:.3} ms",
+            mean(&times[..100]),
+            mean(&times[times.len() - 100..])
+        );
+
+        let mut hint = GestureHintManager::new();
+        let native = screens()[0].bounds;
+        let native_points: Vec<_> = points
+            .iter()
+            .map(|point| Point {
+                x: native.left + 30 + point.x * (native.width() - 60) / 3840,
+                y: native.top + 30 + point.y * (native.height() - 60) / 2160,
+            })
+            .collect();
+        let start = Instant::now();
+        hint.update(42, &native_points[..32000], Some("复制"));
+        eprintln!(
+            "Native initial backlog (32000 points): {:.1} ms",
+            start.elapsed().as_secs_f64() * 1000.0
+        );
+        let start = Instant::now();
+        for batch in native_points[32000..].chunks(16) {
+            hint.update(42, batch, Some("复制"));
+        }
+        eprintln!(
+            "Native incremental draw + label + upload: {:.3} ms/frame",
+            start.elapsed().as_secs_f64() * 2.0
+        );
+        hint.hide();
+        for layer in &hint.layers {
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::DestroyWindow(HWND(
+                    layer.window.hwnd as *mut _,
+                ));
+            }
         }
     }
 
@@ -1154,28 +1338,25 @@ mod tests {
                 y: scale(y),
             })
             .collect();
-            let frame = render(&points, Some("关闭窗口"), bounds, bounds, dpi).unwrap();
-            assert!(frame.pixels.iter().any(|&p| p > 0));
+            let text = text_mask("关闭窗口", dpi, bounds.width()).unwrap();
+            let badge = badge_rect(*points.last().unwrap(), &text, bounds, dpi);
+            let mut surface = single_pass(bounds, dpi, &points, Some((&text, badge)));
+            assert!(surface.canvas.is_some());
             let Some(directory) = std::env::var_os("GESTURE_VISUAL_OUTPUT") else {
                 continue;
             };
             std::fs::create_dir_all(&directory).unwrap();
             for (theme, background) in [("light", [247u8, 248, 250]), ("dark", [28u8, 31, 37])] {
-                let mut rgb = vec![0u8; (bounds.width() * bounds.height() * 3) as usize];
-                for pixel in rgb.chunks_exact_mut(3) {
-                    pixel.copy_from_slice(&background);
-                }
-                for y in frame.rect.top..frame.rect.bottom {
-                    for x in frame.rect.left..frame.rect.right {
-                        let source = ((y - frame.rect.top) * frame.rect.width() + x
-                            - frame.rect.left) as usize
-                            * 4;
-                        let target = (y * bounds.width() + x) as usize * 3;
-                        let alpha = frame.pixels[source + 3] as f32 / 255.0;
+                let mut rgb = Vec::with_capacity((bounds.width() * bounds.height() * 3) as usize);
+                for y in bounds.top..bounds.bottom {
+                    for x in bounds.left..bounds.right {
+                        let pixel = pixel(&mut surface, x, y);
+                        let alpha = pixel[3] as f32 / 255.0;
                         for c in 0..3 {
-                            rgb[target + c] = (frame.pixels[source + 2 - c] as f32
-                                + background[c] as f32 * (1.0 - alpha))
-                                .round() as u8;
+                            rgb.push(
+                                (pixel[2 - c] as f32 + background[c] as f32 * (1.0 - alpha)).round()
+                                    as u8,
+                            );
                         }
                     }
                 }

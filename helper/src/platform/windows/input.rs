@@ -1,5 +1,5 @@
 use crate::config::{GestureTriggerButton, MouseButton};
-use crate::core::gesture::append_gesture_point;
+use crate::core::gesture::{append_gesture_point, compact_stroke};
 use crate::platform::{GestureCapture, InputState, Point, WindowDragCapture, WindowDragMode};
 use anyhow::{bail, Result};
 use std::collections::VecDeque;
@@ -101,6 +101,9 @@ impl GestureHookState {
         self.trail.id = id;
     }
 }
+
+/// Undrawn points; a stalled renderer compacts them instead of growing the queue.
+const TRAIL_BACKLOG: usize = 1024;
 
 #[derive(Default)]
 pub(super) struct GestureTrail {
@@ -734,8 +737,12 @@ fn handle_gesture_event(
     }
     if message == WM_MOUSEMOVE {
         if state.active_trigger.is_some() && !state.cancelled {
-            if state.trail.points.last() != Some(&point) {
-                state.trail.points.push(point);
+            let trail = &mut state.trail.points;
+            if trail.last() != Some(&point) {
+                if trail.len() >= TRAIL_BACKLOG {
+                    compact_stroke(trail, TRAIL_BACKLOG / 2);
+                }
+                trail.push(point);
             }
             state.travel += append_gesture_point(&mut state.points, point, false);
         }
@@ -992,6 +999,36 @@ mod tests {
             ));
         }
         assert!(state.completed.is_empty());
+    }
+
+    #[test]
+    fn stalled_renderer_keeps_a_bounded_trail_with_both_ends() {
+        let mut state = GestureHookState::default();
+        gesture_event(&mut state, GestureTriggerButton::Right, WM_RBUTTONDOWN, 0);
+        let mut last = Point { x: 0, y: 10 };
+        for i in 1..20_000 {
+            // Row-by-row zigzag: plenty of corners, none of it drained.
+            last = Point {
+                x: if i / 100 % 2 == 0 {
+                    i % 100
+                } else {
+                    99 - i % 100
+                },
+                y: 10 + i / 100 * 3,
+            };
+            handle_gesture_event(
+                &mut state,
+                WM_MOUSEMOVE,
+                last,
+                None,
+                true,
+                GestureTriggerButton::Right,
+                0,
+            );
+            assert!(state.trail.points.len() <= TRAIL_BACKLOG);
+        }
+        assert_eq!(state.trail.points.first(), Some(&Point { x: 0, y: 10 }));
+        assert_eq!(state.trail.points.last(), Some(&last));
     }
 
     #[test]
