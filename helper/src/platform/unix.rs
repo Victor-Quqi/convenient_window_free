@@ -24,7 +24,7 @@ pub fn prepare_top_edge_drop(_handle: WindowHandle) -> Result<()> {
 }
 
 pub use input::{
-    active_gesture_points, cancel_window_drag_capture, configure_gesture_capture,
+    active_gesture, cancel_window_drag_capture, configure_gesture_capture,
     configure_window_drag_capture, input_state, install_mouse_hook, mouse_hook_is_healthy,
     send_trigger_click, stop_mouse_hook, take_gesture_capture, take_window_drag_capture,
 };
@@ -168,7 +168,9 @@ pub fn update_hotzone_hints(_rect: Option<Rect>) {}
 pub fn update_edge_hide_preview(_rect: Option<Rect>) {}
 pub fn update_strip_hints(_strips: &[Rect]) {}
 pub fn hide_hotzone_hints() {}
-pub fn update_gesture_overlay(_points: &[Point], _label: Option<&str>) {}
+pub fn update_gesture_overlay(_label: Option<&str>) {}
+
+pub fn discard_gesture_trail() {}
 pub fn hide_gesture_overlay() {}
 pub fn hide_gesture_overlay_before_capture() {}
 pub fn show_ocr_toast(_owner: isize, _text: String, _success: bool) {}

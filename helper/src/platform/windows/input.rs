@@ -1,4 +1,5 @@
 use crate::config::{GestureTriggerButton, MouseButton};
+use crate::core::gesture::{append_gesture_point, compact_stroke};
 use crate::platform::{GestureCapture, InputState, Point, WindowDragCapture, WindowDragMode};
 use anyhow::{bail, Result};
 use std::collections::VecDeque;
@@ -12,9 +13,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, GetForegroundWindow, PeekMessageW, PostThreadMessageW, SetWindowsHookExW,
-    UnhookWindowsHookEx, HHOOK, LLMHF_INJECTED, MSG, MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL,
-    WH_MOUSE_LL, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_QUIT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
+    UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, LLKHF_INJECTED, LLMHF_INJECTED, MSG,
+    MSLLHOOKSTRUCT, PM_NOREMOVE, WH_KEYBOARD_LL, WH_MOUSE_LL, WM_KEYDOWN, WM_KEYUP, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MBUTTONDOWN, WM_MBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_QUIT,
+    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_XBUTTONDOWN, WM_XBUTTONUP,
 };
 
 const HOOK_NOT_STARTED: u8 = 0;
@@ -77,8 +79,50 @@ struct GestureHookState {
     active_trigger: Option<GestureTriggerButton>,
     active_modifiers: u8,
     points: Vec<Point>,
+    travel: f32,
+    trail: GestureTrail,
     completed: VecDeque<GestureCapture>,
     cancelled: bool,
+    suppress_left: bool,
+    suppress_escape: bool,
+    escape_held: bool,
+}
+
+impl GestureHookState {
+    /// Whether gesture handling must see mouse events before window dragging.
+    fn capturing(&self) -> bool {
+        self.active_trigger.is_some() || self.suppress_left
+    }
+
+    /// Forget held presses once the hook can no longer swallow their releases.
+    fn release_all(&mut self) {
+        let id = self.trail.id;
+        *self = Self::default();
+        self.trail.id = id;
+    }
+}
+
+/// Undrawn points; a stalled renderer compacts them instead of growing the queue.
+const TRAIL_BACKLOG: usize = 1024;
+
+#[derive(Default)]
+pub(super) struct GestureTrail {
+    pub id: u64,
+    pub points: Vec<Point>,
+}
+
+pub(super) fn take_gesture_trail() -> Option<GestureTrail> {
+    let mut state = gesture_state().lock().ok()?;
+    (state.active_trigger.is_some() && !state.cancelled).then(|| GestureTrail {
+        id: state.trail.id,
+        points: std::mem::take(&mut state.trail.points),
+    })
+}
+
+pub fn discard_gesture_trail() {
+    if let Ok(mut state) = gesture_state().lock() {
+        state.trail.points.clear();
+    }
 }
 
 fn gesture_state() -> &'static Mutex<GestureHookState> {
@@ -184,24 +228,22 @@ fn run_mouse_hook_thread() {
         let mut message = MSG::default();
         let _ = PeekMessageW(&mut message, HWND::default(), 0, 0, PM_NOREMOVE);
         let hook = SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_proc), HINSTANCE::default(), 0)?;
-        let keyboard = match SetWindowsHookExW(
-            WH_KEYBOARD_LL,
-            Some(crate::platform::shortcut_recording::keyboard_proc),
-            HINSTANCE::default(),
-            0,
-        ) {
-            Ok(keyboard) => keyboard,
-            Err(error) => {
-                let _ = UnhookWindowsHookEx(hook);
-                return Err(error);
-            }
-        };
+        let keyboard =
+            match SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_proc), HINSTANCE::default(), 0) {
+                Ok(keyboard) => keyboard,
+                Err(error) => {
+                    let _ = UnhookWindowsHookEx(hook);
+                    return Err(error);
+                }
+            };
         HOOK_STATE.store(HOOK_HEALTHY, Ordering::Release);
         message_loop();
         let _ = UnhookWindowsHookEx(hook);
         let _ = UnhookWindowsHookEx(keyboard);
         Ok::<(), windows::core::Error>(())
     });
+    // Without the hook nothing is swallowed any more, so held presses must not stay tracked.
+    reset_gesture_capture();
     let stopping = HOOK_STATE.load(Ordering::Acquire) == HOOK_STOPPING;
     HOOK_THREAD_ID.store(0, Ordering::Release);
     HOOK_STATE.store(
@@ -226,8 +268,60 @@ fn cancel_gesture_capture() {
         if state.active_trigger.is_some() {
             state.cancelled = true;
             state.points.clear();
+            state.trail.points.clear();
         }
     }
+}
+
+fn reset_gesture_capture() {
+    if let Ok(mut state) = gesture_state().lock() {
+        state.release_all();
+    }
+    GESTURE_CAPTURE_ACTIVE.store(false, Ordering::Release);
+}
+
+fn cancel_by_user(state: &mut GestureHookState) {
+    if state.active_trigger.is_some() && !state.cancelled {
+        state.cancelled = true;
+        state.points.clear();
+        state.trail.points.clear();
+    }
+}
+
+fn handle_gesture_escape(state: &mut GestureHookState, down: bool) -> bool {
+    if !down {
+        state.escape_held = false;
+        return std::mem::take(&mut state.suppress_escape);
+    }
+    let repeat = std::mem::replace(&mut state.escape_held, true);
+    if state.active_trigger.is_some() {
+        cancel_by_user(state);
+        // Swallow only a fresh press; an application that saw the press must see its release.
+        state.suppress_escape |= !repeat;
+    }
+    state.suppress_escape
+}
+
+unsafe extern "system" fn keyboard_proc(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    if code >= 0 {
+        let hook = &*(lparam.0 as *const KBDLLHOOKSTRUCT);
+        let message = wparam.0 as u32;
+        // The helper's own keys (e.g. a hot-zone Escape action) neither cancel nor get swallowed.
+        let ours = hook.flags.contains(LLKHF_INJECTED)
+            && hook.dwExtraInfo == super::keyboard::KEYBOARD_INJECT_TAG;
+        if hook.vkCode == VK_ESCAPE.0 as u32
+            && !ours
+            && matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN | WM_KEYUP | WM_SYSKEYUP)
+        {
+            if let Ok(mut state) = gesture_state().lock() {
+                if handle_gesture_escape(&mut state, matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN))
+                {
+                    return LRESULT(1);
+                }
+            }
+        }
+    }
+    crate::platform::shortcut_recording::keyboard_proc(code, wparam, lparam)
 }
 
 pub fn configure_window_drag_capture(
@@ -282,14 +376,18 @@ pub fn take_gesture_capture() -> Option<GestureCapture> {
     gesture_state().lock().ok()?.completed.pop_front()
 }
 
-pub fn active_gesture_points() -> Vec<Point> {
+pub fn active_gesture() -> Option<GestureCapture> {
     if !GESTURE_CAPTURE_ACTIVE.load(Ordering::Acquire) {
-        return Vec::new();
+        return None;
     }
-    gesture_state()
-        .lock()
-        .map(|state| state.points.clone())
-        .unwrap_or_default()
+    let state = gesture_state().lock().ok()?;
+    let trigger = state.active_trigger.filter(|_| !state.cancelled)?;
+    Some(GestureCapture {
+        trigger,
+        modifiers: state.active_modifiers,
+        points: state.points.clone(),
+        travel: state.travel,
+    })
 }
 
 pub fn mark_helper_injected_events(count: u8) {
@@ -365,50 +463,120 @@ unsafe extern "system" fn mouse_proc(code: i32, wparam: WPARAM, lparam: LPARAM) 
             // The click is still delivered normally; it must not also launch a configured action.
             return CallNextHookEx(HHOOK::default(), code, wparam, lparam);
         }
-        if handle_window_drag_message(message, hook) {
-            return LRESULT(1);
-        }
         let modifiers = current_modifier_mask();
-        match message {
-            WM_LBUTTONDOWN => {
-                record_click(&LEFT_CLICKS, modifiers, GetForegroundWindow().0 as isize);
-            }
-            WM_RBUTTONDOWN => {
-                record_click(&RIGHT_CLICKS, modifiers, GetForegroundWindow().0 as isize);
-            }
-            WM_MOUSEWHEEL => {
-                record_modifier_event(&WHEEL_MODIFIER_SEQUENCES, modifiers);
-                let delta = ((hook.mouseData >> 16) as u16) as i16 as i64;
-                WHEEL_DELTA.fetch_add(delta, Ordering::Relaxed);
-            }
-            _ => {}
-        }
-        if handle_gesture_message(message, hook) {
+        if route_mouse_message(
+            GESTURE_CAPTURE_ACTIVE.load(Ordering::Acquire),
+            || handle_gesture_message(message, hook, modifiers),
+            || handle_window_drag_message(message, hook, modifiers),
+            || record_mouse_message(message, hook, modifiers),
+        ) {
             return LRESULT(1);
         }
     }
     unsafe { CallNextHookEx(HHOOK::default(), code, wparam, lparam) }
 }
 
-fn handle_window_drag_message(message: u32, hook: &MSLLHOOKSTRUCT) -> bool {
-    handle_window_drag_message_with_target(message, hook, window_drag_target_is_allowed)
+/// An ongoing gesture sees events first, so its cancelling click cannot start a drag;
+/// otherwise a configured drag takes precedence over starting a gesture.
+fn route_mouse_message(
+    gesture_first: bool,
+    mut gesture: impl FnMut() -> bool,
+    drag: impl FnOnce() -> bool,
+    observe: impl FnOnce(),
+) -> bool {
+    if gesture_first && gesture() {
+        return true;
+    }
+    if drag() {
+        return true;
+    }
+    observe();
+    !gesture_first && gesture()
 }
 
-fn handle_window_drag_message_with_target(
-    message: u32,
-    hook: &MSLLHOOKSTRUCT,
-    target_allowed: impl FnOnce(Point) -> bool,
-) -> bool {
+fn record_mouse_message(message: u32, hook: &MSLLHOOKSTRUCT, modifiers: u8) {
+    let foreground = || unsafe { GetForegroundWindow() }.0 as isize;
+    match message {
+        WM_LBUTTONDOWN => record_click(&LEFT_CLICKS, modifiers, foreground()),
+        WM_RBUTTONDOWN => record_click(&RIGHT_CLICKS, modifiers, foreground()),
+        WM_MOUSEWHEEL => {
+            record_modifier_event(&WHEEL_MODIFIER_SEQUENCES, modifiers);
+            let delta = ((hook.mouseData >> 16) as u16) as i16 as i64;
+            WHEEL_DELTA.fetch_add(delta, Ordering::Relaxed);
+        }
+        _ => {}
+    }
+}
+
+#[derive(Clone, Copy)]
+struct WindowDragBindings {
+    enabled: bool,
+    move_binding: (MouseButton, u8),
+    resize_binding: (MouseButton, u8),
+}
+
+impl WindowDragBindings {
+    fn load() -> Self {
+        Self {
+            enabled: WINDOW_DRAG_ENABLED.load(Ordering::Acquire),
+            move_binding: (
+                u8_to_mouse_button(WINDOW_DRAG_MOVE_BUTTON.load(Ordering::Acquire)),
+                WINDOW_DRAG_MOVE_MODIFIERS.load(Ordering::Acquire),
+            ),
+            resize_binding: (
+                u8_to_mouse_button(WINDOW_DRAG_RESIZE_BUTTON.load(Ordering::Acquire)),
+                WINDOW_DRAG_RESIZE_MODIFIERS.load(Ordering::Acquire),
+            ),
+        }
+    }
+
+    fn mode(&self, button: MouseButton, modifiers: u8) -> Option<WindowDragMode> {
+        if !self.enabled {
+            None
+        } else if (button, modifiers) == self.move_binding {
+            Some(WindowDragMode::Move)
+        } else if (button, modifiers) == self.resize_binding {
+            Some(WindowDragMode::Resize)
+        } else {
+            None
+        }
+    }
+}
+
+fn handle_window_drag_message(message: u32, hook: &MSLLHOOKSTRUCT, modifiers: u8) -> bool {
     if hook.flags & LLMHF_INJECTED != 0 && hook.dwExtraInfo == super::mouse::GESTURE_INJECT_TAG {
         return false;
     }
+    let Ok(mut state) = window_drag_state().lock() else {
+        return false;
+    };
+    handle_window_drag_event(
+        &mut state,
+        &SUPPRESSED_WINDOW_DRAG_UPS,
+        WindowDragBindings::load(),
+        message,
+        hook,
+        modifiers,
+        window_drag_target_is_allowed,
+    )
+}
+
+fn handle_window_drag_event(
+    state: &mut WindowDragHookState,
+    suppressed_ups: &AtomicU8,
+    bindings: WindowDragBindings,
+    message: u32,
+    hook: &MSLLHOOKSTRUCT,
+    modifiers: u8,
+    target_allowed: impl FnOnce(Point) -> bool,
+) -> bool {
     let point = Point {
         x: hook.pt.x,
         y: hook.pt.y,
     };
     let event = mouse_button_event(message, hook.mouseData);
     if let Some((button, false)) = event {
-        if SUPPRESSED_WINDOW_DRAG_UPS
+        if suppressed_ups
             .fetch_update(Ordering::AcqRel, Ordering::Acquire, |pending| {
                 clear_suppressed_release(pending, button)
             })
@@ -417,10 +585,6 @@ fn handle_window_drag_message_with_target(
             return true;
         }
     }
-    let mut state = match window_drag_state().lock() {
-        Ok(state) => state,
-        Err(_) => return false,
-    };
 
     if let Some((capture, button)) = state.capture.as_mut() {
         if message == WM_MOUSEMOVE {
@@ -436,24 +600,13 @@ fn handle_window_drag_message_with_target(
         return false;
     }
 
-    if !WINDOW_DRAG_ENABLED.load(Ordering::Acquire) {
-        return false;
-    }
     let Some((button, true)) = event else {
         return false;
     };
-    let modifiers = current_modifier_mask();
-    let move_match = button == u8_to_mouse_button(WINDOW_DRAG_MOVE_BUTTON.load(Ordering::Acquire))
-        && modifiers == WINDOW_DRAG_MOVE_MODIFIERS.load(Ordering::Acquire);
-    let resize_match = button
-        == u8_to_mouse_button(WINDOW_DRAG_RESIZE_BUTTON.load(Ordering::Acquire))
-        && modifiers == WINDOW_DRAG_RESIZE_MODIFIERS.load(Ordering::Acquire);
-    let mode = match (move_match, resize_match) {
-        (true, _) => WindowDragMode::Move,
-        (false, true) => WindowDragMode::Resize,
-        _ => return false,
+    let Some(mode) = bindings.mode(button, modifiers) else {
+        return false;
     };
-    begin_window_drag_capture(&mut state, point, button, mode, target_allowed(point))
+    begin_window_drag_capture(state, point, button, mode, target_allowed(point))
 }
 
 fn begin_window_drag_capture(
@@ -532,7 +685,7 @@ fn u8_to_mouse_button(value: u8) -> MouseButton {
     }
 }
 
-fn handle_gesture_message(message: u32, hook: &MSLLHOOKSTRUCT) -> bool {
+fn handle_gesture_message(message: u32, hook: &MSLLHOOKSTRUCT, modifiers: u8) -> bool {
     if should_ignore_injected_event(hook.flags, hook.dwExtraInfo) {
         return false;
     }
@@ -551,44 +704,73 @@ fn handle_gesture_message(message: u32, hook: &MSLLHOOKSTRUCT) -> bool {
         Err(_) => return false,
     };
 
+    let consumed = handle_gesture_event(
+        &mut state,
+        message,
+        point,
+        event_trigger,
+        enabled,
+        u8_to_trigger(GESTURE_TRIGGER.load(Ordering::Acquire)),
+        modifiers,
+    );
+    GESTURE_CAPTURE_ACTIVE.store(state.capturing(), Ordering::Release);
+    consumed
+}
+
+fn handle_gesture_event(
+    state: &mut GestureHookState,
+    message: u32,
+    point: Point,
+    event_trigger: Option<(GestureTriggerButton, bool)>,
+    enabled: bool,
+    configured_trigger: GestureTriggerButton,
+    modifiers: u8,
+) -> bool {
+    if message == WM_LBUTTONDOWN && (state.active_trigger.is_some() || state.suppress_left) {
+        cancel_by_user(state);
+        state.suppress_left = true;
+        return true;
+    }
+    if message == WM_LBUTTONUP && state.suppress_left {
+        state.suppress_left = false;
+        return true;
+    }
     if message == WM_MOUSEMOVE {
-        if state.active_trigger.is_some() {
-            let should_push = state.points.last().is_none_or(|last| {
-                let dx = last.x - point.x;
-                let dy = last.y - point.y;
-                dx * dx + dy * dy >= 4
-            });
-            if should_push && state.points.len() < 512 {
-                state.points.push(point);
+        if state.active_trigger.is_some() && !state.cancelled {
+            let trail = &mut state.trail.points;
+            if trail.last() != Some(&point) {
+                if trail.len() >= TRAIL_BACKLOG {
+                    compact_stroke(trail, TRAIL_BACKLOG / 2);
+                }
+                trail.push(point);
             }
+            state.travel += append_gesture_point(&mut state.points, point, false);
         }
         return false;
     }
-
     let Some((trigger, down)) = event_trigger else {
         return false;
     };
     if down {
-        if GESTURE_CAPTURE_ENABLED.load(Ordering::Acquire)
-            && trigger == u8_to_trigger(GESTURE_TRIGGER.load(Ordering::Acquire))
-            && state.active_trigger.is_none()
-        {
-            state.cancelled = false;
+        if enabled && trigger == configured_trigger && state.active_trigger.is_none() {
+            // Keep swallowing the trigger if the cancelling left button is held.
+            state.cancelled = state.suppress_left;
             state.active_trigger = Some(trigger);
-            state.active_modifiers = current_modifier_mask();
-            GESTURE_CAPTURE_ACTIVE.store(true, Ordering::Release);
+            state.active_modifiers = modifiers;
             state.points.clear();
-            state.points.reserve(128);
-            state.points.push(point);
+            state.travel = 0.0;
+            state.trail.id = state.trail.id.wrapping_add(1);
+            state.trail.points.clear();
+            if !state.cancelled {
+                state.points.push(point);
+                state.trail.points.push(point);
+            }
             return true;
         }
-        return false;
+        return state.active_trigger == Some(trigger);
     }
-
     if state.active_trigger == Some(trigger) {
-        let capture = finish_gesture_capture(&mut state, trigger, point);
-        GESTURE_CAPTURE_ACTIVE.store(false, Ordering::Release);
-        if let Some(capture) = capture {
+        if let Some(capture) = finish_gesture_capture(state, trigger, point) {
             if state.completed.len() >= 8 {
                 state.completed.pop_front();
             }
@@ -604,11 +786,13 @@ fn finish_gesture_capture(
     trigger: GestureTriggerButton,
     point: Point,
 ) -> Option<GestureCapture> {
-    if state.points.last().copied() != Some(point) && state.points.len() < 512 {
-        state.points.push(point);
+    if !state.cancelled {
+        state.travel += append_gesture_point(&mut state.points, point, true);
     }
     let points = std::mem::take(&mut state.points);
+    state.trail.points.clear();
     let modifiers = state.active_modifiers;
+    let travel = std::mem::take(&mut state.travel);
     let cancelled = state.cancelled;
     state.active_trigger = None;
     state.active_modifiers = 0;
@@ -617,6 +801,7 @@ fn finish_gesture_capture(
         trigger,
         modifiers,
         points,
+        travel,
     })
 }
 
@@ -707,6 +892,310 @@ mod tests {
     }
 
     #[test]
+    fn gesture_visual_points_survive_recognition_compaction_and_cancel_clears_them() {
+        let mut state = GestureHookState::default();
+        let trigger = GestureTriggerButton::Right;
+        gesture_event(&mut state, trigger, WM_RBUTTONDOWN, 0);
+        let id = state.trail.id;
+        // The renderer drains the trail every frame, so it sees every sample.
+        let mut delivered = Vec::new();
+        for x in 1..6000 {
+            gesture_event(&mut state, trigger, WM_MOUSEMOVE, x);
+            if x % 32 == 0 {
+                delivered.append(&mut state.trail.points);
+            }
+        }
+        delivered.append(&mut state.trail.points);
+        assert!(state.points.len() <= 512);
+        assert_eq!(state.travel, 5998.0);
+        assert_eq!(delivered.len(), 6000);
+        for (x, point) in delivered.iter().enumerate() {
+            assert_eq!(*point, Point { x: x as i32, y: 10 });
+        }
+        gesture_event(&mut state, trigger, WM_MOUSEMOVE, 6000);
+        assert_eq!(state.trail.points, vec![Point { x: 6000, y: 10 }]);
+        gesture_event(&mut state, trigger, WM_LBUTTONDOWN, 6000);
+        assert!(state.trail.points.is_empty());
+        gesture_event(&mut state, trigger, WM_LBUTTONUP, 6000);
+        gesture_event(&mut state, trigger, WM_RBUTTONUP, 6000);
+        gesture_event(&mut state, trigger, WM_RBUTTONDOWN, 0);
+        assert_ne!(state.trail.id, id);
+        assert_eq!(state.trail.points, vec![Point { x: 0, y: 10 }]);
+    }
+
+    fn gesture_event(
+        state: &mut GestureHookState,
+        trigger: GestureTriggerButton,
+        message: u32,
+        x: i32,
+    ) -> bool {
+        let data = match trigger {
+            GestureTriggerButton::X1 => 1 << 16,
+            GestureTriggerButton::X2 => 2 << 16,
+            _ => 0,
+        };
+        handle_gesture_event(
+            state,
+            message,
+            Point { x, y: 10 },
+            trigger_for_message(message, data),
+            true,
+            trigger,
+            0,
+        )
+    }
+
+    #[test]
+    fn left_click_cancels_every_trigger_and_swallows_both_release_orders() {
+        for (trigger, down, up) in [
+            (GestureTriggerButton::Right, WM_RBUTTONDOWN, WM_RBUTTONUP),
+            (GestureTriggerButton::Middle, WM_MBUTTONDOWN, WM_MBUTTONUP),
+            (GestureTriggerButton::X1, WM_XBUTTONDOWN, WM_XBUTTONUP),
+            (GestureTriggerButton::X2, WM_XBUTTONDOWN, WM_XBUTTONUP),
+        ] {
+            for trigger_first in [true, false] {
+                let mut state = GestureHookState::default();
+                assert!(gesture_event(&mut state, trigger, down, 0));
+                gesture_event(&mut state, trigger, WM_MOUSEMOVE, 200);
+                assert!(gesture_event(&mut state, trigger, WM_LBUTTONDOWN, 200));
+                assert!(state.points.is_empty());
+                gesture_event(&mut state, trigger, WM_MOUSEMOVE, 400);
+                assert!(state.points.is_empty());
+                for release in if trigger_first {
+                    [up, WM_LBUTTONUP]
+                } else {
+                    [WM_LBUTTONUP, up]
+                } {
+                    assert!(gesture_event(&mut state, trigger, release, 400));
+                }
+                assert!(state.completed.is_empty());
+                assert!(!state.suppress_left);
+                assert!(state.active_trigger.is_none());
+                assert!(!gesture_event(&mut state, trigger, WM_LBUTTONDOWN, 400));
+                assert!(!gesture_event(&mut state, trigger, WM_LBUTTONUP, 400));
+                assert!(gesture_event(&mut state, trigger, down, 0));
+                assert!(gesture_event(&mut state, trigger, up, 200));
+                assert_eq!(state.completed.len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn trigger_repress_during_left_cancel_does_not_start_another_gesture() {
+        let mut state = GestureHookState::default();
+        for event in [
+            WM_RBUTTONDOWN,
+            WM_LBUTTONDOWN,
+            WM_RBUTTONUP,
+            WM_RBUTTONDOWN,
+            WM_LBUTTONUP,
+            WM_RBUTTONUP,
+        ] {
+            assert!(gesture_event(
+                &mut state,
+                GestureTriggerButton::Right,
+                event,
+                0
+            ));
+        }
+        assert!(state.completed.is_empty());
+    }
+
+    #[test]
+    fn stalled_renderer_keeps_a_bounded_trail_with_both_ends() {
+        let mut state = GestureHookState::default();
+        gesture_event(&mut state, GestureTriggerButton::Right, WM_RBUTTONDOWN, 0);
+        let mut last = Point { x: 0, y: 10 };
+        for i in 1..20_000 {
+            // Row-by-row zigzag: plenty of corners, none of it drained.
+            last = Point {
+                x: if i / 100 % 2 == 0 {
+                    i % 100
+                } else {
+                    99 - i % 100
+                },
+                y: 10 + i / 100 * 3,
+            };
+            handle_gesture_event(
+                &mut state,
+                WM_MOUSEMOVE,
+                last,
+                None,
+                true,
+                GestureTriggerButton::Right,
+                0,
+            );
+            assert!(state.trail.points.len() <= TRAIL_BACKLOG);
+        }
+        assert_eq!(state.trail.points.first(), Some(&Point { x: 0, y: 10 }));
+        assert_eq!(state.trail.points.last(), Some(&last));
+    }
+
+    #[test]
+    fn escape_cancels_and_keeps_every_release_paired_with_its_press() {
+        let right = GestureTriggerButton::Right;
+        let mut state = GestureHookState::default();
+        // Without a gesture, Escape belongs to the application and to drag cancellation.
+        assert!(!handle_gesture_escape(&mut state, true));
+        assert!(!handle_gesture_escape(&mut state, false));
+
+        // A fresh press cancels; its auto-repeat and release stay swallowed even after
+        // the trigger has been released.
+        gesture_event(&mut state, right, WM_RBUTTONDOWN, 0);
+        assert!(handle_gesture_escape(&mut state, true));
+        assert!(handle_gesture_escape(&mut state, true));
+        gesture_event(&mut state, right, WM_RBUTTONUP, 0);
+        assert!(handle_gesture_escape(&mut state, true));
+        assert!(handle_gesture_escape(&mut state, false));
+        assert!(state.completed.is_empty());
+
+        // Held before the gesture: the application already saw the press, so the
+        // repeat still cancels but both it and the release are delivered.
+        assert!(!handle_gesture_escape(&mut state, true));
+        gesture_event(&mut state, right, WM_RBUTTONDOWN, 0);
+        assert!(!handle_gesture_escape(&mut state, true));
+        assert!(state.cancelled);
+        gesture_event(&mut state, right, WM_RBUTTONUP, 0);
+        assert!(!handle_gesture_escape(&mut state, false));
+        assert!(state.completed.is_empty());
+    }
+
+    #[test]
+    fn stopped_hook_forgets_presses_it_can_no_longer_swallow() {
+        let right = GestureTriggerButton::Right;
+        let mut state = GestureHookState::default();
+        gesture_event(&mut state, right, WM_RBUTTONDOWN, 0);
+        gesture_event(&mut state, right, WM_LBUTTONDOWN, 0);
+        handle_gesture_escape(&mut state, true);
+        let id = state.trail.id;
+        state.release_all();
+        assert!(!state.capturing());
+        assert!(!handle_gesture_escape(&mut state, false));
+        assert!(!gesture_event(&mut state, right, WM_LBUTTONUP, 0));
+        gesture_event(&mut state, right, WM_RBUTTONDOWN, 0);
+        assert_ne!(state.trail.id, id);
+    }
+
+    const ALT: u8 = 2;
+
+    /// Both features with their default bindings: Alt+Left moves, Alt+Right resizes,
+    /// and a plain right-button stroke is a gesture.
+    struct Hooks {
+        gesture: GestureHookState,
+        drag: WindowDragHookState,
+        suppressed_ups: AtomicU8,
+    }
+
+    impl Hooks {
+        fn new() -> Self {
+            Self {
+                gesture: GestureHookState::default(),
+                drag: WindowDragHookState::default(),
+                suppressed_ups: AtomicU8::new(0),
+            }
+        }
+
+        fn send(&mut self, message: u32, x: i32, modifiers: u8) -> bool {
+            let hook = MSLLHOOKSTRUCT {
+                pt: windows::Win32::Foundation::POINT { x, y: 10 },
+                ..Default::default()
+            };
+            let bindings = WindowDragBindings {
+                enabled: true,
+                move_binding: (MouseButton::Left, ALT),
+                resize_binding: (MouseButton::Right, ALT),
+            };
+            let Self {
+                gesture,
+                drag,
+                suppressed_ups,
+            } = self;
+            route_mouse_message(
+                gesture.capturing(),
+                || {
+                    handle_gesture_event(
+                        gesture,
+                        message,
+                        Point { x, y: 10 },
+                        trigger_for_message(message, 0),
+                        true,
+                        GestureTriggerButton::Right,
+                        modifiers,
+                    )
+                },
+                || {
+                    handle_window_drag_event(
+                        drag,
+                        suppressed_ups,
+                        bindings,
+                        message,
+                        &hook,
+                        modifiers,
+                        |_| true,
+                    )
+                },
+                || {},
+            )
+        }
+    }
+
+    #[test]
+    fn alt_right_resizes_the_window_instead_of_starting_a_gesture() {
+        let mut hooks = Hooks::new();
+        assert!(hooks.send(WM_RBUTTONDOWN, 0, ALT));
+        assert!(!hooks.gesture.capturing());
+        assert!(!hooks.send(WM_MOUSEMOVE, 120, ALT));
+        assert!(hooks.send(WM_RBUTTONUP, 120, ALT));
+        let (capture, _) = hooks.drag.capture.unwrap();
+        assert_eq!(capture.mode, WindowDragMode::Resize);
+        assert!(capture.finished);
+        assert_eq!(capture.current, Point { x: 120, y: 10 });
+        assert!(hooks.gesture.completed.is_empty());
+    }
+
+    #[test]
+    fn right_stroke_stays_a_gesture_when_alt_is_pressed_before_release() {
+        let mut hooks = Hooks::new();
+        assert!(hooks.send(WM_RBUTTONDOWN, 0, 0));
+        for x in (4..=200).step_by(4) {
+            assert!(!hooks.send(WM_MOUSEMOVE, x, 0));
+        }
+        assert!(hooks.send(WM_RBUTTONUP, 200, ALT));
+        assert!(hooks.drag.capture.is_none());
+        assert_eq!(hooks.gesture.completed.pop_front().unwrap().travel, 200.0);
+    }
+
+    #[test]
+    fn left_click_cancels_a_gesture_instead_of_moving_the_window() {
+        let mut hooks = Hooks::new();
+        assert!(hooks.send(WM_RBUTTONDOWN, 0, 0));
+        hooks.send(WM_MOUSEMOVE, 100, 0);
+        assert!(hooks.send(WM_LBUTTONDOWN, 100, ALT));
+        assert!(hooks.drag.capture.is_none());
+        assert!(hooks.send(WM_RBUTTONUP, 100, ALT));
+        assert!(hooks.send(WM_LBUTTONUP, 100, ALT));
+        assert!(hooks.gesture.completed.is_empty());
+        assert!(!hooks.gesture.capturing());
+        // The cancellation leaves nothing behind for the next window move.
+        assert!(hooks.send(WM_LBUTTONDOWN, 100, ALT));
+        assert!(hooks.send(WM_LBUTTONUP, 140, ALT));
+        let (capture, _) = hooks.drag.capture.unwrap();
+        assert_eq!(capture.mode, WindowDragMode::Move);
+        assert!(capture.finished);
+    }
+
+    #[test]
+    fn ordinary_trigger_click_keeps_its_capture_and_final_position() {
+        let mut state = GestureHookState::default();
+        gesture_event(&mut state, GestureTriggerButton::Right, WM_RBUTTONDOWN, 0);
+        gesture_event(&mut state, GestureTriggerButton::Right, WM_RBUTTONUP, 1);
+        assert_eq!(
+            state.completed.pop_front().unwrap().points,
+            vec![Point { x: 0, y: 10 }, Point { x: 1, y: 10 }]
+        );
+    }
+
+    #[test]
     fn blocked_window_does_not_capture_or_consume_the_configured_mouse_press() {
         let mut state = WindowDragHookState::default();
         assert!(
@@ -730,6 +1219,7 @@ mod tests {
             points: vec![Point { x: 10, y: 20 }],
             completed: VecDeque::new(),
             cancelled: true,
+            ..Default::default()
         };
 
         let capture = finish_gesture_capture(

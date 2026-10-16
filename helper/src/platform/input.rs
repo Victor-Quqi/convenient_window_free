@@ -1,4 +1,5 @@
 use crate::config::{GestureTriggerButton, MouseButton};
+use crate::core::gesture::append_gesture_point;
 use crate::platform::{GestureCapture, InputState, Point, WindowDragCapture, WindowDragMode};
 use anyhow::{bail, Result};
 use rdev::{listen, simulate, Button, Event, EventType, Key, SimulateError};
@@ -56,9 +57,11 @@ struct InputStore {
 
 #[derive(Default)]
 struct GestureInProgress {
+    cancelled: bool,
     trigger: GestureTriggerButton,
     modifiers: u8,
     points: Vec<Point>,
+    travel: f32,
 }
 
 fn store() -> &'static Mutex<InputStore> {
@@ -177,12 +180,18 @@ pub fn take_gesture_capture() -> Option<GestureCapture> {
     store().lock().ok()?.completed_gestures.pop_front()
 }
 
-pub fn active_gesture_points() -> Vec<Point> {
-    store()
-        .lock()
-        .ok()
-        .and_then(|state| state.gesture.as_ref().map(|gesture| gesture.points.clone()))
-        .unwrap_or_default()
+pub fn active_gesture() -> Option<GestureCapture> {
+    let state = store().lock().ok()?;
+    let gesture = state
+        .gesture
+        .as_ref()
+        .filter(|gesture| !gesture.cancelled)?;
+    Some(GestureCapture {
+        trigger: gesture.trigger,
+        modifiers: gesture.modifiers,
+        points: gesture.points.clone(),
+        travel: gesture.travel,
+    })
 }
 
 pub fn mark_helper_injected_events(count: u8) {
@@ -241,19 +250,18 @@ fn handle_event(event: Event) {
                     capture.current = cursor;
                 }
                 if let Some(gesture) = state.gesture.as_mut() {
-                    let should_push = gesture.points.last().is_none_or(|last| {
-                        let dx = last.x - cursor.x;
-                        let dy = last.y - cursor.y;
-                        dx * dx + dy * dy >= 4
-                    });
-                    if should_push && gesture.points.len() < 512 {
-                        gesture.points.push(cursor);
+                    if !gesture.cancelled {
+                        gesture.travel += append_gesture_point(&mut gesture.points, cursor, false);
                     }
                 }
             }
         }
-        EventType::ButtonPress(button) => handle_button(&mut state, button, true),
-        EventType::ButtonRelease(button) => handle_button(&mut state, button, false),
+        EventType::ButtonPress(button) => {
+            handle_button(&mut state, button, true, window_drag_target_is_allowed)
+        }
+        EventType::ButtonRelease(button) => {
+            handle_button(&mut state, button, false, window_drag_target_is_allowed)
+        }
         EventType::Wheel { delta_y, .. } => {
             let modifiers = state.modifiers;
             state.state.wheel_delta = state
@@ -267,7 +275,12 @@ fn handle_event(event: Event) {
     }
 }
 
-fn handle_button(state: &mut InputStore, button: Button, down: bool) {
+fn handle_button(
+    state: &mut InputStore,
+    button: Button,
+    down: bool,
+    target_allowed: impl FnOnce(Point) -> bool,
+) {
     let Some(button) = map_button(button) else {
         return;
     };
@@ -293,10 +306,14 @@ fn handle_button(state: &mut InputStore, button: Button, down: bool) {
             }
         }
         MouseButton::Middle => state.state.middle_down = down,
-        MouseButton::X1 | MouseButton::X2 => return,
+        MouseButton::X1 | MouseButton::X2 => {}
     }
 
-    if handle_drag_event(state, button, down) {
+    // As on Windows, the click that cancels a gesture must not also start a window drag.
+    if button == MouseButton::Left && down && cancel_gesture_by_user(state) {
+        return;
+    }
+    if handle_drag_event(state, button, down, target_allowed) {
         return;
     }
     let Some(trigger) = gesture_trigger(button) else {
@@ -311,10 +328,16 @@ fn handle_button(state: &mut InputStore, button: Button, down: bool) {
                 trigger,
                 modifiers: state.modifiers,
                 points: vec![state.cursor],
+                travel: 0.0,
+                cancelled: false,
             });
         }
-    } else if let Some(gesture) = state.gesture.take() {
+    } else if let Some(mut gesture) = state.gesture.take() {
         if gesture.trigger == trigger {
+            if gesture.cancelled {
+                return;
+            }
+            gesture.travel += append_gesture_point(&mut gesture.points, state.cursor, true);
             if state.completed_gestures.len() >= 8 {
                 state.completed_gestures.pop_front();
             }
@@ -322,6 +345,7 @@ fn handle_button(state: &mut InputStore, button: Button, down: bool) {
                 trigger,
                 modifiers: gesture.modifiers,
                 points: gesture.points,
+                travel: gesture.travel,
             });
         } else {
             state.gesture = Some(gesture);
@@ -329,7 +353,12 @@ fn handle_button(state: &mut InputStore, button: Button, down: bool) {
     }
 }
 
-fn handle_drag_event(state: &mut InputStore, button: MouseButton, down: bool) -> bool {
+fn handle_drag_event(
+    state: &mut InputStore,
+    button: MouseButton,
+    down: bool,
+    target_allowed: impl FnOnce(Point) -> bool,
+) -> bool {
     if let Some((capture, captured_button)) = state.drag.as_mut() {
         if !down && *captured_button == button {
             capture.current = state.cursor;
@@ -351,7 +380,7 @@ fn handle_drag_event(state: &mut InputStore, button: MouseButton, down: bool) ->
         (false, true) => WindowDragMode::Resize,
         _ => return false,
     };
-    if !window_drag_target_is_allowed(state.cursor) {
+    if !target_allowed(state.cursor) {
         return false;
     }
     let sequence = DRAG_SEQUENCE.fetch_add(1, Ordering::AcqRel) + 1;
@@ -371,7 +400,12 @@ fn handle_drag_event(state: &mut InputStore, button: MouseButton, down: bool) ->
 
 fn update_key(state: &mut InputStore, key: Key, down: bool) {
     match key {
-        Key::Escape => state.state.escape_down = down,
+        Key::Escape => {
+            state.state.escape_down = down;
+            if down {
+                cancel_gesture_by_user(state);
+            }
+        }
         Key::Return | Key::KpReturn => state.state.enter_down = down,
         Key::ControlLeft | Key::ControlRight => set_modifier(&mut state.modifiers, 1, down),
         Key::Alt | Key::AltGr => set_modifier(&mut state.modifiers, 2, down),
@@ -565,6 +599,16 @@ fn simulate_error_text(error: SimulateError) -> String {
     error.to_string()
 }
 
+/// Returns whether a gesture was in progress.
+fn cancel_gesture_by_user(state: &mut InputStore) -> bool {
+    let Some(gesture) = state.gesture.as_mut() else {
+        return false;
+    };
+    gesture.cancelled = true;
+    gesture.points.clear();
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -583,5 +627,25 @@ mod tests {
         record_modifier_event(&mut sequence, 6);
         assert_eq!(sequence[1], 1);
         assert_eq!(sequence[6], 2);
+    }
+
+    #[test]
+    fn left_click_cancels_a_gesture_instead_of_moving_the_window() {
+        const ALT: u8 = 2;
+        configure_window_drag_capture(true, MouseButton::Left, ALT, MouseButton::Right, ALT, &[]);
+        let mut state = InputStore {
+            modifiers: ALT,
+            gesture: Some(GestureInProgress {
+                trigger: GestureTriggerButton::Right,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let no_drag = |_: Point| -> bool { panic!("the cancelling click started a window drag") };
+        handle_button(&mut state, Button::Left, true, no_drag);
+        handle_button(&mut state, Button::Left, false, no_drag);
+        handle_button(&mut state, Button::Right, false, no_drag);
+        assert!(state.gesture.is_none());
+        assert!(state.completed_gestures.is_empty());
     }
 }

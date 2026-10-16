@@ -4,7 +4,7 @@ use crate::core::actions::ActionDispatcher;
 use crate::core::edge_hide::{
     EdgeHideCommand, EdgeHideController, EdgeHideInput, EdgeHideLiveState,
 };
-use crate::core::gesture::{path_length_pixels, recognize};
+use crate::core::gesture::recognize;
 use crate::core::hotzone::{configured_hotzone_rect, detect_configured_hotzone};
 use crate::core::trigger::HotzoneTriggerController;
 use crate::core::window_drag::WindowDragController;
@@ -32,6 +32,24 @@ struct WindowDragActivity {
     active: bool,
     cancelled: bool,
     released_window: Option<platform::WindowInfo>,
+}
+
+/// A press that stays within the configured distance is an ordinary click of its button.
+fn is_trigger_click(config: &AppConfig, capture: &platform::GestureCapture) -> bool {
+    capture.travel < config.mouse_gestures.min_distance as f32
+}
+
+fn gesture_overlay_label(
+    config: &AppConfig,
+    capture: &platform::GestureCapture,
+) -> Option<Option<String>> {
+    if !config.mouse_gestures.show_trail || is_trigger_click(config, capture) {
+        return None;
+    }
+    Some(
+        recognize(&capture.points, &config.mouse_gestures)
+            .and_then(|result| config.gesture_label(result.gesture).map(str::to_owned)),
+    )
 }
 
 impl Engine {
@@ -177,13 +195,17 @@ impl Engine {
                             config.mouse_gestures.enabled && !gestures_paused && !dragging,
                             config.mouse_gestures.trigger_button,
                         );
-                        let gesture_points = platform::active_gesture_points();
-                        if config.mouse_gestures.show_trail && !gesture_points.is_empty() {
-                            let label = recognize(&gesture_points, &config.mouse_gestures)
-                                .and_then(|result| config.gesture_label(result.gesture));
-                            platform::update_gesture_overlay(&gesture_points, label);
+                        let gesture = platform::active_gesture();
+                        if let Some(label) = gesture
+                            .as_ref()
+                            .and_then(|gesture| gesture_overlay_label(&config, gesture))
+                        {
+                            platform::update_gesture_overlay(label.as_deref());
                         } else {
                             platform::hide_gesture_overlay();
+                            if !config.mouse_gestures.show_trail {
+                                platform::discard_gesture_trail();
+                            }
                         }
 
                         // Resolve the display/profile and geometry once for both hints and input.
@@ -546,8 +568,7 @@ impl Engine {
         allow_execution: bool,
     ) {
         while let Some(capture) = platform::take_gesture_capture() {
-            let length = path_length_pixels(&capture.points);
-            if length < config.mouse_gestures.min_distance as f32 {
+            if is_trigger_click(config, &capture) {
                 if let Err(error) = platform::send_trigger_click(capture.trigger) {
                     self.report_runtime_error(ErrorCode::ActionFailed, error);
                 }
@@ -1353,6 +1374,82 @@ fn is_continuous_adjustment_trigger(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn stroke(points: impl IntoIterator<Item = platform::Point>) -> platform::GestureCapture {
+        let mut capture = platform::GestureCapture {
+            trigger: crate::config::GestureTriggerButton::Right,
+            modifiers: 0,
+            points: Vec::new(),
+            travel: 0.0,
+        };
+        for point in points {
+            capture.travel +=
+                crate::core::gesture::append_gesture_point(&mut capture.points, point, false);
+        }
+        capture
+    }
+
+    #[test]
+    fn gesture_overlay_stays_hidden_until_the_configured_distance() {
+        use platform::Point;
+        let mut config = AppConfig::default();
+        config.mouse_gestures.min_distance = 60;
+        for points in [
+            vec![],
+            vec![Point { x: 0, y: 0 }],
+            vec![Point { x: 0, y: 0 }, Point { x: 0, y: 59 }],
+        ] {
+            let capture = stroke(points);
+            assert!(is_trigger_click(&config, &capture));
+            assert_eq!(gesture_overlay_label(&config, &capture), None);
+        }
+        let capture = stroke([Point { x: 0, y: 0 }, Point { x: 0, y: 60 }]);
+        assert!(!is_trigger_click(&config, &capture));
+        assert_eq!(gesture_overlay_label(&config, &capture), Some(None));
+        config.mouse_gestures.show_trail = false;
+        assert_eq!(gesture_overlay_label(&config, &capture), None);
+    }
+
+    #[test]
+    fn compacted_round_trips_are_not_replayed_as_a_click() {
+        let config = AppConfig::default();
+        let capture = stroke((0..=512).map(|i| platform::Point {
+            x: 3 * (i % 2),
+            y: 0,
+        }));
+        let stored = crate::core::gesture::path_length_pixels(&capture.points);
+        assert!(stored < config.mouse_gestures.min_distance as f32);
+        assert!(!is_trigger_click(&config, &capture));
+        assert_eq!(gesture_overlay_label(&config, &capture), Some(None));
+    }
+
+    #[test]
+    fn gesture_overlay_shows_only_the_matched_name_and_keeps_unknown_strokes_silent() {
+        use platform::Point;
+        let mut config = AppConfig::default();
+        config
+            .gesture_labels
+            .insert("gesture-down".into(), "粘贴".into());
+        let straight = stroke([Point { x: 0, y: 0 }, Point { x: 0, y: 100 }]);
+        assert_eq!(
+            gesture_overlay_label(&config, &straight),
+            Some(Some("粘贴".into()))
+        );
+        let unknown = stroke([
+            Point { x: 0, y: 0 },
+            Point { x: 100, y: 10 },
+            Point { x: 0, y: 20 },
+            Point { x: 100, y: 30 },
+            Point { x: 0, y: 40 },
+        ]);
+        assert_eq!(gesture_overlay_label(&config, &unknown), Some(None));
+        config
+            .mouse_gestures
+            .gestures
+            .iter_mut()
+            .for_each(|gesture| gesture.enabled = false);
+        assert_eq!(gesture_overlay_label(&config, &straight), Some(None));
+    }
 
     #[tokio::test]
     async fn shutdown_before_engine_start_is_preserved() {

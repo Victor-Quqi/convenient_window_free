@@ -31,5 +31,25 @@ export function gestureDisplayName(gesture: Pick<GestureTemplate, "id" | "name">
 }
 
 export function gestureLabels(gestures: GestureTemplate[], ui: (key: UiKey) => string): Record<string, string> {
-  return Object.fromEntries(gestures.map(gesture => [gesture.id, gestureDisplayName(gesture, ui)]));
+  return Object.fromEntries(gestures.map(gesture => [gesture.id, gestureOverlayName(gesture, ui)]));
+}
+
+export function gestureOverlayName(gesture: GestureTemplate, ui: (key: UiKey) => string): string {
+  if (gesture.name) return gesture.name;
+  if (gesture.mode === "region-screenshot") return ui("regionScreenshot");
+  const action = gesture.action;
+  if (action.kind === "shortcut") {
+    const names: Record<string, UiKey> = {
+      "Ctrl+C": "gestureActionCopy", "Ctrl+V": "gestureActionPaste", "Alt+F4": "gestureActionClose",
+      "Win+Down": "minimizeWindow", "Win+Up": "maximizeWindow"
+    };
+    return Object.hasOwn(names, action.value ?? "") ? ui(names[action.value!]) : (action.value ?? "");
+  }
+  const names: Record<string, UiKey> = {
+    "show-desktop": "gestureActionDesktop", "toggle-window-topmost": "gestureActionTopmost",
+    "lock-screen": "gestureActionLock", "open-command": "gestureActionCommand",
+    "volume-adjust": Number(action.value) < 0 ? "gestureActionVolumeDown" : "gestureActionVolumeUp",
+    "brightness-adjust": Number(action.value) < 0 ? "gestureActionBrightnessDown" : "gestureActionBrightnessUp"
+  };
+  return Object.hasOwn(names, action.kind) ? ui(names[action.kind]) : "";
 }
