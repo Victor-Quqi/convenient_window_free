@@ -1,6 +1,8 @@
 # Release Process
 
-Version 0.6.5 is the stable Windows x64 release. It was promoted in place on October 13, 2026 after user acceptance; the four assets and the tag retain their accepted identities, with build source `57c52d8c4d3beed12fdc2b9ae1ba3a91bfa9fa16`. Later documentation commits do not change this source identity. All stable releases remain immutable; see the [0.6.5 acceptance scope](testing.md#065-online-acceptance).
+Version 0.6.6 is the stable Windows x64 release. It was promoted in place on October 17, 2026 after user acceptance; the four assets and the tag retain their accepted identities, with build source `0e295b82993e13db4659c75cf80ba06df4701588`. Later documentation commits do not change this source identity. All stable releases remain immutable; see the [0.6.6 acceptance scope](testing.md#066-online-acceptance).
+
+Version 0.6.5 remains available as the previous stable release with its own immutable assets and build source `57c52d8c4d3beed12fdc2b9ae1ba3a91bfa9fa16`.
 
 The standalone desktop has two user acceptance points:
 

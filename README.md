@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | English
 
-Convenient Window is a desktop utility for hot zones, window control, global mouse gestures, screenshots, and topmost-window control. Version 0.6.5 is the stable Windows x64 release, and 0.6.6 is available as a pre-release test candidate; macOS and Linux X11 platform boundaries remain in the codebase but are not release-verified.
+Convenient Window is a desktop utility for hot zones, window control, global mouse gestures, screenshots, and topmost-window control. Version 0.6.6 is the stable Windows x64 release; the previous 0.6.5 stable assets remain available. macOS and Linux X11 platform boundaries remain in the codebase but are not release-verified.
 
 **Turn screen edges and mouse gestures into faster window controls.**
 
@@ -31,13 +31,14 @@ The portable archive filename includes its version, but its contents use the sta
 
 The Windows x64 [0.6.5 release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.5) was promoted on October 13, 2026 after user acceptance. Its installer, portable archive, manifest and checksums are unchanged from the accepted candidate. Previous stable assets remain available.
 
-## 0.6.6 Pre-release
+## 0.6.6 Stable Release
 
-The Windows x64 [0.6.6 release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.6) is a pre-release test candidate published before stable promotion. The 0.6.5 stable downloads are unchanged.
+The Windows x64 [0.6.6 release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.6) was promoted on October 17, 2026 after user acceptance. Its installer, portable archive, manifest and checksums are unchanged from the accepted candidate. The previous 0.6.5 stable downloads remain available.
 
 - Save the current desktop as a window layout: ordinary windows keep their position, size, maximized and topmost state, and can be restored in one click. Minimized windows are restored too; closed, inaccessible or identity-mismatched windows are skipped individually.
 - Compose bottom tabs from Settings → Feature entries: drag bubbles between the highlighted row and the spare row, and click a bubble to open that feature. The highlighted row holds up to four features, the Center is always kept, and dropping a fifth entry on a full row shows a red "full" state instead of adding it.
 - Bottom tabs and settings bubbles share one icon set, so a feature always uses the same glyph in both places.
+- In a narrow layout the bottom tabs keep icons only instead of squeezing the labels; names stay available through hover titles, focus and screen readers.
 
 - Customize hide/restore timing and fix windows failing to tuck away after duration changes or desktop clicks.
 - Keep qualified side-edge blue lines visible during paused drags. Near the top, release after the growing line fills to tuck the window away; early release preserves native Snap.

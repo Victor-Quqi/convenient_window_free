@@ -2,13 +2,13 @@
 
 ## 0.6.6 Online Acceptance
 
-The Windows x64 0.6.6 pre-release candidates are published before stable promotion:
+The Windows x64 0.6.6 candidates were accepted by the user and promoted in place to stable / Latest on October 17, 2026. The installer, portable archive, manifest and checksums retain their accepted identities; nothing was rebuilt or re-uploaded. The 0.6.5 stable downloads remain available for rollback.
 
 - Desktop: [v0.6.6](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.6) NSIS installer and portable archive;
 - Helper: [v0.6.6](https://github.com/ximizhou/convenient-window-helper-releases/releases/tag/v0.6.6), downloaded by the packaged plugin after explicit user consent;
-- uTools plugin: packaged from the fixed market candidate and exported as an UPXS by the user; the plugin package itself contains no executable helper files.
+- uTools plugin: packaged from the fixed market candidate; the plugin package itself contains no executable helper files. The UPXS file identity is still pending from the user, and the market submission has not been made.
 
-Acceptance targets this batch only. The 0.6.5 stable assets are unchanged and remain available for rollback.
+The acceptance list below is the tested scope and remains a regression reference; it is not a claim that every hardware, DPI or UAC scenario has an individual record.
 
 1. Packaged plugin: install the exported UPXS, let the plugin download and verify the 0.6.6 helper after explicit consent, then restart both hosts.
 2. Window layouts: record the current desktop with duplicated browser/editor windows and a minimized window, move/resize/maximize/pin the targets, then restore. Confirm position, size, maximized, minimized and topmost states, and that closed or inaccessible windows are reported as skipped instead of failing the batch.
