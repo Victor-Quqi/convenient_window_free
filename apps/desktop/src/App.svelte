@@ -24,6 +24,10 @@
   import { defaultSettings, loadSettings, MAX_GESTURE_TEMPLATES, normalizeSettings, saveSettings } from "./settings-store";
   import { LANGUAGE_KEY, normalizeLanguage, resolveInitialLanguage, translator } from "./i18n";
   import { en, format, zh } from "./i18n";
+  import NavigationComposer from "./NavigationComposer.svelte";
+  import NavGlyph from "./NavGlyph.svelte";
+  import WindowLayouts from "./WindowLayouts.svelte";
+  import { loadNavigationPreferences, normalizeNavigationPreferences, saveNavigationPreferences, type NavigationFeatureId, type NavigationPreferences } from "./navigation-preferences";
   import type { Language, UiKey } from "./i18n";
   import type {
     ActionKind, AppSettings, DisplayInfo, Edge, HelperPlatformInfo, HelperStatus, HotzoneAction,
@@ -31,7 +35,7 @@
     OcrLanguage, TaskbarAppearanceSettings, TaskbarAppearanceStatus, TriggerAction, TriggerKind
   } from "./types";
 
-  type Mode = "power" | "hotzones" | "edge-hide" | "gestures" | "more" | "beautification";
+  type Mode = "power" | "hotzones" | "edge-hide" | "gestures" | "more" | "beautification" | "window-layouts";
   let taskbarStatus: TaskbarAppearanceStatus | null = null;
   function updateTaskbarAppearance(patch: Partial<TaskbarAppearanceSettings>): void {
     settings = {
@@ -104,6 +108,7 @@
   const capabilityLabels: Record<keyof HelperPlatformInfo["capabilities"], [string, string]> = {
     globalInput: ["全局输入", "global input"],
     windowControl: ["窗口控制", "window control"],
+    windowLayouts: ["窗口布局", "window layouts"],
     windowTopmost: ["窗口置顶", "window topmost"],
     screenCapture: ["屏幕截图", "screen capture"],
     ocr: ["文字识别", "OCR"],
@@ -122,6 +127,8 @@
   }
 
   let settings: AppSettings = loadSettings();
+  let navigation: NavigationPreferences = loadNavigationPreferences();
+  $: visibleNavigation = navigation.order.filter((id) => navigation.visible.includes(id));
   let mode: Mode | null = null;
   let helperStatus: HelperStatus = "disconnected";
   const administratorModeSupported = host.getPrivilegeSupport?.().supported
@@ -331,6 +338,10 @@
   function statusText(status: UiStatusKey | string, useEnglish = english): string {
     const key = statusKeys[status as UiStatusKey] ?? (Object.hasOwn(zh, status) ? status as UiKey : undefined);
     return key ? format((useEnglish ? en : zh)[key], { schema: SUPPORTED_HELPER_SCHEMA }) : status;
+  }
+  function formatHelperStartError(error: string): string {
+    if (!/os error 5|access is denied|拒绝访问/i.test(error)) return error;
+    return format(ui("helperAccessDenied"), { error });
   }
   $: renderedLastMessage = statusText(lastMessage, english);
   // Lifecycle intent follows the saved switch/socket, not an error or unknown permission label.
@@ -711,6 +722,22 @@
     if (mode === "hotzones") cancelHotzoneVariant();
     if (mode === "gestures") cancelGestureVariant();
     mode = nextMode;
+  }
+
+  function openNavigationFeature(id: NavigationFeatureId): void {
+    toggleMode(id as Mode);
+  }
+  function navigationLabel(id: NavigationFeatureId): string {
+    const labels: Record<NavigationFeatureId, UiKey> = { power: "power", hotzones: "hotzones", "edge-hide": "edgeHide", gestures: "gestures", beautification: "beautification", "window-layouts": "windowLayouts" };
+    return ui(labels[id]);
+  }
+  function navigationDescription(id: NavigationFeatureId): string {
+    const descriptions: Record<NavigationFeatureId, UiKey> = { power: "navigationTipPower", hotzones: "navigationTipHotzones", "edge-hide": "navigationTipEdgeHide", gestures: "navigationTipGestures", beautification: "navigationTipBeautification", "window-layouts": "navigationTipWindowLayouts" };
+    return ui(descriptions[id]);
+  }
+  function applyNavigationPreferences(value: NavigationPreferences): void {
+    navigation = normalizeNavigationPreferences(value);
+    saveNavigationPreferences(navigation);
   }
 
   function closeMode(): void {
@@ -1102,8 +1129,9 @@
     recoveringHelper = false;
     helperRecoveryFailed = true;
     helper.disconnect();
-    helperError = message;
-    lastMessage = message;
+    const rendered = formatHelperStartError(message);
+    helperError = rendered;
+    lastMessage = rendered;
   }
 
   function resetHelperRecovery(): void {
@@ -1127,7 +1155,7 @@
     privilegeNotice = result.warning ?? "";
     lastMessage = result.ok
       ? result.alreadyRunning ? "helperStarting" : "helperStartedConnecting"
-      : result.error ?? "helperStartFailed";
+      : result.error ? formatHelperStartError(result.error) : "helperStartFailed";
     if (result.ok) helper.connect();
     else helperError = lastMessage;
     return result.ok;
@@ -1333,18 +1361,19 @@
       />
 
       <nav class="mode-nav" aria-label={ui("featureNavigation")}>
-        <button class:active={mode === "power"} on:click={() => toggleMode("power")} type="button"><span class="nav-icon power-icon"></span><b>{ui("power")}</b></button>
-        <button class:active={mode === "hotzones"} on:click={() => toggleMode("hotzones")} type="button"><span class="nav-icon corner-icon"></span><b>{ui("hotzones")}</b></button>
-        <button class:active={mode === "edge-hide"} on:click={() => toggleMode("edge-hide")} type="button"><span class="nav-icon edge-icon"></span><b>{ui("edgeHide")}</b></button>
-        <button class:active={mode === "gestures"} on:click={() => toggleMode("gestures")} type="button"><span class="nav-icon gesture-icon"></span><b>{ui("gestures")}</b></button>
-        <button class:active={mode === "beautification"} on:click={() => toggleMode("beautification")} type="button"><svg class="nav-beauty" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="1.7" aria-hidden="true"><path d="m4.5 19.5 10-10a1.4 1.4 0 0 1 2 2l-10 10a1.4 1.4 0 0 1-2-2ZM12 12l2 2M8 3l.8 2.2L11 6l-2.2.8L8 9l-.8-2.2L5 6l2.2-.8ZM19 3v4m-2-2h4M20 16v4m-2-2h4"/></svg><b>{ui("beautification")}</b></button>
+        {#each visibleNavigation as item (item)}
+          <button aria-label={navigationLabel(item)} data-feature-id={item} class:active={mode === item} on:click={() => openNavigationFeature(item)} type="button">
+            <NavGlyph id={item} />
+            <b>{navigationLabel(item)}</b>
+          </button>
+        {/each}
       </nav>
     </section>
 
     {#if mode !== null}
       <aside class:gesture-drawer={mode === "gestures"} class="drawer" in:fly={{ x: 28, duration: 220 }}>
         <header class="drawer-head">
-          <div><span>{mode === "power" ? ui("power") : mode === "hotzones" ? ui("hotzones") : mode === "edge-hide" ? ui("edgeHide") : mode === "gestures" ? ui("gestures") : mode === "beautification" ? ui("beautification") : ui("settingsLabel")}</span><p>{mode === "hotzones" ? `${zoneLabel(selectedZone)} · S${Math.max(0, displays.findIndex((item) => item.id === selectedDisplayId)) + 1}` : mode === "edge-hide" ? windowEnhancementTab === "edge" ? ui("edgeSubtitle") : ui("dragSubtitle") : mode === "gestures" ? ui("gestureSubtitle") : mode === "more" ? ui("moreSubtitle") : mode === "beautification" ? ui("beautificationSubtitle") : ui("powerSubtitle")}</p></div>
+          <div><span>{mode === "power" ? ui("power") : mode === "hotzones" ? ui("hotzones") : mode === "edge-hide" ? ui("edgeHide") : mode === "gestures" ? ui("gestures") : mode === "beautification" ? ui("beautification") : mode === "window-layouts" ? ui("windowLayouts") : ui("settingsLabel")}</span><p>{mode === "hotzones" ? `${zoneLabel(selectedZone)} · S${Math.max(0, displays.findIndex((item) => item.id === selectedDisplayId)) + 1}` : mode === "edge-hide" ? windowEnhancementTab === "edge" ? ui("edgeSubtitle") : ui("dragSubtitle") : mode === "gestures" ? ui("gestureSubtitle") : mode === "more" ? ui("moreSubtitle") : mode === "beautification" ? ui("beautificationSubtitle") : mode === "window-layouts" ? ui("windowLayoutsSubtitle") : ui("powerSubtitle")}</p></div>
           <button aria-label={ui("close")} class="close-drawer" on:click={closeMode} type="button">×</button>
         </header>
 
@@ -1591,9 +1620,12 @@
                   <button class="quiet" on:click={copyDiagnostics} type="button">{ui("diagnostics")}</button>
                 </div>
               </details>
+            {:else if mode === "window-layouts"}
+              <WindowLayouts {helper} english={english} connected={helperStatus === "connected"} supported={helperPlatform?.capabilities.windowLayouts === true} platformSupportsWindowControl={helperPlatform?.capabilities.windowControl === true} />
             {:else if mode === "beautification"}
               <TaskbarAppearance {english} appearance={settings.taskbarAppearance} connected={helperStatus === "connected"} masterEnabled={settings.enabled} status={taskbarStatus} onChange={updateTaskbarAppearance} />
             {:else}
+              <NavigationComposer preferences={navigation} label={navigationLabel} description={navigationDescription} {ui} onChange={applyNavigationPreferences} onOpen={openNavigationFeature} />
               <div class="global-settings">
                 <div class="language-setting"><h2>{ui("language")}</h2><select aria-label={ui("language")} bind:value={language} on:change={setLanguage}><option value="zh-CN">{ui("chinese")}</option><option value="en-US">{ui("english")}</option></select></div>
                 <section class="permission-settings" aria-label={ui("runtimePermission")}>

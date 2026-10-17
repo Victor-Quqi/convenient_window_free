@@ -201,7 +201,9 @@ Exit from the tray menu before removing this directory.
 )
 
 $portableZip = Join-Path $artifactsDir "convenient-window-$version-windows-x64-portable.zip"
-Compress-Archive -Path (Join-Path $portableDir "*") -DestinationPath $portableZip -CompressionLevel Optimal
+# Keep the archive filename versioned for download identity, but use a stable
+# top-level directory so users can extract a new package over the old copy.
+Compress-Archive -Path $portableDir -DestinationPath $portableZip -CompressionLevel Optimal
 $installerCopy = Join-Path $artifactsDir "convenient-window-$version-windows-x64-setup.exe"
 Copy-Item -Force $nsisInstaller.FullName $installerCopy
 

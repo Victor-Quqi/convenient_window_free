@@ -1,8 +1,26 @@
 # Testing
 
+## 0.6.6 Online Acceptance
+
+The Windows x64 0.6.6 pre-release candidates are published before stable promotion:
+
+- Desktop: [v0.6.6](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.6) NSIS installer and portable archive;
+- Helper: [v0.6.6](https://github.com/ximizhou/convenient-window-helper-releases/releases/tag/v0.6.6), downloaded by the packaged plugin after explicit user consent;
+- uTools plugin: packaged from the fixed market candidate and exported as an UPXS by the user; the plugin package itself contains no executable helper files.
+
+Acceptance targets this batch only. The 0.6.5 stable assets are unchanged and remain available for rollback.
+
+1. Packaged plugin: install the exported UPXS, let the plugin download and verify the 0.6.6 helper after explicit consent, then restart both hosts.
+2. Window layouts: record the current desktop with duplicated browser/editor windows and a minimized window, move/resize/maximize/pin the targets, then restore. Confirm position, size, maximized, minimized and topmost states, and that closed or inaccessible windows are reported as skipped instead of failing the batch.
+3. Feature entries: open Settings; confirm the first paint of the bubbles, hover/focus descriptions, click-to-open, same-row and cross-row dragging with live reflow, and that dragging a fifth entry onto the full highlighted row shows the red "full" state and is rejected. Confirm bottom tabs and bubbles use the same glyph for each feature.
+4. Desktop: install from the 0.6.6 NSIS package, run it, and uninstall it; test the portable archive from a separate folder after closing the installed app.
+5. Regression: language/theme/narrow layouts, master-switch cycles, UAC approval/cancellation, existing hot zones, gestures, pins, screenshots and taskbar behavior.
+
+Status after publication: helper and desktop are active Pre-releases, the uTools UPXS has not been exported or install-verified, nothing has been promoted to stable, and the market submission has not been made.
+
 ## 0.6.5 Online Acceptance
 
-The 0.6.5 candidate was accepted by the user and promoted in place on October 13, 2026. Its installer, portable archive, manifest and checksums retain their identity. The following list is the acceptance scope and a regression reference, not a claim that every hardware/UAC scenario has an individual record; no new build or extra acceptance round is required by promotion. Export existing settings before regression checks, and exit the other host normally; the helper port is shared.
+The 0.6.5 candidate was accepted by the user and promoted in place on October 13, 2026. Its installer, portable archive, manifest and checksums retain their identity. The following list is the acceptance scope and a regression reference, not a claim that every hardware/UAC scenario has an individual record; no new build or extra acceptance round is required by promotion. Export existing settings before regression checks, and exit the other host normally; the helper port is shared. New portable candidates must keep the versioned ZIP filename and the stable `ConvenientWindow-portable` directory inside the archive; the artifact audit checks both the staging directory and the extracted archive layout.
 
 1. Upgrade from the existing stable installation, confirm version 0.6.5 and preserved settings, then verify restart, tray exit and uninstall. Test portable from a separate folder after closing the installed app.
 2. Compare 160/260/400 ms and custom 80/800 ms animation durations. After each change, restore from the edge, leave the window, click the desktop and repeat at least five times. Disable/re-enable animation and confirm complete settings and reachable final controls.
@@ -13,6 +31,12 @@ The 0.6.5 candidate was accepted by the user and promoted in place on October 13
 7. Verify language/theme/narrow layouts, master-switch cycles, UAC approval/cancellation, ordinary-permission commands, existing gestures/pins/OCR and taskbar restoration. Record system build, DPI, exact asset identity, steps and expected/actual behavior.
 
 Publication, interactive acceptance and stable promotion are separate states. All stable assets, including 0.6.5 and earlier versions, are immutable. Do not silently replace an existing installation during automatic tests. Development acceptance sections below preserve their original task scope and artifact state; they do not describe the current release status.
+
+## Window Layout and Feature Entry Acceptance
+
+Frontend gates cover both hosts with the real production bundle: the Settings drawer opens with Feature entries at the top; the highlighted top row renders correctly on first paint (no fallback-width sizing), keeps at most four configurable entries, shows name/description tooltips on hover and focus, opens the feature on click, supports same-row and cross-row pointer drag with live reflow, and rejects a fifth entry with the red "full" state. Center stays visible, a previously saved fifth entry is normalized back to the spare row, and the spare entry can be enabled, reordered by drag or keyboard, hidden again, and restored after reload. Bottom tabs and composer bubbles must render the same `NavGlyph` icon markup. Assertions use stable `data-feature-id` values rather than a fixed button order. Layout UI tests cover disconnected-helper disabled states, capture/rename/delete/restore, skipped/error summaries, malformed local snapshots, storage persistence and language switching.
+
+Native acceptance uses real Windows windows and the matching helper: capture ordinary visible windows, include duplicate process/class/title identities, move and resize targets, restore maximized/topmost state, close one target before restore, and verify restored/skipped/errors counts. Verify that layout operations do not mutate schema-v9 settings or helper config persistence. Linux X11/macOS evidence remains platform-boundary evidence; Wayland and unsupported states are not described as fully accepted. Browser mocks, Rust unit tests and isolated windows cannot replace this real-window acceptance.
 
 ## Shortcut capture and corner-click development acceptance (0.6.5, 2026-10-13)
 

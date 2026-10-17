@@ -72,6 +72,10 @@ pub fn window_info_for_handle(handle: WindowHandle) -> Result<Option<super::Wind
     backend::window_info_for_handle(handle)
 }
 
+pub fn list_windows() -> Result<Vec<super::WindowInfo>> {
+    backend::list_windows()
+}
+
 pub fn draggable_window_at(
     point: Point,
     paused_apps: &[String],
@@ -122,6 +126,10 @@ pub fn set_window_topmost(handle: WindowHandle, topmost: bool) -> Result<()> {
 
 pub fn set_window_rect_topmost(handle: WindowHandle, rect: Rect, topmost: bool) -> Result<()> {
     backend::set_window_rect_topmost(handle, rect, topmost)
+}
+
+pub fn apply_window_layout(handle: WindowHandle, layout: &super::WindowLayout) -> Result<()> {
+    backend::apply_window_layout(handle, layout)
 }
 
 pub fn lock_screen() -> Result<()> {

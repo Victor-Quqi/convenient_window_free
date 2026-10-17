@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md) | English
 
-Convenient Window is a desktop utility for hot zones, window control, global mouse gestures, screenshots, and topmost-window control. Version 0.6.5 is the stable Windows x64 release; macOS and Linux X11 platform boundaries remain in the codebase but are not release-verified.
+Convenient Window is a desktop utility for hot zones, window control, global mouse gestures, screenshots, and topmost-window control. Version 0.6.5 is the stable Windows x64 release, and 0.6.6 is available as a pre-release test candidate; macOS and Linux X11 platform boundaries remain in the codebase but are not release-verified.
 
 **Turn screen edges and mouse gestures into faster window controls.**
 
@@ -23,9 +23,21 @@ Download the Windows installer or portable archive from the [latest stable relea
 
 Release assets are currently unsigned. Windows may show an unknown-publisher or Microsoft Defender SmartScreen warning. Checksums and an artifact manifest are included with each release so the downloaded files can be verified.
 
+If security software blocks or quarantines `magic-corners-helper.exe`, the app may report access denied (`os error 5`). Verify the Release checksum first, then inspect the quarantine area or submit a false-positive report; do not treat one heuristic alert as proof of malware or disable protection globally.
+
+The portable archive filename includes its version, but its contents use the stable top-level directory `ConvenientWindow-portable`. Close the app, extract a newer archive over that directory, and replace the files in place. Settings stay in the current user's Local AppData directory rather than inside the portable directory.
+
 ## 0.6.5 Stable Release
 
 The Windows x64 [0.6.5 release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.5) was promoted on October 13, 2026 after user acceptance. Its installer, portable archive, manifest and checksums are unchanged from the accepted candidate. Previous stable assets remain available.
+
+## 0.6.6 Pre-release
+
+The Windows x64 [0.6.6 release](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.6) is a pre-release test candidate published before stable promotion. The 0.6.5 stable downloads are unchanged.
+
+- Save the current desktop as a window layout: ordinary windows keep their position, size, maximized and topmost state, and can be restored in one click. Minimized windows are restored too; closed, inaccessible or identity-mismatched windows are skipped individually.
+- Compose bottom tabs from Settings → Feature entries: drag bubbles between the highlighted row and the spare row, and click a bubble to open that feature. The highlighted row holds up to four features, the Center is always kept, and dropping a fifth entry on a full row shows a red "full" state instead of adding it.
+- Bottom tabs and settings bubbles share one icon set, so a feature always uses the same glyph in both places.
 
 - Customize hide/restore timing and fix windows failing to tuck away after duration changes or desktop clicks.
 - Keep qualified side-edge blue lines visible during paused drags. Near the top, release after the growing line fills to tuck the window away; early release preserves native Snap.
@@ -49,6 +61,7 @@ Development source adds an **Appearance** (slim wand-and-sparkle) entry and move
 - **Anywhere move and resize**: move or resize the active window with configurable modifier-and-mouse combinations.
 - **Topmost controls**: keep a window above others; a red on-window pin is shown by default and releases the window when clicked.
 - **Global mouse gestures**: bind gestures to shortcuts, system actions, commands, and window controls; create and manage custom gesture samples.
+- **Window layout snapshots**: enable Window layouts from Settings → Feature entries to save ordinary window positions, sizes, maximized and topmost states, then restore them with one click. Missing or inaccessible windows are skipped individually. The highlighted top row holds up to four bottom entries (the Center is always kept); dragging a fifth entry onto it flashes red and is rejected, while spare entries wait in the dimmed second row. Bottom tabs and bubbles share the same icon set.
 - **Screenshots and pinned images**: capture an area, keep the image above other windows, move or resize it, adjust opacity, copy it, or save it as PNG.
 - **Local OCR**: recognize text with Windows 11 language capabilities and copy the result without uploading the screenshot.
 - **Per-monitor configuration**: preserve independent profiles across supported display layouts and signed virtual-desktop coordinates.
@@ -85,7 +98,7 @@ Development source adds an **Appearance** (slim wand-and-sparkle) entry and move
 ## Quick Start
 
 1. Download the installer or portable ZIP from the [latest release](https://github.com/ximizhou/convenient_window_free/releases/latest).
-2. Install the app, or extract the portable archive and run `ConvenientWindow.exe`.
+2. Install the app, or extract the portable archive into its `ConvenientWindow-portable` directory and run `ConvenientWindow.exe`; replace that same directory's files when upgrading.
 3. Open Convenient Window from the system tray.
 4. Turn on the main feature switch, then configure hot zones, window enhancements, or mouse gestures.
 
@@ -94,7 +107,7 @@ Closing the settings window keeps the tray application running. Use the tray men
 ## Privacy and Security
 
 - OCR is performed through local Windows APIs. Screenshots are not uploaded for recognition.
-- Configuration, authentication tokens, usage data, and logs stay in the application's local data directory.
+- Configuration, authentication tokens, usage data, and logs stay in the application's local data directory. Removing the portable program directory does not remove those settings by design.
 - Local WebSocket access is protected by a random token.
 - A platform-native single-instance lock prevents separate host integrations from controlling competing helper processes.
 

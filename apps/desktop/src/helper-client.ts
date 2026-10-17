@@ -3,9 +3,11 @@ import { translator } from "./i18n";
 import type { Language } from "./i18n";
 import type { AppSettings, HelperMessage, HelperPlatformInfo, HelperStatus } from "./types";
 import { settingsForHelper } from "./runtime-settings";
+import type { WindowLayoutCapture, WindowLayoutRestoreResult, WindowLayoutWindow } from "./window-layout-store";
 
 type MessageHandler = (message: HelperMessage) => void;
 type StatusHandler = (status: HelperStatus) => void;
+type PendingRequest = { resolve: (message: HelperMessage) => void; reject: (error: Error) => void; timer: ReturnType<typeof setTimeout> };
 
 export const SUPPORTED_HELPER_PROTOCOL = 7;
 export const SUPPORTED_HELPER_SCHEMA = 9;
@@ -32,6 +34,7 @@ export class HelperClient {
   private generation = 0;
   private readonly messageHandlers = new Set<MessageHandler>();
   private readonly statusHandlers = new Set<StatusHandler>();
+  private readonly pendingRequests = new Map<string, PendingRequest>();
 
   constructor(
     private readonly url = "ws://127.0.0.1:56873",
@@ -72,6 +75,7 @@ export class HelperClient {
       this.recordingSupported = false;
       this.stopRequested = false;
       this.emitStatus("disconnected");
+      this.rejectPending("Helper disconnected");
       if (this.shouldReconnect) this.scheduleReconnect();
     });
     socket.addEventListener("error", () => {
@@ -81,6 +85,7 @@ export class HelperClient {
       this.recordingSupported = false;
       this.stopRequested = false;
       this.emitStatus("disconnected");
+      this.rejectPending("Helper connection failed");
       if (this.shouldReconnect) this.scheduleReconnect();
       try {
         socket.close();
@@ -92,6 +97,7 @@ export class HelperClient {
       if (gen !== this.generation) return;
       try {
         const message = JSON.parse(String(event.data)) as HelperMessage;
+        this.resolvePending(message);
         if (message.type === "helper.ready") {
           const data = message.data as { protocolVersion?: unknown; schemaVersion?: unknown; platform?: unknown } | null;
           const protocolVersion = data?.protocolVersion;
@@ -114,6 +120,7 @@ export class HelperClient {
     this.clearReconnectTimer();
     this.closeSocket();
     this.latestPlatform = null;
+    this.rejectPending("Helper disconnected");
     this.emitStatus("disconnected");
   }
 
@@ -157,6 +164,20 @@ export class HelperClient {
     this.send("usage.get", {});
   }
 
+  captureWindowLayout(): Promise<WindowLayoutCapture> {
+    return this.request("window.layout.capture", {}).then((message) => {
+      const data = message.data && typeof message.data === "object" ? message.data as Record<string, unknown> : {};
+      return { windows: Array.isArray(data.windows) ? data.windows as WindowLayoutWindow[] : [], capturedAt: typeof data.capturedAt === "number" ? data.capturedAt : undefined };
+    });
+  }
+
+  restoreWindowLayout(windows: WindowLayoutWindow[]): Promise<WindowLayoutRestoreResult> {
+    return this.request("window.layout.restore", { windows }).then((message) => {
+      const data = message.data && typeof message.data === "object" ? message.data as Record<string, unknown> : {};
+      return { restored: typeof data.restored === "number" ? data.restored : 0, skipped: typeof data.skipped === "number" ? data.skipped : 0, errors: Array.isArray(data.errors) ? data.errors.map((item) => item && typeof item === "object" && typeof (item as Record<string, unknown>).details === "string" ? String((item as Record<string, unknown>).details) : String(item)) : [] };
+    });
+  }
+
   stop(): boolean {
     this.shouldReconnect = false;
     this.clearReconnectTimer();
@@ -187,6 +208,31 @@ export class HelperClient {
       time: Date.now(),
       data
     });
+  }
+
+  private request(type: string, data: unknown): Promise<HelperMessage> {
+    return new Promise((resolve, reject) => {
+      if (!this.socket || this.socket.readyState !== WebSocket.OPEN || !this.protocolReady) { reject(new Error("Helper is not ready")); return; }
+      const id = crypto.randomUUID();
+      const timer = setTimeout(() => { this.pendingRequests.delete(id); reject(new Error("Helper request timed out")); }, 8_000);
+      this.pendingRequests.set(id, { resolve, reject, timer });
+      if (!this.sendMessage({ id, type, time: Date.now(), data })) { clearTimeout(timer); this.pendingRequests.delete(id); reject(new Error("Helper request was not sent")); }
+    });
+  }
+
+  private resolvePending(message: HelperMessage): void {
+    if (message.type !== "window.layout.captured" && message.type !== "window.layout.restored" && message.type !== "runtime.error") return;
+    const data = message.data && typeof message.data === "object" ? message.data as Record<string, unknown> : {};
+    const requestId = typeof data.requestId === "string" ? data.requestId : message.id;
+    const pending = this.pendingRequests.get(requestId);
+    if (!pending) return;
+    clearTimeout(pending.timer); this.pendingRequests.delete(requestId);
+    if (message.type === "runtime.error") pending.reject(new Error(typeof data.details === "string" && data.details.trim() ? data.details : "Helper request failed"));
+    else pending.resolve(message);
+  }
+
+  private rejectPending(message: string): void {
+    for (const [id, pending] of this.pendingRequests) { clearTimeout(pending.timer); pending.reject(new Error(message)); this.pendingRequests.delete(id); }
   }
 
   private sendMessage(message: HelperMessage): boolean {

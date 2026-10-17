@@ -2,7 +2,7 @@ use anyhow::{bail, Result};
 use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use windows::core::{w, PCWSTR, PWSTR};
-use windows::Win32::Foundation::{CloseHandle, HWND, POINT, RECT};
+use windows::Win32::Foundation::{CloseHandle, BOOL, HWND, LPARAM, POINT, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MonitorFromWindow, MONITORINFO, MONITOR_DEFAULTTONEAREST,
 };
@@ -11,12 +11,14 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    FindWindowExW, FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow, GetGUIThreadInfo,
-    GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextW, GetWindowThreadProcessId,
-    IsIconic, IsWindow, IsWindowArranged, IsWindowVisible, IsZoomed, SetWindowPos, ShowWindow,
-    WindowFromPoint, GA_ROOT, GUITHREADINFO, GUI_INMOVESIZE, GWL_EXSTYLE, GW_OWNER, HWND_NOTOPMOST,
-    HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER,
-    SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    EnumWindows, FindWindowExW, FindWindowW, GetAncestor, GetClassNameW, GetForegroundWindow,
+    GetGUIThreadInfo, GetWindow, GetWindowLongPtrW, GetWindowPlacement, GetWindowRect,
+    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowArranged,
+    IsWindowVisible, IsZoomed, SetWindowPlacement, SetWindowPos, ShowWindow, WindowFromPoint,
+    GA_ROOT, GUITHREADINFO, GUI_INMOVESIZE, GWL_EXSTYLE, GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST,
+    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SW_MAXIMIZE,
+    SW_MINIMIZE, SW_RESTORE, SW_SHOWMAXIMIZED, SW_SHOWMINNOACTIVE, SW_SHOWNOACTIVATE,
+    WINDOWPLACEMENT, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
 };
 
 use crate::platform::{Point, Rect as AppRect, WindowHandle, WindowInfo};
@@ -86,6 +88,149 @@ fn window_info(hwnd: HWND, include_tool_window: bool) -> Result<Option<WindowInf
 
 pub fn window_info_for_handle(handle: WindowHandle) -> Result<Option<WindowInfo>> {
     window_info(HWND(handle.0 as *mut core::ffi::c_void), false)
+}
+
+/// Enumerate ordinary visible top-level windows in z-order. Shell surfaces,
+/// owned/tool windows and transient menus are intentionally excluded because
+/// they cannot be restored as independent user windows.
+pub fn list_window_layouts() -> Result<Vec<crate::platform::WindowLayoutTarget>> {
+    let mut windows = Vec::<crate::platform::WindowLayoutTarget>::new();
+    let parameter =
+        LPARAM((&mut windows as *mut Vec<crate::platform::WindowLayoutTarget>) as isize);
+    unsafe {
+        EnumWindows(Some(enum_layout_target), parameter)?;
+    }
+    Ok(windows)
+}
+
+unsafe extern "system" fn enum_layout_target(hwnd: HWND, data: LPARAM) -> BOOL {
+    let windows = &mut *(data.0 as *mut Vec<crate::platform::WindowLayoutTarget>);
+    let Some(window) = window_info(hwnd, false).ok().flatten() else {
+        return true.into();
+    };
+    if !is_layout_candidate(&window) {
+        return true.into();
+    }
+    let minimized = unsafe { IsIconic(hwnd).as_bool() };
+    let placement_rect = match normal_window_rect(hwnd) {
+        Ok(rect) => Some(rect),
+        Err(_) if minimized => return true.into(),
+        Err(_) => None,
+    };
+    windows.push(crate::platform::WindowLayoutTarget {
+        handle: window.handle,
+        rect: if minimized {
+            placement_rect.unwrap_or(window.rect)
+        } else {
+            window.rect
+        },
+        placement_rect,
+        title: window.title,
+        class_name: window.class_name,
+        process_name: window.process_name,
+        minimized,
+        maximized: window.maximized,
+        transient: window.transient,
+        topmost: window.topmost,
+    });
+    true.into()
+}
+
+fn is_layout_candidate(window: &WindowInfo) -> bool {
+    !window.transient
+        && !matches!(
+            window.class_name.as_str(),
+            "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "#32768"
+        )
+}
+
+pub fn apply_window_layout(
+    handle: WindowHandle,
+    layout: &crate::platform::WindowLayout,
+) -> Result<()> {
+    let hwnd = HWND(handle.0 as *mut core::ffi::c_void);
+    let Some(window) = window_info(hwnd, false)? else {
+        bail!("window layout target is no longer available")
+    };
+    if !is_layout_candidate(&window) {
+        bail!("window layout target is not an ordinary window")
+    }
+
+    if layout_identity(&window.process_name, &window.class_name, &window.title)
+        != layout_identity(&layout.process_name, &layout.class_name, &layout.title)
+    {
+        bail!("window layout target identity changed")
+    }
+
+    if let Some(rect) = layout.placement_rect {
+        let mut placement = WINDOWPLACEMENT {
+            length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+            ..Default::default()
+        };
+        unsafe {
+            GetWindowPlacement(hwnd, &mut placement)?;
+        }
+        placement.rcNormalPosition = RECT {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        };
+        placement.showCmd = if layout.minimized {
+            SW_SHOWMINNOACTIVE.0 as u32
+        } else if layout.maximized {
+            SW_SHOWMAXIMIZED.0 as u32
+        } else {
+            SW_SHOWNOACTIVATE.0 as u32
+        };
+        unsafe {
+            SetWindowPlacement(hwnd, &placement)?;
+        }
+        set_window_topmost(handle, layout.topmost)?;
+        return Ok(());
+    }
+
+    // Older snapshots contain screen coordinates but no native placement.
+    unsafe {
+        let _ = ShowWindow(hwnd, SW_RESTORE);
+    }
+    set_window_rect(handle, layout.rect)?;
+    if layout.maximized {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_MAXIMIZE);
+        }
+    } else if layout.minimized {
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_MINIMIZE);
+        }
+    }
+    set_window_topmost(handle, layout.topmost)?;
+    Ok(())
+}
+
+fn normal_window_rect(hwnd: HWND) -> Result<AppRect> {
+    let mut placement = WINDOWPLACEMENT {
+        length: std::mem::size_of::<WINDOWPLACEMENT>() as u32,
+        ..Default::default()
+    };
+    unsafe {
+        GetWindowPlacement(hwnd, &mut placement)?;
+    }
+    let rect = placement.rcNormalPosition;
+    Ok(AppRect {
+        left: rect.left,
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+    })
+}
+
+fn layout_identity(process: &str, class_name: &str, title: &str) -> (String, String, String) {
+    (
+        process.to_lowercase(),
+        class_name.to_lowercase(),
+        title.to_string(),
+    )
 }
 
 /// Preserve the keyboard meaning of the existing presets, but use the click's
@@ -463,7 +608,7 @@ fn process_name(process_id: u32) -> Option<String> {
 mod tests {
     use super::*;
     use windows::Win32::UI::WindowsAndMessaging::{
-        CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP,
+        CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WS_POPUP, WS_VISIBLE,
     };
 
     #[test]
@@ -509,6 +654,62 @@ mod tests {
         )];
 
         assert_eq!(select_taskbar_anchor(target, &taskbars), None);
+    }
+
+    #[test]
+    fn minimized_layout_round_trip_keeps_normal_placement_and_show_state() {
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("ConvenientWindowMinimizedLayoutTest"),
+                WS_POPUP | WS_VISIBLE,
+                46,
+                58,
+                180,
+                120,
+                HWND::default(),
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let handle = WindowHandle(hwnd.0 as isize);
+        let before = normal_window_rect(hwnd).unwrap();
+        unsafe {
+            let _ = ShowWindow(hwnd, SW_MINIMIZE);
+        }
+        assert!(window_is_minimized(handle));
+
+        let target = list_window_layouts()
+            .unwrap()
+            .into_iter()
+            .find(|window| window.handle == handle)
+            .expect("a visible minimized ordinary window is a layout target");
+        assert!(target.minimized);
+        assert_eq!(target.placement_rect, Some(before));
+
+        let mut layout = crate::platform::WindowLayout {
+            process_name: target.process_name,
+            class_name: target.class_name,
+            title: target.title,
+            occurrence: 0,
+            rect: target.rect,
+            placement_rect: target.placement_rect,
+            minimized: true,
+            maximized: false,
+            topmost: false,
+        };
+        apply_window_layout(handle, &layout).unwrap();
+        assert!(window_is_minimized(handle));
+        assert_eq!(normal_window_rect(hwnd).unwrap(), before);
+
+        layout.minimized = false;
+        apply_window_layout(handle, &layout).unwrap();
+        assert!(!window_is_minimized(handle));
+        assert_eq!(normal_window_rect(hwnd).unwrap(), before);
+        let _ = unsafe { DestroyWindow(hwnd) };
     }
 
     #[test]

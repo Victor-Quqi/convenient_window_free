@@ -36,7 +36,8 @@ pub fn window_drag_started_notification() -> &'static tokio::sync::Notify {
     WINDOW_DRAG_STARTED.get_or_init(tokio::sync::Notify::new)
 }
 pub mod taskbar;
-use serde::Serialize;
+use anyhow::Result;
+use serde::{Deserialize, Serialize};
 pub use taskbar::TaskbarAppearanceWorker;
 
 #[derive(Clone, Debug, Serialize, Eq, PartialEq)]
@@ -44,6 +45,7 @@ pub use taskbar::TaskbarAppearanceWorker;
 pub struct PlatformCapabilities {
     pub global_input: bool,
     pub window_control: bool,
+    pub window_layouts: bool,
     pub window_topmost: bool,
     pub screen_capture: bool,
     pub ocr: bool,
@@ -111,6 +113,7 @@ fn platform_capabilities() -> PlatformCapabilities {
     PlatformCapabilities {
         global_input: true,
         window_control: true,
+        window_layouts: true,
         window_topmost: true,
         screen_capture: true,
         ocr: true,
@@ -150,12 +153,33 @@ pub struct Point {
     pub y: i32,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct Rect {
     pub left: i32,
     pub top: i32,
     pub right: i32,
     pub bottom: i32,
+}
+
+/// A window layout entry intentionally excludes the native window handle.
+/// Handles are session-scoped, so restore matches the stable process/class/title
+/// identity and occurrence instead of persisting an HWND/X11 id/CGWindow id.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowLayout {
+    pub process_name: String,
+    pub class_name: String,
+    pub title: String,
+    #[serde(default)]
+    pub occurrence: u32,
+    pub rect: Rect,
+    #[serde(default)]
+    pub placement_rect: Option<Rect>,
+    #[serde(default)]
+    pub minimized: bool,
+    pub maximized: bool,
+    pub topmost: bool,
 }
 
 impl Rect {
@@ -227,6 +251,70 @@ pub struct WindowInfo {
     pub transient: bool,
     pub arranged: bool,
     pub topmost: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct WindowLayoutTarget {
+    pub handle: WindowHandle,
+    pub rect: Rect,
+    pub placement_rect: Option<Rect>,
+    pub title: String,
+    pub class_name: String,
+    pub process_name: String,
+    pub minimized: bool,
+    pub maximized: bool,
+    pub transient: bool,
+    pub topmost: bool,
+}
+
+/// Layout capture uses the platform's normal placement rectangle and keeps
+/// minimized windows in the candidate set. Other callers retain `list_windows`
+/// semantics.
+pub fn list_window_layouts() -> Result<Vec<WindowLayoutTarget>> {
+    #[cfg(target_os = "windows")]
+    {
+        return windows::list_window_layouts();
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        return unix::list_windows().map(|windows| {
+            windows
+                .into_iter()
+                .map(|window| WindowLayoutTarget {
+                    handle: window.handle,
+                    rect: window.rect,
+                    placement_rect: None,
+                    title: window.title,
+                    class_name: window.class_name,
+                    process_name: window.process_name,
+                    minimized: false,
+                    maximized: window.maximized,
+                    transient: window.transient,
+                    topmost: window.topmost,
+                })
+                .collect()
+        });
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        anyhow::bail!("unsupported: windowLayout on {}", std::env::consts::OS);
+    }
+}
+
+pub fn apply_window_layout(handle: WindowHandle, layout: &WindowLayout) -> Result<()> {
+    #[cfg(target_os = "windows")]
+    {
+        return windows::apply_window_layout(handle, layout);
+    }
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    {
+        return unix::apply_window_layout(handle, layout);
+    }
+    #[cfg(not(any(target_os = "windows", target_os = "linux", target_os = "macos")))]
+    {
+        let _ = (handle, layout);
+        anyhow::bail!("unsupported: windowLayout on {}", std::env::consts::OS);
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -438,6 +526,7 @@ mod tests {
         let value = serde_json::to_value(info).unwrap();
         assert!(value["capabilities"]["globalInput"].is_boolean());
         assert!(value["capabilities"]["windowControl"].is_boolean());
+        assert!(value["capabilities"]["windowLayouts"].is_boolean());
         assert!(value["capabilities"]["windowTopmost"].is_boolean());
         assert!(value["capabilities"]["screenCapture"].is_boolean());
         assert!(value["capabilities"]["ocr"].is_boolean());
@@ -454,6 +543,7 @@ mod tests {
         let capabilities = PlatformCapabilities {
             global_input: true,
             window_control: true,
+            window_layouts: false,
             window_topmost: false,
             screen_capture: true,
             ocr: false,

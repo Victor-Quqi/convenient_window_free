@@ -27,6 +27,7 @@ pub fn capabilities() -> super::super::PlatformCapabilities {
     super::super::PlatformCapabilities {
         global_input: accessibility,
         window_control: accessibility,
+        window_layouts: accessibility,
         window_topmost: false,
         screen_capture: ScreenCaptureAccess::default().preflight(),
         ocr: false,
@@ -126,6 +127,10 @@ pub fn window_info_for_handle(handle: WindowHandle) -> Result<Option<WindowInfo>
         .find(|window| window.handle == handle))
 }
 
+pub fn list_windows() -> Result<Vec<WindowInfo>> {
+    window_list()
+}
+
 pub fn draggable_window_at(point: Point) -> Result<Option<WindowInfo>> {
     Ok(window_list()?
         .into_iter()
@@ -157,6 +162,25 @@ pub fn set_window_topmost(_handle: WindowHandle, _topmost: bool) -> Result<()> {
 
 pub fn set_window_rect_topmost(handle: WindowHandle, rect: Rect, _topmost: bool) -> Result<()> {
     set_window_rect(handle, rect)
+}
+
+pub fn apply_window_layout(handle: WindowHandle, layout: &super::WindowLayout) -> Result<()> {
+    if layout.minimized {
+        bail!(super::unsupported_message(
+            "windowMinimize on macOS Accessibility API"
+        ));
+    }
+    if layout.maximized {
+        bail!(super::unsupported_message(
+            "windowMaximize on macOS Accessibility API"
+        ));
+    }
+    if layout.topmost {
+        bail!(super::unsupported_message(
+            "windowTopmost on macOS Accessibility API"
+        ));
+    }
+    set_window_rect(handle, layout.rect)
 }
 
 pub fn lock_screen() -> Result<()> {

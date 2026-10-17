@@ -20,6 +20,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/audit-desktop-artifa
 
 `-ArtifactsDir` is restricted to this repository's `artifacts/` tree. The installer, manifest, checksums and portable output belong in the same selected directory. Runtime and install gates must explicitly select that output; default npm scripts target root artifacts. See [packaging tests](testing.md#local-gates). An expected path or an older package's result does not prove a current build.
 
+The portable ZIP keeps a versioned ASCII filename for release identity, while the archive contains a stable top-level `ConvenientWindow-portable` directory. This lets users replace the files in one directory during a portable upgrade. Portable application data remains under the current user's Local AppData directory, so the program directory is not the settings store.
+
 An integration may retain its existing immutable published download allow-list while exercising a newly built development helper. `scripts/version-audit.ps1 -DevelopmentOnly -HelperAssetsPath <published-helper-assets.json>` excludes only that explicitly supplied published manifest from source-version equality and labels it as such. This is a development source check, not release freezing or a hash/asset acceptance check. Without `-DevelopmentOnly`, the default strict version comparison is unchanged. Never pass the development switch to the final release-freeze gate or fabricate new URLs/hashes before publication.
 
 Existing user installations must remain intact during automatic local preparation. The user performs installation/upgrade acceptance; automatic installer gates run only in isolated accounts/CI without existing product registrations or processes.

@@ -22,6 +22,7 @@ fn capabilities_for_x11(x11: bool) -> super::super::PlatformCapabilities {
     super::super::PlatformCapabilities {
         global_input: x11,
         window_control: x11,
+        window_layouts: x11,
         window_topmost: x11,
         screen_capture: x11,
         ocr: false,
@@ -189,6 +190,32 @@ pub fn window_info_for_handle(handle: WindowHandle) -> Result<Option<WindowInfo>
         connection.setup().roots[screen].root,
         handle.0 as Window,
     )
+}
+
+/// Enumerate direct children of the X11 root window. Window managers expose
+/// user-facing top-level windows here; transient dialogs and desktop/shell
+/// surfaces are filtered before they reach the layout protocol.
+pub fn list_windows() -> Result<Vec<WindowInfo>> {
+    let (connection, screen) = connect()?;
+    let root = connection.setup().roots[screen].root;
+    let tree = connection.query_tree(root)?.reply()?;
+    let mut windows = Vec::new();
+    for window in tree.children {
+        if let Some(info) = window_info(&connection, root, window)? {
+            if is_layout_candidate(&info) {
+                windows.push(info);
+            }
+        }
+    }
+    Ok(windows)
+}
+
+fn is_layout_candidate(window: &WindowInfo) -> bool {
+    !window.transient
+        && !matches!(
+            window.class_name.as_str(),
+            "Desktop" | "desktop" | "Root" | "root" | "plasmashell" | "xfdesktop"
+        )
 }
 
 fn window_info(
@@ -370,6 +397,55 @@ pub fn set_window_topmost(handle: WindowHandle, topmost: bool) -> Result<()> {
     Ok(())
 }
 
+fn set_window_maximized(handle: WindowHandle, maximized: bool) -> Result<()> {
+    let (connection, screen) = connect()?;
+    let root = connection.setup().roots[screen].root;
+    let state = atom(&connection, "_NET_WM_STATE")?;
+    let max_horz = atom(&connection, "_NET_WM_STATE_MAXIMIZED_HORZ")?;
+    let max_vert = atom(&connection, "_NET_WM_STATE_MAXIMIZED_VERT")?;
+    // EWMH action 1 adds a state and action 0 removes it. Sending both
+    // maximize atoms in one client message keeps the operation atomic from the
+    // window manager's perspective.
+    let event = ClientMessageEvent {
+        response_type: xproto::CLIENT_MESSAGE_EVENT,
+        format: 32,
+        sequence: 0,
+        window: handle.0 as Window,
+        type_: state,
+        data: ClientMessageData::from([if maximized { 1 } else { 0 }, max_horz, max_vert, 1, 0]),
+    };
+    connection.send_event(
+        false,
+        root,
+        EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY,
+        event,
+    )?;
+    connection.flush()?;
+    connection.get_input_focus()?.reply()?;
+    Ok(())
+}
+
+pub fn apply_window_layout(handle: WindowHandle, layout: &super::WindowLayout) -> Result<()> {
+    let Some(window) = window_info_for_handle(handle)? else {
+        bail!("window layout target is no longer available")
+    };
+    if !is_layout_candidate(&window) {
+        bail!("window layout target is not an ordinary window")
+    }
+    if layout.minimized {
+        bail!(super::unsupported_message("windowMinimize on X11"));
+    }
+    // Remove an existing maximize state before configuring geometry. The
+    // target rectangle then selects the original monitor before re-applying
+    // maximization, matching the Windows backend's ordering.
+    set_window_maximized(handle, false)?;
+    set_window_rect(handle, layout.rect)?;
+    if layout.maximized {
+        set_window_maximized(handle, true)?;
+    }
+    set_window_topmost(handle, layout.topmost)
+}
+
 pub fn set_window_rect_topmost(handle: WindowHandle, rect: Rect, topmost: bool) -> Result<()> {
     set_window_rect(handle, rect)?;
     set_window_topmost(handle, topmost)
@@ -527,6 +603,7 @@ mod tests {
         let capabilities = capabilities_for_x11(false);
         assert!(!capabilities.global_input);
         assert!(!capabilities.window_control);
+        assert!(!capabilities.window_layouts);
         assert!(!capabilities.window_topmost);
         assert!(!capabilities.screen_capture);
         assert!(!capabilities.edge_hide);
@@ -538,6 +615,7 @@ mod tests {
         let capabilities = capabilities_for_x11(true);
         assert!(capabilities.global_input);
         assert!(capabilities.window_control);
+        assert!(capabilities.window_layouts);
         assert!(capabilities.window_topmost);
         assert!(capabilities.screen_capture);
         assert!(!capabilities.ocr);

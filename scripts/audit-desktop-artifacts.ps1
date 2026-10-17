@@ -133,9 +133,19 @@ $nsisRoot = Join-Path $tempRoot "nsis"
 New-Item -ItemType Directory -Force -Path $zipRoot, $nsisRoot | Out-Null
 try {
   Expand-Archive -Path $portableZip.FullName -DestinationPath $zipRoot
-  Assert-ExactFiles -Root $zipRoot -Expected $portableFiles
-  Assert-ThirdPartyNotices -Path (Join-Path $zipRoot "THIRD-PARTY-NOTICES.txt")
-  Assert-HelperPayload -HelperDir (Join-Path $zipRoot "helper")
+  $zipTopLevel = @(Get-ChildItem -LiteralPath $zipRoot | ForEach-Object {
+    $_.Name + $(if ($_.PSIsContainer) { "/" } else { "" })
+  })
+  if (($zipTopLevel -join "`n") -ne "ConvenientWindow-portable/") {
+    throw "Portable zip must contain only the stable ConvenientWindow-portable top-level directory"
+  }
+  $zipPortableDir = Join-Path $zipRoot "ConvenientWindow-portable"
+  if (-not (Test-Path -LiteralPath $zipPortableDir -PathType Container)) {
+    throw "Portable zip must contain the stable ConvenientWindow-portable directory"
+  }
+  Assert-ExactFiles -Root $zipPortableDir -Expected $portableFiles
+  Assert-ThirdPartyNotices -Path (Join-Path $zipPortableDir "THIRD-PARTY-NOTICES.txt")
+  Assert-HelperPayload -HelperDir (Join-Path $zipPortableDir "helper")
 
   if (-not $SevenZip) {
     $sevenZipCandidates = @(
@@ -204,7 +214,7 @@ try {
   }
 
   $forbiddenNames = '(?i)(^|[\\/])(?:node_modules|target|\.git)([\\/]|$)|auth-token|config\.json|\.log$|\.env$'
-  $packageFiles = @(Get-ChildItem $portableDir, $zipRoot, $nsisRoot -Recurse -File)
+  $packageFiles = @(Get-ChildItem $portableDir, $zipPortableDir, $nsisRoot -Recurse -File)
   $forbidden = @($packageFiles | Where-Object { $_.FullName -match $forbiddenNames })
   if ($forbidden.Count -gt 0) {
     throw "Forbidden files found in package: $($forbidden.FullName -join ', ')"

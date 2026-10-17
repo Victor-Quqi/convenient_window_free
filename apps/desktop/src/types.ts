@@ -209,6 +209,7 @@ export interface HelperMessage<T = unknown> {
 export interface PlatformCapabilities {
   globalInput: boolean;
   windowControl: boolean;
+  windowLayouts?: boolean;
   windowTopmost: boolean;
   screenCapture: boolean;
   ocr: boolean;

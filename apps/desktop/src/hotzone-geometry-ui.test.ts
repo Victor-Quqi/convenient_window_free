@@ -194,9 +194,12 @@ it("edits geometry through the real App, isolates areas and displays, and round-
     writeFileSync(nodePath.join(directory, "run.mjs"), `
       import { Window } from 'happy-dom';
       const window = new Window({ width: 640, height: 600 });
+      class ResizeObserver { observe() {} unobserve() {} disconnect() {} }
+      window.ResizeObserver = ResizeObserver;
       for (const name of ['window', 'document', 'localStorage', 'Node', 'Text', 'Comment', 'Element', 'HTMLElement', 'HTMLInputElement', 'HTMLMediaElement', 'Event', 'KeyboardEvent', 'MutationObserver', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame']) {
         globalThis[name] = name === 'window' ? window : window[name];
       }
+      globalThis.ResizeObserver = ResizeObserver;
       Object.defineProperty(globalThis, 'navigator', { value: window.navigator, configurable: true });
       const animate = window.Element.prototype.animate;
       window.Element.prototype.animate = function(...args) {
@@ -345,9 +348,12 @@ it("keeps compiled geometry inputs mounted across readiness while cancelling dra
     writeFileSync(nodePath.join(directory, "run.mjs"), `
       import { Window } from 'happy-dom';
       const window = new Window({ width: 359, height: 544 });
+      class ResizeObserver { observe() {} unobserve() {} disconnect() {} }
+      window.ResizeObserver = ResizeObserver;
       for (const name of ['window', 'document', 'Node', 'Text', 'Comment', 'Element', 'HTMLElement', 'HTMLInputElement', 'HTMLMediaElement', 'Event', 'KeyboardEvent', 'MutationObserver', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame']) {
         globalThis[name] = name === 'window' ? window : window[name];
       }
+      globalThis.ResizeObserver = ResizeObserver;
       Object.defineProperty(globalThis, 'navigator', { value: window.navigator, configurable: true });
       try { await import('./bundle/entry.mjs'); }
       finally { await window.happyDOM.close(); }

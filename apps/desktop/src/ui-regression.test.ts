@@ -13,8 +13,10 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       import assert from 'node:assert/strict';
       import { mount, unmount, flushSync } from 'svelte';
       import App from '../App.svelte';
+      import NavigationComposer from '../NavigationComposer.svelte';
       import { HelperClient, SUPPORTED_HELPER_PROTOCOL } from '../helper-client';
       import { defaultSettings, normalizeSettings } from '../settings-store';
+      import { defaultNavigationPreferences } from '../navigation-preferences';
       import { configureHostBridge } from '../host-bridge';
 
       let receive, receiveStatus;
@@ -523,7 +525,93 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
 
         await unmount(component); document.body.replaceChildren();
       }
+      localStorage.setItem('convenient-window-navigation', JSON.stringify({ order: ['power', 'hotzones', 'edge-hide', 'gestures', 'beautification', 'window-layouts'], visible: ['power', 'hotzones', 'edge-hide', 'gestures'] }));
+      stored.enabled = false;
       helperInstalled = true;
+      component = mount(App, { target: document.body }); flushSync(); await settle();
+      document.querySelector('.settings-toggle').click(); flushSync();
+      const composerHost = document.createElement('div');
+      document.body.append(composerHost);
+      const opened = [];
+      const changes = [];
+      const label = id => id;
+      const description = id => id + ' description';
+      const composerUi = key => String(key);
+      const bubble = id => composerHost.querySelector('button[aria-describedby="navigation-composer-description-' + id + '"]')?.closest('.composer-bubble');
+      const button = id => composerHost.querySelector('button[aria-describedby="navigation-composer-description-' + id + '"]');
+      const dispatchPointer = (type, target, options = {}) => {
+        const event = new PointerEvent(type, { bubbles: true, cancelable: true, pointerId: options.pointerId ?? 7, clientX: options.clientX ?? 0, clientY: options.clientY ?? 0, button: options.button ?? 0 });
+        target.dispatchEvent(event); flushSync();
+      };
+      const mountComposer = async preferences => {
+        composerHost.replaceChildren();
+        const composer = mount(NavigationComposer, { target: composerHost, props: { preferences, label, description, ui: composerUi, onChange: value => changes.push(value), onOpen: id => opened.push(id) } });
+        flushSync(); await settle(); await new Promise(resolve => setTimeout(resolve, 0)); flushSync();
+        return composer;
+      };
+      const interactionPreferences = { order: [...defaultNavigationPreferences().order], visible: ['power', 'hotzones', 'edge-hide', 'gestures'] };
+      let composer = await mountComposer(interactionPreferences);
+      const sourceBubble = bubble('hotzones');
+      const edgeBubble = bubble('edge-hide');
+      assert.ok(sourceBubble && edgeBubble, 'navigation composer must expose stable pointer bubbles');
+      const edgeInitialTransform = edgeBubble.style.transform;
+      dispatchPointer('pointerdown', button('hotzones'), { clientX: 105, clientY: 27 });
+      dispatchPointer('pointermove', window, { clientX: 300, clientY: 27 });
+      assert.ok(sourceBubble.style.transform.split(' ').join('').includes('translate3d(277px,4px,0)'), 'dragging bubble must follow the pointer relative to the stage: ' + sourceBubble.style.transform);
+      assert.notEqual(edgeBubble.style.transform, edgeInitialTransform, 'neighbor must animate out of the source slot during preview');
+      assert.ok(composerHost.querySelector('.composer-placeholder'), 'drag preview must expose a visible insertion placeholder');
+      dispatchPointer('pointerup', window, { clientX: 300, clientY: 27 });
+      assert.equal(changes.length, 1, 'same-row pointer drop must commit exactly once');
+      assert.deepEqual(changes[0].order.slice(0, 5), ['power', 'edge-hide', 'gestures', 'hotzones', 'beautification'], 'same-row pointer drop must persist the preview order');
+      assert.equal(changes[0].visible.length, 4, 'same-row drop must retain the four configured feature slots');
+      await unmount(composer); flushSync();
+
+      composer = await mountComposer(changes[0]);
+      dispatchPointer('pointerdown', button('window-layouts'), { clientX: 105, clientY: 120 });
+      dispatchPointer('pointermove', window, { clientX: 105, clientY: 27 });
+      dispatchPointer('pointerup', window, { clientX: 105, clientY: 27 });
+      assert.equal(changes.length, 2, 'hidden-to-active pointer drop must commit exactly once');
+      assert.equal(changes[1].visible.length, 5, 'hidden-to-active drop may fill the last configurable slot');
+      assert.equal(changes[1].order.includes('window-layouts'), true, 'hidden-to-active drop must keep the moved feature in the order');
+      await unmount(composer); flushSync();
+
+      composer = await mountComposer(changes[1]);
+      const rejectedHiddenTransform = bubble('beautification').style.transform;
+      dispatchPointer('pointerdown', button('beautification'), { clientX: 137, clientY: 120 });
+      dispatchPointer('pointermove', window, { clientX: 160, clientY: 27 });
+      assert.ok(composerHost.querySelector('.composer-tray-active.rejected'), 'a fifth entry over a full top row must flag the row');
+      assert.equal(bubble('beautification').classList.contains('rejected'), true, 'the dragged bubble must expose the rejection state');
+      assert.equal(composerHost.querySelector('.composer-placeholder'), null, 'a rejected preview must not open an insertion slot');
+      dispatchPointer('pointerup', window, { clientX: 160, clientY: 27 });
+      assert.equal(changes.length, 2, 'a rejected drop must not persist a fifth entry');
+      assert.equal(bubble('beautification').style.transform, rejectedHiddenTransform, 'a rejected drop must return the bubble to its spare slot');
+      await unmount(composer); flushSync();
+
+      const rollbackBaseline = changes[1];
+      composer = await mountComposer(rollbackBaseline);
+      const rollbackSource = bubble('edge-hide');
+      dispatchPointer('pointerdown', button('edge-hide'), { clientX: 105, clientY: 27 });
+      dispatchPointer('pointermove', window, { clientX: 105, clientY: 120 });
+      const draggingTransform = rollbackSource.style.transform;
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); flushSync();
+      assert.equal(changes.length, 2, 'Escape cancellation must roll back without persistence');
+      assert.notEqual(bubble('edge-hide').style.transform, draggingTransform, 'Escape cancellation must restore the settled bubble position');
+      assert.equal(bubble('edge-hide').classList.contains('dragging'), false, 'Escape cancellation must clear the dragging state');
+      assert.equal(composerHost.querySelector('.composer-placeholder'), null, 'Escape cancellation must remove the preview placeholder');
+      await unmount(composer); flushSync();
+
+      composer = await mountComposer(rollbackBaseline);
+      const outsideButton = button('edge-hide');
+      dispatchPointer('pointerdown', outsideButton, { clientX: 105, clientY: 27 });
+      dispatchPointer('pointermove', window, { clientX: 700, clientY: 500 });
+      dispatchPointer('pointerup', window, { clientX: 700, clientY: 500 });
+      outsideButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); flushSync();
+      assert.equal(changes.length, 2, 'dropping outside the composer must not persist a partial preview');
+      assert.deepEqual(opened, [], 'a pointer drag ending outside must not be misinterpreted as a feature click');
+      await new Promise(resolve => setTimeout(resolve, 0));
+      outsideButton.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); flushSync();
+      assert.deepEqual(opened, ['edge-hide'], 'a later intentional click must still open the feature');
+      await unmount(composer); composerHost.remove(); document.body.replaceChildren();
       console.log('App UI host regression passed');
     `);
     await build({
@@ -538,10 +626,25 @@ it("preserves feature controls and exercises aligned runtime cards and settings 
       import { Window } from 'happy-dom';
       const window = new Window();
       Object.defineProperty(window.navigator, "userAgent", { value: "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", configurable: true });
-      for (const name of ['window', 'document', 'localStorage', 'Node', 'Text', 'Comment', 'Element', 'HTMLElement', 'HTMLInputElement', 'HTMLMediaElement', 'Event', 'KeyboardEvent', 'MutationObserver', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame']) {
+      class ResizeObserver {
+        constructor(callback) { this.callback = callback; }
+        observe(target) { this.callback([{ target, contentRect: target.getBoundingClientRect() }], this); }
+        unobserve() {}
+        disconnect() {}
+      }
+      window.ResizeObserver = ResizeObserver;
+      for (const name of ['window', 'document', 'localStorage', 'Node', 'Text', 'Comment', 'Element', 'HTMLElement', 'HTMLInputElement', 'HTMLMediaElement', 'Event', 'PointerEvent', 'KeyboardEvent', 'MouseEvent', 'MutationObserver', 'getComputedStyle', 'requestAnimationFrame', 'cancelAnimationFrame']) {
         globalThis[name] = name === 'window' ? window : window[name];
       }
+      globalThis.ResizeObserver = ResizeObserver;
       Object.defineProperty(globalThis, 'navigator', { value: window.navigator, configurable: true });
+      const nativeRect = window.HTMLElement.prototype.getBoundingClientRect;
+      const nativeClientWidth = Object.getOwnPropertyDescriptor(window.HTMLElement.prototype, 'clientWidth')?.get;
+      window.HTMLElement.prototype.getBoundingClientRect = function() {
+        if (this.classList?.contains('composer-stage')) return { x: 0, y: 0, left: 0, top: 0, right: 320, bottom: 148, width: 320, height: 148, toJSON() { return this; } };
+        return nativeRect.call(this);
+      };
+      Object.defineProperty(window.HTMLElement.prototype, 'clientWidth', { configurable: true, get() { return this.classList?.contains('composer-stage') ? 320 : nativeClientWidth?.call(this) ?? 0; } });
       const animate = window.Element.prototype.animate;
       window.Element.prototype.animate = function(...args) {
         const animation = animate.apply(this, args);

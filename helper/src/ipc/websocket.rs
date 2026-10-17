@@ -1,5 +1,8 @@
 use crate::config::SCHEMA_VERSION;
 use crate::ipc::errors::{ErrorCode, RuntimeError};
+#[cfg(test)]
+use crate::platform::WindowInfo;
+use crate::platform::WindowLayout;
 
 pub const PROTOCOL_VERSION: u32 = 7;
 use crate::config::AppConfig;
@@ -10,6 +13,7 @@ use anyhow::{Context, Result};
 use futures_util::{SinkExt, StreamExt};
 use serde_json::Value;
 use socket2::{Domain, Protocol, Socket, Type};
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream};
@@ -203,6 +207,66 @@ async fn handle_connection(
                     text.len()
                 ));
                 match incoming.kind.as_str() {
+                    "window.layout.capture" => {
+                        match capture_window_layout().await {
+                            Ok(windows) => {
+                                let captured = HelperMessage::new(
+                                    "window.layout.captured",
+                                    serde_json::json!({
+                                        "requestId": incoming.id,
+                                        "capturedAt": crate::ipc::messages::timestamp_ms(),
+                                        "windows": windows,
+                                    }),
+                                );
+                                writer.send(Message::Text(serde_json::to_string(&captured)?.into())).await?;
+                            }
+                            Err(error) => {
+                                let error = HelperMessage::new(
+                                    "runtime.error",
+                                    RuntimeError::new(ErrorCode::WindowOperationFailed, format!("{error:#}"))
+                                        .for_request(&incoming.id)
+                                        .data(),
+                                );
+                                writer.send(Message::Text(serde_json::to_string(&error)?.into())).await?;
+                            }
+                        }
+                    }
+                    "window.layout.restore" => {
+                        let layouts = match parse_window_layouts(&incoming.data) {
+                            Ok(layouts) => layouts,
+                            Err(error) => {
+                                let error = HelperMessage::new(
+                                    "runtime.error",
+                                    error.for_request(&incoming.id).data(),
+                                );
+                                writer.send(Message::Text(serde_json::to_string(&error)?.into())).await?;
+                                continue;
+                            }
+                        };
+                        match restore_window_layout(layouts).await {
+                            Ok(summary) => {
+                                let restored = HelperMessage::new(
+                                    "window.layout.restored",
+                                    serde_json::json!({
+                                        "requestId": incoming.id,
+                                        "restored": summary.restored,
+                                        "skipped": summary.skipped,
+                                        "errors": summary.errors,
+                                    }),
+                                );
+                                writer.send(Message::Text(serde_json::to_string(&restored)?.into())).await?;
+                            }
+                            Err(error) => {
+                                let error = HelperMessage::new(
+                                    "runtime.error",
+                                    RuntimeError::new(ErrorCode::WindowOperationFailed, format!("{error:#}"))
+                                        .for_request(&incoming.id)
+                                        .data(),
+                                );
+                                writer.send(Message::Text(serde_json::to_string(&error)?.into())).await?;
+                            }
+                        }
+                    }
                     "shortcut.record.begin" => {
                         let id = incoming.data.get("sessionId").and_then(Value::as_str).unwrap_or("");
                         if let Err(error) = crate::platform::shortcut_recording::begin(&recording_connection.0, id) {
@@ -288,6 +352,190 @@ impl Drop for RecordingConnection {
     fn drop(&mut self) {
         crate::platform::shortcut_recording::cancel(&self.0, None);
     }
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WindowLayoutRestoreError {
+    window: WindowLayout,
+    details: String,
+}
+
+#[derive(Debug)]
+struct WindowLayoutRestoreSummary {
+    restored: usize,
+    skipped: usize,
+    errors: Vec<WindowLayoutRestoreError>,
+}
+
+async fn capture_window_layout() -> Result<Vec<WindowLayout>> {
+    let windows = tokio::task::spawn_blocking(crate::platform::list_window_layouts)
+        .await
+        .context("window layout capture task failed")??;
+    Ok(layouts_from_layout_targets(windows))
+}
+
+async fn restore_window_layout(layouts: Vec<WindowLayout>) -> Result<WindowLayoutRestoreSummary> {
+    tokio::task::spawn_blocking(move || restore_window_layout_blocking(&layouts))
+        .await
+        .context("window layout restore task failed")?
+}
+
+fn restore_window_layout_blocking(layouts: &[WindowLayout]) -> Result<WindowLayoutRestoreSummary> {
+    let windows = crate::platform::list_window_layouts()?;
+    let indexed = windows_with_occurrences(windows);
+    let mut used_handles = HashSet::new();
+    let mut restored = 0;
+    let mut skipped = 0;
+    let mut errors = Vec::new();
+
+    for layout in layouts {
+        let Some(window) = indexed.iter().find(|(window, occurrence)| {
+            *occurrence == layout.occurrence
+                && !used_handles.contains(&window.handle)
+                && layout_matches(window, layout)
+        }) else {
+            skipped += 1;
+            continue;
+        };
+        used_handles.insert(window.0.handle);
+        if let Err(error) = crate::platform::apply_window_layout(window.0.handle, layout) {
+            errors.push(WindowLayoutRestoreError {
+                window: layout.clone(),
+                details: format!("{error:#}"),
+            });
+        } else {
+            restored += 1;
+        }
+    }
+
+    Ok(WindowLayoutRestoreSummary {
+        restored,
+        skipped,
+        errors,
+    })
+}
+
+fn parse_window_layouts(data: &Value) -> Result<Vec<WindowLayout>, RuntimeError> {
+    const MAX_LAYOUT_WINDOWS: usize = 512;
+    let raw = data.get("windows").cloned().unwrap_or(Value::Null);
+    let layouts: Vec<WindowLayout> = serde_json::from_value(raw).map_err(|error| {
+        RuntimeError::new(
+            ErrorCode::WindowOperationFailed,
+            format!("invalid window layout payload: {error}"),
+        )
+    })?;
+    if layouts.len() > MAX_LAYOUT_WINDOWS {
+        return Err(RuntimeError::new(
+            ErrorCode::WindowOperationFailed,
+            format!("window layout contains too many entries (maximum {MAX_LAYOUT_WINDOWS})"),
+        ));
+    }
+    Ok(layouts)
+}
+
+#[cfg(test)]
+fn layouts_from_windows(windows: Vec<WindowInfo>) -> Vec<WindowLayout> {
+    let targets = windows
+        .into_iter()
+        .map(|window| crate::platform::WindowLayoutTarget {
+            handle: window.handle,
+            rect: window.rect,
+            placement_rect: None,
+            title: window.title,
+            class_name: window.class_name,
+            process_name: window.process_name,
+            minimized: false,
+            maximized: window.maximized,
+            transient: window.transient,
+            topmost: window.topmost,
+        })
+        .collect();
+    layouts_from_layout_targets(targets)
+}
+
+fn layouts_from_layout_targets(
+    windows: Vec<crate::platform::WindowLayoutTarget>,
+) -> Vec<WindowLayout> {
+    windows_with_occurrences(windows)
+        .into_iter()
+        .map(|(window, occurrence)| WindowLayout {
+            process_name: window.process_name,
+            class_name: window.class_name,
+            title: window.title,
+            occurrence,
+            rect: window.rect,
+            placement_rect: window.placement_rect,
+            minimized: window.minimized,
+            maximized: window.maximized,
+            topmost: window.topmost,
+        })
+        .collect()
+}
+
+fn windows_with_occurrences(
+    windows: Vec<crate::platform::WindowLayoutTarget>,
+) -> Vec<(crate::platform::WindowLayoutTarget, u32)> {
+    let mut windows: Vec<crate::platform::WindowLayoutTarget> = windows
+        .into_iter()
+        .filter(|window| !window.transient)
+        .collect();
+    // Enumeration order is usually z-order, which changes as soon as the
+    // user focuses a different window. Sorting duplicate identities by their
+    // captured geometry makes occurrence assignment stable across a restore
+    // round trip instead of swapping two otherwise identical windows.
+    windows.sort_by(|left, right| {
+        layout_identity(&left.process_name, &left.class_name, &left.title)
+            .cmp(&layout_identity(
+                &right.process_name,
+                &right.class_name,
+                &right.title,
+            ))
+            .then_with(|| {
+                layout_sort_rect(left)
+                    .left
+                    .cmp(&layout_sort_rect(right).left)
+            })
+            .then_with(|| layout_sort_rect(left).top.cmp(&layout_sort_rect(right).top))
+            .then_with(|| {
+                layout_sort_rect(left)
+                    .right
+                    .cmp(&layout_sort_rect(right).right)
+            })
+            .then_with(|| {
+                layout_sort_rect(left)
+                    .bottom
+                    .cmp(&layout_sort_rect(right).bottom)
+            })
+    });
+    let mut occurrences = HashMap::<(String, String, String), u32>::new();
+    windows
+        .into_iter()
+        .map(|window| {
+            let key = layout_identity(&window.process_name, &window.class_name, &window.title);
+            let occurrence = occurrences.entry(key).or_insert(0);
+            let value = *occurrence;
+            *occurrence = occurrence.saturating_add(1);
+            (window, value)
+        })
+        .collect()
+}
+
+fn layout_identity(process_name: &str, class_name: &str, title: &str) -> (String, String, String) {
+    (
+        process_name.to_lowercase(),
+        class_name.to_lowercase(),
+        title.to_string(),
+    )
+}
+
+fn layout_matches(window: &crate::platform::WindowLayoutTarget, layout: &WindowLayout) -> bool {
+    layout_identity(&window.process_name, &window.class_name, &window.title)
+        == layout_identity(&layout.process_name, &layout.class_name, &layout.title)
+}
+
+fn layout_sort_rect(window: &crate::platform::WindowLayoutTarget) -> crate::platform::Rect {
+    window.placement_rect.unwrap_or(window.rect)
 }
 
 async fn apply_config_update(
@@ -453,6 +701,108 @@ mod tests {
         .unwrap();
         assert_eq!(revision, Some(8));
         assert!(!adjusted);
+    }
+
+    #[test]
+    fn layout_capture_assigns_occurrence_per_stable_identity() {
+        let windows = vec![
+            WindowInfo {
+                handle: crate::platform::WindowHandle(1),
+                rect: crate::platform::Rect {
+                    left: 0,
+                    top: 0,
+                    right: 100,
+                    bottom: 100,
+                },
+                title: "Editor".into(),
+                class_name: "Code".into(),
+                process_name: "code.exe".into(),
+                maximized: false,
+                transient: false,
+                arranged: false,
+                topmost: false,
+            },
+            WindowInfo {
+                handle: crate::platform::WindowHandle(2),
+                rect: crate::platform::Rect {
+                    left: 100,
+                    top: 0,
+                    right: 200,
+                    bottom: 100,
+                },
+                title: "Editor".into(),
+                class_name: "Code".into(),
+                process_name: "CODE.EXE".into(),
+                maximized: true,
+                transient: false,
+                arranged: false,
+                topmost: true,
+            },
+            WindowInfo {
+                handle: crate::platform::WindowHandle(3),
+                rect: crate::platform::Rect {
+                    left: 0,
+                    top: 0,
+                    right: 10,
+                    bottom: 10,
+                },
+                title: "Menu".into(),
+                class_name: "Popup".into(),
+                process_name: "code.exe".into(),
+                maximized: false,
+                transient: true,
+                arranged: false,
+                topmost: true,
+            },
+        ];
+
+        let layouts = layouts_from_windows(windows);
+        assert_eq!(layouts.len(), 2);
+        assert_eq!(layouts[0].occurrence, 0);
+        assert_eq!(layouts[1].occurrence, 1);
+        assert_eq!(layouts[1].maximized, true);
+    }
+
+    #[test]
+    fn layout_restore_payload_is_bounded_and_keeps_request_errors_typed() {
+        let error = parse_window_layouts(&serde_json::json!({"windows": []}));
+        assert!(error.is_ok());
+
+        let error = parse_window_layouts(&serde_json::json!({"windows": "bad"})).unwrap_err();
+        assert_eq!(error.code, ErrorCode::WindowOperationFailed);
+
+        let oversized = serde_json::json!({
+            "windows": (0..513).map(|_| serde_json::json!({
+                "processName": "app",
+                "className": "Window",
+                "title": "title",
+                "occurrence": 0,
+                "rect": {"left": 0, "top": 0, "right": 10, "bottom": 10},
+                "maximized": false,
+                "topmost": false
+            })).collect::<Vec<_>>()
+        });
+        let error = parse_window_layouts(&oversized).unwrap_err();
+        assert!(error.details.contains("too many entries"));
+    }
+
+    #[test]
+    fn layout_snapshot_round_trips_minimized_state_and_native_placement() {
+        let value = serde_json::json!({
+            "processName": "code.exe",
+            "className": "Chrome_WidgetWin_1",
+            "title": "Editor",
+            "occurrence": 0,
+            "rect": {"left": 10, "top": 20, "right": 810, "bottom": 620},
+            "placementRect": {"left": 8, "top": 10, "right": 808, "bottom": 610},
+            "minimized": true,
+            "maximized": false,
+            "topmost": false
+        });
+        let layout: WindowLayout = serde_json::from_value(value.clone()).unwrap();
+        let serialized = serde_json::to_value(layout).unwrap();
+        assert_eq!(serialized["minimized"], true);
+        assert_eq!(serialized["placementRect"], value["placementRect"]);
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
