@@ -1362,7 +1362,7 @@
 
       <nav class="mode-nav" aria-label={ui("featureNavigation")}>
         {#each visibleNavigation as item (item)}
-          <button aria-label={navigationLabel(item)} data-feature-id={item} class:active={mode === item} on:click={() => openNavigationFeature(item)} type="button">
+          <button aria-label={navigationLabel(item)} title={navigationLabel(item)} data-feature-id={item} class:active={mode === item} on:click={() => openNavigationFeature(item)} type="button">
             <NavGlyph id={item} />
             <b>{navigationLabel(item)}</b>
           </button>

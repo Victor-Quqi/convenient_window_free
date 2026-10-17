@@ -269,17 +269,16 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
   box-shadow: inset 0 0 0 1px var(--accent-line), 0 1px 0 rgba(255, 255, 255, .05) inset;
 }
 .mode-nav b { font-size: 12.5px; font-weight: 600; white-space: nowrap; }
-/* 场景被抽屉挤窄时保持图标与文字同屏，仅压缩间距与字号。 */
+/* 场景被抽屉挤窄时压缩间距与字号；再窄时只保留图标，名称仍由 aria-label、title 和焦点提示提供。 */
 @container (max-width: 620px) {
   .mode-nav { width: min(430px, 96%); height: 48px; }
   .mode-nav button { gap: 5px; }
   .mode-nav b { font-size: 11px; }
 }
 @container (max-width: 400px) {
-  .mode-nav { width: min(390px, 100%); gap: 2px; padding: 3px; }
-  .mode-nav button { gap: 3px; padding-inline: 1px; }
-  .mode-nav b { font-size: 10px; }
-  .nav-icon { width: 15px; height: 15px; }
+  .mode-nav { width: min(260px, 96%); }
+  .mode-nav button { gap: 0; padding-inline: 2px; }
+  .mode-nav b { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .scene-tools p { display: none; }
   .display-picker .display-action { display: none; }
 }
