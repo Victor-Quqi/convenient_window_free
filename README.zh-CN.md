@@ -1,233 +1,176 @@
-# 便捷窗口
+<div align="center">
 
-简体中文 | [English](README.md)
+<img src="docs/images/app-icon.png" width="88" alt="便捷窗口图标">
 
-便捷窗口是一款跨平台桌面增强工具，提供触发角、窗口控制、全局鼠标手势和截图贴图。当前 Windows x64 正式版为 0.6.6，0.6.5 正式资产继续保留。Windows 保留完整能力，macOS 与 Linux X11 先提供 P0 原生边界，Wayland 只做能力探测和明确降级。
+<h1>便捷窗口</h1>
 
-**把屏幕边缘和鼠标手势变成更快的窗口操作。**
+<p><strong>把屏幕边缘、窗口和鼠标手势变成更快的操作。</strong></p>
 
-设置会在修改时自动保存并应用。独立桌面版常驻系统托盘，原生 Rust helper 会随桌面应用一同打包。
+<p>Windows 11 x64 · Tauri 2 · Rust · Svelte</p>
 
-<p align="center">
-  <img src="docs/images/running-center.png" alt="便捷窗口运行中心，已识别两台显示器" width="920" />
+<p>
+  <a href="https://github.com/ximizhou/convenient_window_free/releases/latest"><img src="https://img.shields.io/github/v/release/ximizhou/convenient_window_free?label=stable&color=3f6ee4&style=flat-square" alt="Stable release"></a>
+  <a href="#平台支持"><img src="https://img.shields.io/badge/platform-Windows%2011%20x64-3f6ee4?style=flat-square" alt="Platform"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%201.0.0-15915c?style=flat-square" alt="License"></a>
 </p>
 
+<p><strong>简体中文</strong> · <a href="README.md">English</a></p>
 
-## 下载
+</div>
 
-请从[最新稳定版](https://github.com/ximizhou/convenient_window_free/releases/latest)下载 Windows 安装包或便携版压缩包；macOS/Linux 资产尚未完成 native 验收，当前不会伪装为可下载版本。
+![便捷窗口概览](docs/images/running-center.png)
 
-- **安装包（`setup.exe`）**：推荐普通用户使用，按当前用户安装。
-- **Portable ZIP**：解压后即可运行，无需安装。
-- **已发布系统要求**：Windows 11 x64。
+便捷窗口是一款常驻 Windows 11 系统托盘的桌面增强工具。你可以逐屏配置四角和四边的热区、让窗口在屏幕边缘自动收纳、用单笔鼠标手势执行常用动作、把截图贴在其他窗口上方，也可以把当前桌面保存成**窗口布局**，之后一键复位。设置实时生效，界面支持中英文，所有处理都在本机完成。
 
-当前发布文件尚未进行代码签名，Windows 可能显示“未知发布者”或 Microsoft Defender SmartScreen 提示。每个 Release 都提供校验和与产物清单，可用于核对下载文件。
+## 0.6.6 更新内容
 
-如果安全软件拦截或隔离 `magic-corners-helper.exe`，应用可能显示“拒绝访问（os error 5）”。请先核对 Release 校验和，再检查隔离区或向安全软件提交误报；不要因为一次启发式提示就把它当作已确认的病毒，也不建议关闭整套防护。
+- **窗口布局**：记录普通窗口的位置、大小、最大化/最小化与置顶状态，之后一键复位；关闭、无权限或身份不再匹配的窗口会逐项跳过。
+- **复位更可靠**：复位前按进程名、窗口类和标题再次校验，多个浏览器或编辑器窗口不会被恢复到错误目标。
+- **功能入口**：用两行气泡自由组合底部页签。高亮首行最多放 4 个功能，运行中心始终保留，把第 5 个拖上去会显示红色“已满”反馈并拒绝。
+- **统一图标**：底部页签与设置气泡共用同一套图标；窄窗口下页签自动只显示图标。
 
-便携版压缩包文件名带版本号，但内部固定使用 `ConvenientWindow-portable` 目录。更新时关闭程序，把新版压缩到原目录并覆盖文件即可；配置保存在当前用户的 Local AppData，不在便携版目录内。
+[更新说明](docs/release-notes/0.6.6.md) · [所有版本](https://github.com/ximizhou/convenient_window_free/releases)
 
-## 0.6.5 正式版
-
-[0.6.5 正式版](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.5) 已于 2026-10-13 在用户转测通过后原地转正。安装包、便携版、清单与校验和均保持验收候选的文件身份，历史正式资产保留。
-
-## 0.6.6 正式版
-
-[0.6.6 正式版](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.6) 已于 2026-10-17 在用户转测通过后原地转正。安装包、便携版、清单与校验和均保持验收候选的文件身份，历史正式资产保留。
-
-- 窗口布局快照：记录普通窗口的位置、大小、最大化与置顶状态，一键复位；最小化窗口也会恢复，窗口已关闭、无权限或身份不再匹配时会逐项跳过。
-- 设置页“功能入口”气泡：在两行气泡之间拖拽组合底部页签，点击气泡打开对应功能；高亮首行最多 4 个功能，运行中心固定保留，拖入第 5 个时显示红色“已满”提示而不会写入。
-- 底部页签与设置页气泡统一图标，同一功能在两处显示相同图形；窄窗口下底部页签只显示图标。
-
-- 收起/展开动画时长可调，修复调速或点击桌面后不再自动收纳。
-- 侧边达标蓝线在拖动停住时保持稳定；顶部等进度线铺满后松手收纳，提前松手保留系统 Snap。
-- 任意位置移动/缩放减少重复更新，提供更新频率调节。
-- 隔离原生快捷键录制，修复切换区域后显示串值和角落点击最大化/最小化目标丢失。
-- 统一设置层次与间距，常用选项靠前、数字调节在底部，修复关闭动画或聚焦开关后的内容半屏。
-
-动画默认 160ms，可选 160/260/400 预设和 80–800ms 自定义；顶部距离默认 48px、停留 600ms。拖拽更新频率上限默认 120Hz，可选 60/120/240 或自定义 30–240Hz。参数与状态边界见 [架构](docs/architecture.md#window-motion-065)，变化见 [更新说明](docs/release-notes/0.6.5.md)，证据边界见 [验收清单](docs/testing.md#065-online-acceptance)。用户转测通过不代表所有 UAC、多屏/DPI 或宿主快捷键环境均逐项验收。
-
-不同区域可复用同一输出组合；录制遇到外部点击、失焦或退出会取消，原生隔离需要匹配的 0.6.5 助手。Ctrl+Alt+Delete 等安全组合不支持录制。
-
-一次只运行一个宿主。桌面界面保持普通权限，需要时在设置中仅提升当前会话助手；登录管理员请求默认关闭，每次须显式 UAC，不创建计划任务，不支持保护进程。权限与生命周期见 [架构](docs/architecture.md#optional-administrator-helper-on-windows)，继承的 0.6.4 改动见其 [更新说明](docs/release-notes/0.6.4.md)。
-
-## 主要功能
-
-开发源码新增 **窗口美化**（细线魔法棒与星芒图标）入口，语言/配置管理改由右上角齿轮进入；窗口布局快照与功能入口编排已包含在 0.6.6 预发布候选中。任务栏材质是 Windows 11 x64 的默认关闭实验原型，支持透明、Acrylic 磨砂、纯色染色、浓度与边线设置；启用时不再弹出确认框，风险说明保留在面板内。示意预览不是实际效果证明；基础透明已有本地转测反馈，材质兼容、图标清晰与跨环境恢复仍需按环境验收。原型已包含在 0.6.3 中，仍默认关闭，不代表在所有环境都可靠可用。
-
-- **触发角与热区**：每台显示器的四角和四边都能独立配置，可分别响应悬停、鼠标按键、滚轮和沿边移动。
-- **窗口贴边隐藏**：把窗口收纳到屏幕边缘，通过保留的边条重新唤回，支持多窗口和多显示器；淡白展开轮廓和收起/展开动画可独立关闭，均不影响边缘恢复。
-- **任意位置移动与缩放**：通过可配置的修饰键与鼠标组合，在窗口任意位置移动或缩放活动窗口。
-- **窗口置顶控制**：让窗口保持在最前方，并可显示窗口内悬浮图钉，快速取消置顶。
-- **全局鼠标手势**：把手势绑定到快捷键、系统动作、命令和窗口控制；支持录制和管理自定义手势样本。
-- **窗口布局快照**：在“设置 → 功能入口”气泡中启用“窗口布局”，保存普通窗口的位置、大小、最大化和置顶状态，之后一键复位；关闭、无权限或身份不再匹配的窗口会逐项跳过。高亮首行最多放 4 个底部入口（运行中心始终保留），把备用入口拖上去会显示红色“已满”反馈并拒绝第 5 个；备用入口留在暗色第二行，底部页签与气泡使用同一套图标。
-- **截图与贴图**：截取屏幕区域并将图片置顶，可移动、缩放、调整透明度、复制或另存为 PNG。
-- **本地 OCR**：使用 Windows 11 本地语言能力识别文字并复制结果，不会上传截图。
-- **多显示器配置**：针对不同显示器保存独立配置，支持虚拟桌面负坐标。
-- **亮度调节**：通过热区和手势调节触发屏幕的亮度，依赖条件见[平台说明](docs/architecture.md#brightness-controls)。
-- **实时保存**：大部分设置无需点击保存，修改后会立即持久化并应用。
-- **浅色与深色主题**：默认跟随系统外观，也可以手动选择并记住偏好。
-- **中英文界面**：设置界面默认跟随 Windows 显示语言，也可以随时在“右上角设置 → 通用设置”里切换。
-
-## 界面预览
+## 界面一览
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/images/hot-zones.png" alt="按显示器独立配置触发角" /></td>
-    <td width="50%"><img src="docs/images/window-enhancement.png" alt="窗口贴边隐藏配置与预览" /></td>
+    <td width="50%"><img src="docs/images/window-layouts.png" alt="窗口布局快照与一键复位" /></td>
+    <td width="50%"><img src="docs/images/feature-entries.png" alt="用功能入口气泡组合底部页签" /></td>
   </tr>
   <tr>
-    <td align="center"><strong>触发角与热区</strong></td>
-    <td align="center"><strong>窗口增强</strong></td>
+    <td align="center"><strong>窗口布局</strong><br/><sub>保存当前桌面，一键恢复。</sub></td>
+    <td align="center"><strong>功能入口</strong><br/><sub>拖拽气泡，自由组合底部页签。</sub></td>
   </tr>
   <tr>
-    <td colspan="2"><img src="docs/images/mouse-gestures.png" alt="包含截图与本地 OCR 动作的鼠标手势工作台" /></td>
+    <td width="50%"><img src="docs/images/hot-zones.png" alt="逐显示器配置热区" /></td>
+    <td width="50%"><img src="docs/images/window-enhancement.png" alt="贴边隐藏设置" /></td>
   </tr>
   <tr>
-    <td colspan="2" align="center"><strong>鼠标手势、截图与本地 OCR</strong></td>
+    <td align="center"><strong>触发角热区</strong><br/><sub>每台显示器的每个角、每条边都能独立配置。</sub></td>
+    <td align="center"><strong>贴边隐藏</strong><br/><sub>窗口自动收起，从露出区域快速恢复。</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/images/mouse-gestures.png" alt="鼠标手势工作台、截图贴图与本地 OCR" /></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><strong>手势、截图与本地 OCR</strong><br/><sub>内置手势、自定义样本与可编辑动作。</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/images/dark-theme.png" alt="便捷窗口深色主题" /></td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center"><strong>深浅双主题</strong><br/><sub>跟随系统外观，也可手动切换。</sub></td>
   </tr>
 </table>
 
-### 贴边隐藏如何工作
+## 功能
 
-1. 把窗口拖向屏幕边缘。
-2. 松开鼠标后，窗口会收纳到边缘。
-3. 将鼠标移回露出的边条即可恢复窗口。
+**窗口控制**
+- **窗口布局**：保存与恢复普通窗口的位置、大小、最大化/最小化和置顶状态，逐窗口校验身份并汇总跳过项。
+- **任意位置移动与缩放**：用可配置的修饰键与鼠标组合移动或缩放当前窗口。
+- **置顶控制**：让窗口始终置顶；默认显示红色小图钉，点击即可取消置顶。
+- **逐显示器配置**：每台显示器独立保存设置，支持带符号的虚拟桌面坐标。
 
-## 快速开始
+**屏幕边缘**
+- **热区**：每台显示器的四个角和四条边，支持悬停、鼠标按键、滚轮和沿边移动触发；半透明悬停提示可单独关闭而不影响动作。
+- **热区几何**：逐屏设置角宽/角高（支持比例锁定）、边厚度、居中长度，带实时预览和单区重置。
+- **贴边隐藏**：把窗口移出屏幕一部分，从露出的边缘快速恢复，支持多窗口与多显示器；恢复轮廓和动画可独立关闭。
 
-1. 从[最新 Release](https://github.com/ximizhou/convenient_window_free/releases/latest)下载安装包或 Portable ZIP。
-2. 安装应用，或者把便携版解压到 `ConvenientWindow-portable` 目录后运行其中的 `ConvenientWindow.exe`；更新时覆盖同一目录即可。
-3. 从系统托盘打开“便捷窗口”。
-4. 打开功能总开关，然后配置触发角、窗口增强或鼠标手势。
+**手势与捕获**
+- **全局鼠标手势**：把单笔手势绑定到快捷键、系统动作、命令和窗口操作，最多管理 64 个手势、每个 8 份样本。
+- **截图与贴图**：截取区域并置顶显示，可移动、缩放、调透明度、复制或另存为 PNG。
+- **本地 OCR**：调用 Windows 本地能力识别文字并复制，不上传截图。
 
-关闭设置窗口后，程序仍会在系统托盘中运行。你可以通过托盘菜单重新打开设置、控制开机启动或退出程序。
+**体验**
+- **亮度与音量调节**：在热区和手势里调整对应显示器亮度或输出音量，并显示被动式屏幕提示。
+- **实时设置**：大部分修改保存后立即生效，无需额外“应用”。
+- **主题与语言**：深浅主题和中文/English 界面，可随时切换。
+
+## 下载
+
+| 包 | 适用情况 |
+| --- | --- |
+| [安装包（`setup.exe`）](https://github.com/ximizhou/convenient_window_free/releases/latest) | 推荐普通用户按用户级安装。 |
+| 便携版 ZIP | 解压即用；压缩包内固定为 `ConvenientWindow-portable` 目录。 |
+| 系统要求 | 已发布包仅支持 Windows 11 x64。 |
+
+当前发布资产**未做代码签名**，Windows 可能显示未知发布者或 SmartScreen 提示。每个版本都附带 `SHA256SUMS` 和 `artifact-manifest.json`，可自行校验下载文件。若安全软件拦截 `magic-corners-helper.exe`，请先校验哈希，再检查隔离区或提交误报，不要为此直接关闭防护。
+
+**便携版升级**：把新压缩包解压覆盖到原来的 `ConvenientWindow-portable` 目录即可。设置保存在 Local AppData，不在便携目录内，因此替换文件不会丢失配置。
+
+## 快速上手
+
+1. 下载并安装，或解压便携版。
+2. 从系统托盘打开便捷窗口。
+3. 打开功能总开关，在底部页签里按需启用触发角、窗口增强、鼠标手势、窗口布局或窗口美化。
+4. 在右上角齿轮（设置）里切换深浅主题、界面语言、开机启动和轮询间隔。
+
+关闭设置窗口后托盘程序继续运行；可从托盘菜单重新打开设置或退出。
+
+### 贴边隐藏怎么用
+
+1. 把窗口拖向屏幕边缘，直到出现蓝色提示线。
+2. 松开鼠标让窗口收起；顶部边缘需要等蓝线铺满后再松手，提前松手保留系统 Snap。
+3. 把鼠标移回露出的边缘区域即可恢复窗口。
 
 ## 隐私与安全
 
-- OCR 通过 Windows 本地 API 完成，识别过程不会上传截图。
-- 配置、鉴权令牌、使用数据和日志都保存在应用的本地数据目录中；删除便携版程序目录不会按设计删除这些设置。
-- 本地 WebSocket 使用随机令牌保护。
-- 平台原生单实例锁会阻止不同宿主集成同时控制不同的 helper 进程（Windows 使用全局 mutex，Unix 使用运行时/缓存目录锁文件）。
+- OCR 通过 Windows 本地接口完成，截图不会为识别而上传。
+- 配置、令牌、使用统计和日志都保存在本机应用数据目录。
+- 本地 IPC 使用随机令牌保护，并带单实例锁。
+- 后台助手是独立组件，需要用户明确确认后安装，逐文件校验大小与 SHA-256，可随时停止或删除。
 
-如需私下报告安全问题，请查看 [SECURITY.md](SECURITY.md)。
+安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
-## 平台支持与限制
+## 平台支持
 
-- Windows 11 x64：完整能力，当前发布和回归平台。
-- macOS x64/arm64：支持全局输入、辅助功能窗口控制、显示器和截图；需要辅助功能与屏幕录制权限。OCR、贴边隐藏和任意窗口置顶暂不支持，真实权限与窗口验收待 native runner/机器证据。
-- Linux x64 X11：支持全局输入、窗口控制、显示器、截图和 EWMH 置顶；OCR 和贴边隐藏暂不支持，真实窗口验收待 native runner/机器证据。
-- 音量使用 Windows/macOS Core Audio，Linux 使用 `pactl`，支持 PulseAudio 和提供 PulseAudio 服务的 PipeWire。音量、亮度共用桌面提示条，显示设备读回值、静音状态和错误，见[实现说明](docs/architecture.md#adjustment-feedback)。Windows 路径已通过发布验收；macOS 与 Linux 的音频后端及提示条位置**已接入、未真机验证**。
-- 独立桌面内置提示条；宿主集成可显示同一份反馈，并在覆盖窗不可用时保留状态栏文字。
-- Linux Wayland：只报告能力并明确降级，不承诺全局输入或任意窗口控制。
-- macOS/Linux 发布资产在 native 验收前保持未验证，不会进入下载清单。
-- 当前安装包和可执行文件尚未进行代码签名。
-- 暂未实现应用自动更新。
+| 平台 | 状态 | 说明 |
+| --- | --- | --- |
+| **Windows 11 x64** | 已发布验收 | 完整功能集，提供 NSIS 安装包与便携版。 |
+| macOS（x64 / arm64） | 未验收 | 原生助手边界覆盖输入、窗口控制、显示器与截图；需要辅助功能与屏幕录制权限。OCR、贴边隐藏和任意窗口置顶不可用，不发布安装资产。 |
+| Linux X11（x64） | 未验收 | 原生助手支持输入、窗口控制、显示器、截图和 EWMH 置顶；OCR 与贴边隐藏不可用，不发布安装资产。 |
+| Linux Wayland | 仅能力探测 | 明确报告不可用，不伪装支持全局输入或任意窗口控制。 |
 
-## 开发说明
+安装包和程序未做代码签名，也尚未实现自动更新。任务栏材质是默认关闭的 Windows 11 x64 实验功能，支持透明、Acrylic 和纯色染色，面板内保留 Explorer 风险提示。
 
-本仓库是以下内容的权威源码：
+## 开发者
 
-- `apps/desktop/`：Tauri 2 独立桌面宿主和可复用的 Svelte 界面。
-- `helper/`：独立桌面版和宿主集成共同使用的 Rust helper。
-- `scripts/`：可复现的构建、打包、烟测和产物审计入口。
+<details>
+<summary><strong>从源码构建与测试</strong></summary>
 
-宿主集成通过 submodule 使用本仓库，并提供自己的宿主适配层；不会维护第二份 helper 源码。
+本仓库是 `apps/desktop/`（Tauri 2 宿主与 Svelte 界面）、`helper/`（共享 Rust 助手）和 `scripts/`（构建、打包、smoke 与产物审计入口）的唯一源码来源。宿主集成以 submodule 方式引用本仓库，只提供自己的宿主适配层。
 
-### 开发环境
-
-Windows x64 helper 构建还需要 Visual Studio C++ Build Tools 与带 C++/WinRT 头文件的 Windows SDK。任务栏组件复用 `scripts/windows-toolchain.ps1` 发现现有工具；发现失败时将 `VSINSTALLDIR` 指向现有安装目录，不需下载额外任务栏运行时。
-
-- `.node-version` 固定的 Node.js `24.14.0`
-- Windows 11 x64：完整行为、NSIS 安装包和便携版
-- macOS 13+（x64/arm64）：原生 helper 检查；交互运行需授予辅助功能和屏幕录制权限
-- Ubuntu 22.04+ X11：Linux helper 检查；Wayland 仅做能力探测和明确降级
-- Rust `1.96.0` 或更新的 stable 工具链；仓库 `rust-toolchain` 只固定 Windows GNU 目标，macOS/Linux 请显式使用 `cargo +stable`
-
-安装依赖并运行前端检查：
+前置条件：Node.js `24.14.0`（见 `.node-version`）、Windows 11 x64（发布构建）、Rust `1.96.0` 或更新稳定版。Windows helper 还需要 Visual Studio C++ Build Tools 与带 C++/WinRT 头的 Windows SDK；`scripts/windows-toolchain.ps1` 会自动发现，也可用 `VSINSTALLDIR` 指向已有安装。
 
 ```powershell
 npm ci
 npm run desktop:test
 npm run desktop:check
 npm run desktop:frontend
-```
-
-构建 Svelte 前端、Rust helper sidecar、Tauri 应用、当前用户 NSIS 安装包和便携版压缩包：
-
-```powershell
 npm run desktop:build
 ```
 
-使用 `scripts/build-desktop.ps1 -ArtifactsDir artifacts/<candidate>` 保留既有输出，路径必须位于本仓库 `artifacts/` 内。audit、runtime 与安装门须按 [测试文档](docs/testing.md#local-gates) 显式指定同一目录/EXE；下列默认 npm smoke 命令指向根 `artifacts/`，仅有路径不代表已经构建。
+`scripts/build-desktop.ps1 -ArtifactsDir artifacts/<candidate>` 会保留旧产物；路径必须位于仓库的 `artifacts/` 内。打包后的生命周期与产物门禁见 [测试文档](docs/testing.md)，helper 协议与窗口状态机见 [架构文档](docs/architecture.md)。
 
-运行打包后的生命周期和产物检查：
-
-自动安装门仅用于无现有产品安装的隔离账户/CI。本地准备时保留用户既有安装，最终 setup 交用户做实际安装/升级验收。
+仅开发 Windows helper 时：
 
 ```powershell
-npm run desktop:runtime-smoke
-npm run desktop:runtime-conflict-smoke
-npm run desktop:runtime-force-kill-smoke
-npm run desktop:install-smoke
-npm run desktop:audit
-npm run desktop:source-audit
-```
-
-只开发 helper 时，请在 `helper/` 目录中运行命令，以应用该目录的链接器配置：
-
-```powershell
-rustup toolchain install 1.96.0-x86_64-pc-windows-gnullvm --profile minimal --component rustfmt
-cd helper
 rustup run 1.96.0-x86_64-pc-windows-gnullvm cargo fmt --check
 rustup run 1.96.0-x86_64-pc-windows-gnullvm cargo test
 ```
 
-构建过程会根据已安装的 npm 生产依赖和锁定的 Windows Cargo 依赖图生成 `THIRD-PARTY-NOTICES.txt`。安装包和便携版必须同时包含该文件与项目许可证；许可证文本缺失或无法审计时，构建会直接失败。
-
-macOS 原生检查：
-
-```bash
-npm ci --prefix apps/desktop
-npm --prefix apps/desktop run check
-npm --prefix apps/desktop test
-npm --prefix apps/desktop run build
-cargo +stable fmt --manifest-path helper/Cargo.toml --check
-cargo +stable test --manifest-path helper/Cargo.toml --target x86_64-apple-darwin
-cargo +stable check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-apple-darwin
-```
-
-Linux X11 检查（CI 使用 Xvfb；Wayland 不承诺完整等价）：
-
-```bash
-sudo apt-get install -y pkg-config libx11-dev libxtst-dev libxi-dev libxinerama-dev libxrandr-dev libxss-dev libwayland-dev libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev xvfb
-Xvfb :99 -screen 0 1920x1080x24 -noreset &
-export DISPLAY=:99
-export XDG_SESSION_TYPE=x11
-npm ci --prefix apps/desktop
-npm --prefix apps/desktop run check
-npm --prefix apps/desktop test
-npm --prefix apps/desktop run build
-cargo +stable fmt --manifest-path helper/Cargo.toml --check
-cargo +stable test --manifest-path helper/Cargo.toml --target x86_64-unknown-linux-gnu
-cargo +stable check --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-unknown-linux-gnu
-```
-
-更多技术资料：
-
-- [架构说明](docs/architecture.md)
-- [测试说明](docs/testing.md)
-- [发布流程](docs/release.md)
-- [安全策略](SECURITY.md)
+</details>
 
 ## 发布完整性
 
-公开版本采用不可变验收流程：从干净的 `main` 构建一次，发布安装包和便携版进行测试，再将完全相同的资产从 Pre-release 提升为 stable，不替换文件。每个 Release 都包含 SHA-256 校验和，以及绑定源码提交的产物清单。
+<details>
+<summary><strong>发布与校验方式</strong></summary>
+
+干净的 `main` 构建先作为可替换的 Pre-release 候选发布；用户验收通过后，同一批资产原地转为 stable，不重新构建或上传。每个版本都附带绑定源码提交的 `SHA256SUMS` 与产物清单。stable 资产不可变；替换已稳定的二进制必须提升补丁版本并重新打 Tag。
+
+</details>
 
 ## 许可证
 
-本项目采用 [PolyForm Noncommercial License 1.0.0](LICENSE)，属于源码可用项目。
-
-你可以在许可证条款下查看、学习、修改，并将软件用于个人和其他非商业用途。任何商业使用都需要事先取得版权所有者的书面许可。
-
-该许可证从引入它的提交开始适用于本仓库。此前已经按 MIT License 发布的版本，继续适用其发布时授予的许可证。
+本项目以 [PolyForm Noncommercial License 1.0.0](LICENSE) 源码开放。你可以按许可证条款查看、学习、修改并用于个人及其他非商业用途；商业使用需要另行获得版权持有者的书面许可。历史上以 MIT License 发布的版本，仍按当时的授权继续可用。
