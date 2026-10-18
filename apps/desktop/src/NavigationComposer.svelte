@@ -363,29 +363,29 @@
 <style>
   .navigation-composer { display: grid; gap: 9px; width: 100%; margin-bottom: 10px; color: var(--ink); }
   .composer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
-  .composer-head-copy > span { display: block; color: var(--ink); font-size: 14px; font-weight: 620; letter-spacing: -.01em; }
-  .composer-head-copy > p { margin: 5px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.55; }
-  .composer-capacity { display: inline-flex; flex: none; align-items: baseline; gap: 1px; padding: 3px 9px 4px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--panel) 78%, var(--surface)); color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; transition: border-color 180ms ease, background 180ms ease; }
-  .composer-capacity b { color: var(--accent-soft); font-size: 12px; font-weight: 660; }
+  .composer-head-copy > span { display: block; color: var(--ink); font-size: var(--fs-lg); font-weight: 620; letter-spacing: -.01em; }
+  .composer-head-copy > p { margin: 5px 0 0; color: var(--muted); font-size: var(--fs-sm); line-height: 1.55; }
+  .composer-capacity { display: inline-flex; flex: none; align-items: baseline; gap: 1px; padding: 3px 9px 4px; border: 1px solid var(--line); border-radius: 999px; background: color-mix(in srgb, var(--panel) 78%, var(--surface)); color: var(--faint-text); font-size: var(--fs-2xs); font-variant-numeric: tabular-nums; transition: border-color var(--dur-base) ease, background var(--dur-base) ease; }
+  .composer-capacity b { color: var(--accent-soft); font-size: var(--fs-sm); font-weight: 660; }
   .composer-capacity i { font-style: normal; opacity: .72; }
   .composer-capacity.full { border-color: color-mix(in srgb, var(--accent-line) 62%, var(--line)); background: color-mix(in srgb, var(--accent-bg) 55%, var(--panel)); }
 
   .composer-stage { position: relative; width: 100%; height: var(--stage-height); min-height: var(--stage-height); }
   .composer-layer { position: absolute; top: var(--layer-top); left: 0; right: 0; }
   .composer-caption { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; height: var(--row-caption); margin: 0; }
-  .composer-caption > span { color: var(--faint); font-size: 9.5px; font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
-  .composer-caption > em { color: var(--faint); font-size: 9.5px; font-style: normal; letter-spacing: .01em; white-space: nowrap; transition: color 160ms ease; }
+  .composer-caption > span { color: var(--faint-text); font-size: var(--fs-3xs); font-weight: 650; letter-spacing: .08em; text-transform: uppercase; }
+  .composer-caption > em { color: var(--faint-text); font-size: var(--fs-3xs); font-style: normal; letter-spacing: .01em; white-space: nowrap; transition: color var(--dur-fast) ease; }
   .composer-caption > em.alert { color: var(--danger); font-weight: 620; }
 
-  .composer-tray { position: relative; display: flex; align-items: center; justify-content: center; height: var(--row-height); border-radius: 18px; transition: border-color 200ms ease, background 200ms ease, box-shadow 240ms ease; }
+  .composer-tray { position: relative; display: flex; align-items: center; justify-content: center; height: var(--row-height); border-radius: 18px; transition: border-color var(--dur-base) ease, background var(--dur-base) ease, box-shadow var(--dur-mid) ease; }
   .composer-tray-active { border: 1px solid color-mix(in srgb, var(--accent-line) 46%, var(--line)); background: linear-gradient(180deg, color-mix(in srgb, var(--accent-bg) 74%, var(--surface)), color-mix(in srgb, var(--accent-bg) 26%, var(--surface))); box-shadow: inset 0 1px 0 rgba(255, 255, 255, .32), 0 1px 2px rgba(15, 23, 42, .04); }
   .composer-tray-hidden { border: 1px dashed color-mix(in srgb, var(--line-strong) 62%, transparent); background: color-mix(in srgb, var(--surface) 58%, transparent); }
-  .composer-tray-active.rejected { border-color: color-mix(in srgb, var(--danger) 64%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--danger-bg) 88%, var(--surface)), color-mix(in srgb, var(--danger-bg) 30%, var(--surface))); box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 24%, transparent), 0 0 20px color-mix(in srgb, var(--danger) 24%, transparent), inset 0 1px 0 rgba(255, 255, 255, .28); animation: composer-reject-pulse 640ms cubic-bezier(.3, .9, .3, 1); }
-  .composer-empty { color: var(--faint); font-size: 10.5px; letter-spacing: .02em; pointer-events: none; }
+  .composer-tray-active.rejected { border-color: color-mix(in srgb, var(--danger) 64%, transparent); background: linear-gradient(180deg, color-mix(in srgb, var(--danger-bg) 88%, var(--surface)), color-mix(in srgb, var(--danger-bg) 30%, var(--surface))); box-shadow: 0 0 0 1px color-mix(in srgb, var(--danger) 24%, transparent), 0 0 20px color-mix(in srgb, var(--danger) 24%, transparent), inset 0 1px 0 rgba(255, 255, 255, .28); animation: composer-reject-pulse 640ms var(--ease-out); }
+  .composer-empty { color: var(--faint-text); font-size: var(--fs-xs); letter-spacing: .02em; pointer-events: none; }
 
   .composer-bubble, .composer-placeholder { position: absolute; top: 0; left: 0; width: var(--bubble-size); height: var(--bubble-size); border-radius: 50%; }
   .composer-bubble { z-index: 2; }
-  .composer-stage.measured .composer-bubble { transition: transform 260ms cubic-bezier(.22, .9, .3, 1), opacity 180ms ease; }
+  .composer-stage.measured .composer-bubble { transition: transform var(--dur-mid) var(--ease-out), opacity var(--dur-base) ease; }
   .composer-bubble.dragging { z-index: 8; opacity: 1; transition: none; }
   .composer-bubble.dragging .composer-bubble-button { background: linear-gradient(180deg, var(--chip-a), var(--chip-b)); --glyph-cutout: var(--chip-b); }
   .composer-bubble.dim { opacity: .6; }
@@ -406,7 +406,7 @@
     touch-action: none;
     user-select: none;
     box-shadow: 0 1px 1px rgba(15, 23, 42, .05), 0 6px 14px rgba(15, 23, 42, .07), inset 0 1px 0 rgba(255, 255, 255, .5);
-    transition: color 160ms ease, border-color 160ms ease, box-shadow 200ms ease, transform 200ms ease, background 200ms ease;
+    transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease, box-shadow var(--dur-base) ease, transform var(--dur-base) ease, background var(--dur-base) ease;
   }
   .composer-bubble-button:hover, .composer-bubble-button:focus-visible { color: var(--accent-soft); border-color: color-mix(in srgb, var(--accent-line) 72%, var(--line)); box-shadow: 0 8px 20px rgba(15, 23, 42, .12), 0 0 0 3px color-mix(in srgb, var(--accent-line) 20%, transparent), inset 0 1px 0 rgba(255, 255, 255, .55); outline: none; }
   .composer-bubble.dragging .composer-bubble-button { cursor: grabbing; color: var(--accent-soft); transform: scale(1.06); box-shadow: 0 18px 34px rgba(15, 23, 42, .22), 0 0 0 1px color-mix(in srgb, var(--accent-line) 42%, transparent), inset 0 1px 0 rgba(255, 255, 255, .55); }
@@ -418,16 +418,16 @@
   .composer-bubble-button :global(.nav-icon-svg) { width: 20px; height: 20px; }
   .composer-bubble-button :global(.nav-beauty) { width: 23px; height: 23px; }
 
-  .composer-placeholder { z-index: 1; border: 1.5px dashed color-mix(in srgb, var(--accent) 68%, transparent); background: color-mix(in srgb, var(--accent-bg) 62%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-line) 46%, transparent), 0 0 0 4px color-mix(in srgb, var(--accent-line) 10%, transparent); pointer-events: none; transition: transform 260ms cubic-bezier(.22, .9, .3, 1); }
+  .composer-placeholder { z-index: 1; border: 1.5px dashed color-mix(in srgb, var(--accent) 68%, transparent); background: color-mix(in srgb, var(--accent-bg) 62%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent-line) 46%, transparent), 0 0 0 4px color-mix(in srgb, var(--accent-line) 10%, transparent); pointer-events: none; transition: transform var(--dur-mid) var(--ease-out); }
 
-  .composer-tooltip { position: absolute; top: calc(100% + 8px); left: 50%; z-index: 30; display: grid; width: max-content; max-width: min(220px, calc(100vw - 34px)); gap: 3px; padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 11px; background: color-mix(in srgb, var(--panel) 95%, var(--raised)); box-shadow: 0 12px 28px rgba(15, 23, 42, .18), 0 1px 2px rgba(15, 23, 42, .08); color: var(--ink); text-align: left; opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, -4px) scale(.98); transform-origin: top center; transition: opacity 150ms ease, transform 150ms ease, visibility 150ms ease; }
-  .composer-tooltip strong { color: var(--ink); font-size: 10.5px; font-weight: 650; white-space: nowrap; }
-  .composer-tooltip small { color: var(--muted); font-size: 9px; line-height: 1.35; white-space: normal; }
+  .composer-tooltip { position: absolute; top: calc(100% + 8px); left: 50%; z-index: 30; display: grid; width: max-content; max-width: min(220px, calc(100vw - 34px)); gap: 3px; padding: 7px 9px; border: 1px solid var(--line-strong); border-radius: 11px; background: color-mix(in srgb, var(--panel) 95%, var(--raised)); box-shadow: 0 12px 28px rgba(15, 23, 42, .18), 0 1px 2px rgba(15, 23, 42, .08); color: var(--ink); text-align: left; opacity: 0; visibility: hidden; pointer-events: none; transform: translate(-50%, -4px) scale(.98); transform-origin: top center; transition: opacity var(--dur-fast) ease, transform var(--dur-fast) ease, visibility var(--dur-fast) ease; }
+  .composer-tooltip strong { color: var(--ink); font-size: var(--fs-xs); font-weight: 650; white-space: nowrap; }
+  .composer-tooltip small { color: var(--muted); font-size: var(--fs-3xs); line-height: 1.35; white-space: normal; }
   .composer-bubble-button:hover .composer-tooltip, .composer-bubble-button:focus-visible .composer-tooltip { opacity: 1; visibility: visible; transform: translate(-50%, 0) scale(1); }
   /* 拖拽时提示条会挡住落点和红色反馈，先收起。 */
   .composer-stage.dragging .composer-tooltip { opacity: 0; visibility: hidden; }
 
-  .composer-status { margin: 0; color: var(--faint); font-size: 10.5px; line-height: 1.5; transition: color 160ms ease; }
+  .composer-status { margin: 0; color: var(--faint-text); font-size: var(--fs-xs); line-height: 1.5; transition: color var(--dur-fast) ease; }
   .composer-status::before { content: ""; display: inline-block; width: 5px; height: 5px; margin-right: 6px; border-radius: 50%; background: color-mix(in srgb, var(--faint) 70%, transparent); vertical-align: 1px; }
 
   @keyframes composer-reject-pulse {

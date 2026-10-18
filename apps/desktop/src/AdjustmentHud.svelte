@@ -54,14 +54,14 @@
   .hud { height: 100vh; width: 100%; display: flex; align-items: center; gap: 12px; padding: 10px 16px; border: 1px solid #343944; }
   .icon { width: 24px; flex-shrink: 0; color: #d5e1f8; }
   svg { display: block; width: 24px; height: 24px; }
-  .wave, .rays { transition: opacity 80ms linear; }
-  .sun { transition: r 80ms linear; }
+  .wave, .rays { transition: opacity var(--dur-instant) linear; }
+  .sun { transition: r var(--dur-instant) linear; }
   .content { flex: 1; min-width: 0; }
-  .heading { display: flex; justify-content: space-between; align-items: baseline; font-size: 12px; line-height: 20px; }
-  .value { font-size: 16px; font-weight: 600; font-variant-numeric: tabular-nums; }
-  .device { margin: 1px 0 7px; font-size: 10px; line-height: 14px; color: #b6bfcd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .heading { display: flex; justify-content: space-between; align-items: baseline; font-size: var(--fs-sm); line-height: 20px; }
+  .value { font-size: var(--fs-lg); font-weight: 600; font-variant-numeric: tabular-nums; }
+  .device { margin: 1px 0 7px; font-size: var(--fs-2xs); line-height: 14px; color: #b6bfcd; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .track { height: 3px; border-radius: 2px; overflow: hidden; background: #414854; }
-  .fill { height: 100%; background: #9bbcff; border-radius: inherit; transform-origin: left; transition: transform 80ms linear; }
+  .fill { height: 100%; background: #9bbcff; border-radius: inherit; transform-origin: left; transition: transform var(--dur-instant) linear; }
   .unavailable { visibility: hidden; }
   .error .icon, .error .value { color: #f2b4a5; }
   @media (prefers-reduced-motion: reduce) { .fill, .wave, .rays, .sun { transition: none; } }

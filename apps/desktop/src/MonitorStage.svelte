@@ -179,50 +179,50 @@
 <style>
   .monitor-stage{position:relative;min-height:0;height:100%;overflow:hidden;isolation:isolate}
   .blueprint-grid{position:absolute;inset:3% 1% 10%;opacity:.6;background-image:linear-gradient(var(--grid-line) 1px,transparent 1px),linear-gradient(90deg,var(--grid-line) 1px,transparent 1px);background-size:28px 28px;mask-image:radial-gradient(ellipse at center,#000 20%,transparent 76%)}
-  .physical-monitor{--slot:0;position:absolute;left:14%;top:13%;width:70%;height:63%;transition:left .5s cubic-bezier(.22,1,.36,1),top .5s cubic-bezier(.22,1,.36,1),width .5s cubic-bezier(.22,1,.36,1),height .5s cubic-bezier(.22,1,.36,1),opacity .25s,filter .25s,transform .5s cubic-bezier(.22,1,.36,1);z-index:3}
+  .physical-monitor{--slot:0;position:absolute;left:14%;top:13%;width:70%;height:63%;transition: left var(--dur-scene) var(--ease-out),top var(--dur-scene) var(--ease-out),width var(--dur-scene) var(--ease-out),height var(--dur-scene) var(--ease-out),opacity var(--dur-base),filter var(--dur-base),transform var(--dur-scene) var(--ease-out);z-index:3}
   .physical-monitor.hotzone-layer{z-index:20}
   .has-companions .active-monitor{left:22%;width:68%}
-  .screen{position:absolute;inset:0 0 17%;border:1px solid var(--line-strong);border-radius:10px;background:linear-gradient(160deg,var(--screen-a),var(--screen-b));color:var(--ink);padding:18px;text-align:left;box-shadow:0 16px 36px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.06);transition:border-color .18s,box-shadow .18s,background .32s}
-  .screen:hover{border-color:var(--faint);background:linear-gradient(160deg,var(--screen-hover-a),var(--screen-hover-b))}
+  .screen{position:absolute;inset:0 0 17%;border:1px solid var(--line-strong);border-radius: var(--radius);background:linear-gradient(160deg,var(--screen-a),var(--screen-b));color:var(--ink);padding:18px;text-align:left;box-shadow:0 16px 36px rgba(0,0,0,.18),inset 0 1px 0 rgba(255,255,255,.06);transition: border-color var(--dur-base),box-shadow var(--dur-base),background var(--dur-slow)}
+  .screen:hover{border-color: var(--faint-text);background:linear-gradient(160deg,var(--screen-hover-a),var(--screen-hover-b))}
   .active-monitor .screen{border-color:var(--accent);box-shadow:0 16px 36px rgba(0,0,0,.18),0 0 0 3px var(--accent-bg),inset 0 1px 0 rgba(255,255,255,.06)}
   .preview-monitor .screen{border-color:var(--line-strong);box-shadow:0 16px 36px rgba(0,0,0,.14),inset 0 1px 0 rgba(255,255,255,.06)}
   .preview-monitor .screen-index,.preview-monitor .screen strong{color:var(--muted)}
   .screen-index{position:absolute;left:50%;top:44%;transform:translate(-50%,-50%);font-family:"Cascadia Mono",monospace;font-size:26px;color:var(--accent-soft);border:1.5px solid currentColor;border-radius:50%;width:52px;height:52px;display:grid;place-items:center}
-  .screen strong{position:absolute;left:50%;top:63%;transform:translateX(-50%);color:var(--accent-soft);font:600 13px/1.2 "Segoe UI Variable","Microsoft YaHei",sans-serif;white-space:nowrap}
-  .screen small{position:absolute;left:16px;bottom:14px;color:var(--faint);font:11px/1.2 "Cascadia Mono","Microsoft YaHei",sans-serif}
+  .screen strong{position:absolute;left:50%;top:63%;transform:translateX(-50%);color:var(--accent-soft);font: 600 var(--fs-md)/1.2 "Segoe UI Variable","Microsoft YaHei",sans-serif;white-space:nowrap}
+  .screen small{position:absolute;left:16px;bottom:14px;color: var(--faint-text);font: var(--fs-xs)/1.2 "Cascadia Mono","Microsoft YaHei",sans-serif}
   .monitor-neck{position:absolute;left:46%;right:46%;bottom:5%;height:12%;background:var(--stand);border-radius:2px;z-index:-1}
   .monitor-foot{position:absolute;left:34%;right:34%;bottom:3%;height:5px;background:var(--stand);border-radius:3px}
   .companion-monitor{left:2%;top:5%;width:27%;height:31%;opacity:.65;filter:saturate(.6);transform:translate(calc(var(--slot) * 18px),calc(var(--slot) * 22px));z-index:calc(6 - var(--slot))}
   .companion-monitor .screen{inset:0 0 20%;padding:10px;box-shadow:0 10px 22px rgba(0,0,0,.14)}
-  .companion-monitor .screen-index{width:30px;height:30px;font-size:13px;top:43%}
-  .companion-monitor .screen strong{display:none}.companion-monitor .screen small{left:9px;bottom:8px;font-size:9px}.companion-monitor .monitor-foot{left:32%;right:32%;bottom:1%}
+  .companion-monitor .screen-index{width:30px;height:30px;font-size: var(--fs-md);top:43%}
+  .companion-monitor .screen strong{display:none}.companion-monitor .screen small{left:9px;bottom:8px;font-size: var(--fs-3xs)}.companion-monitor .monitor-foot{left:32%;right:32%;bottom:1%}
   .focus-path{position:absolute;left:0;top:0;width:55%;height:60%;overflow:visible;z-index:2;pointer-events:none}
   .focus-path path{fill:none;stroke:var(--accent);stroke-width:1.5;stroke-dasharray:5 6;vector-effect:non-scaling-stroke;opacity:.6}
   .focus-path .arrow{stroke-dasharray:none}
-  .swap-note{position:absolute;left:23%;top:13%;font:11px/1.2 "Segoe UI Variable","Microsoft YaHei",sans-serif;color:var(--accent-soft);z-index:2}
-  .stage-caption{position:absolute;left:0;right:0;bottom:5%;margin:0;text-align:center;color:var(--faint);font:12px/1.2 "Segoe UI Variable","Microsoft YaHei",sans-serif;letter-spacing:.04em}
+  .swap-note{position:absolute;left:23%;top:13%;font: var(--fs-xs)/1.2 "Segoe UI Variable","Microsoft YaHei",sans-serif;color:var(--accent-soft);z-index:2}
+  .stage-caption{position:absolute;left:0;right:0;bottom:5%;margin:0;text-align:center;color: var(--faint-text);font: var(--fs-sm)/1.2 "Segoe UI Variable","Microsoft YaHei",sans-serif;letter-spacing:.04em}
   .hotzone-footprint-layer{position:absolute;inset:1px 1px calc(17% + 1px);z-index:2;pointer-events:none;overflow:hidden;border-radius:9px}
   .hotzone-footprint{position:absolute;display:block;pointer-events:none;background:color-mix(in srgb,var(--accent) 50%,transparent);outline:1px solid var(--accent-soft);outline-offset:0}
-  .zone{position:absolute;z-index:30;padding:0;border:1px solid var(--line-strong);border-radius:6px;background:var(--zone-bg);color:var(--muted);box-shadow:0 2px 8px rgba(0,0,0,.12);transition:transform .15s,background-color .15s,color .15s,border-color .15s,box-shadow .18s}
-  .zone::before{content:"";position:absolute;inset:-5px;border:1px dashed transparent;border-radius:9px;opacity:0;pointer-events:none;transition:opacity .18s,border-color .18s}
+  .zone{position:absolute;z-index:30;padding:0;border:1px solid var(--line-strong);border-radius: var(--radius-xs);background:var(--zone-bg);color:var(--muted);box-shadow:0 2px 8px rgba(0,0,0,.12);transition: transform var(--dur-fast),background-color var(--dur-fast),color var(--dur-fast),border-color var(--dur-fast),box-shadow var(--dur-base)}
+  .zone::before{content:"";position:absolute;inset:-5px;border:1px dashed transparent;border-radius: var(--radius);opacity:0;pointer-events:none;transition: opacity var(--dur-base),border-color var(--dur-base)}
   .zone.configured:not(.active)::before{opacity:1;border-width:1.5px;border-color:var(--zone-configured)}
   .zone:hover{color:#fff;border-color:var(--accent);background:var(--accent);transform:scale(1.06)}
-  .zone.active,.zone.configured.active{color:#fff;border-color:var(--accent);background:var(--accent);box-shadow:0 0 0 3px var(--accent-bg),0 6px 14px rgba(35,84,190,.24);transform:scale(1.06);animation:zone-select-fill .28s cubic-bezier(.2,.9,.3,1.25)}
+  .zone.active,.zone.configured.active{color:#fff;border-color:var(--accent);background:var(--accent);box-shadow:0 0 0 3px var(--accent-bg),0 6px 14px rgba(35,84,190,.24);transform:scale(1.06);animation:zone-select-fill .28s var(--ease-bounce)}
   .zone:active{transform:scale(.96)}
   .zone.active::before,.zone:hover::before{opacity:0}
   @keyframes zone-select-fill{0%{background:var(--zone-bg);transform:scale(.94)}65%{background:var(--accent);transform:scale(1.1)}100%{background:var(--accent);transform:scale(1.06)}}
-  .zone em{position:absolute;display:grid;place-items:center;min-width:16px;height:16px;padding:0 3px;border-radius:8px;background:var(--accent);color:#fff;font:9px/1 "Cascadia Mono",monospace;font-style:normal}
-  .zone span{position:absolute;opacity:0;white-space:nowrap;padding:4px 8px;background:var(--tooltip-bg);border:1px solid var(--line-strong);border-radius:6px;color:var(--ink);font-size:11px;pointer-events:none;transition:opacity .15s;box-shadow:var(--shadow-menu)}
+  .zone em{position:absolute;display:grid;place-items:center;min-width:16px;height:16px;padding:0 3px;border-radius: var(--radius-sm);background:var(--accent);color:#fff;font: var(--fs-3xs)/1 "Cascadia Mono",monospace;font-style:normal}
+  .zone span{position:absolute;opacity:0;white-space:nowrap;padding:4px 8px;background:var(--tooltip-bg);border:1px solid var(--line-strong);border-radius: var(--radius-xs);color:var(--ink);font-size: var(--fs-xs);pointer-events:none;transition: opacity var(--dur-fast);box-shadow:var(--shadow-menu)}
   .zone:hover span{opacity:1}
   .zone-top-left,.zone-top-right,.zone-bottom-left,.zone-bottom-right{width:26px;height:26px}.zone-top-left{left:10px;top:10px}.zone-top-right{right:10px;top:10px}.zone-bottom-left{left:10px;bottom:calc(17% + 10px)}.zone-bottom-right{right:10px;bottom:calc(17% + 10px)}
   .zone-top,.zone-bottom{width:24%;height:12px;left:38%}.zone-top{top:10px}.zone-bottom{bottom:calc(17% + 10px)}.zone-left,.zone-right{height:25%;width:12px;top:30%}.zone-left{left:10px}.zone-right{right:10px}
   .zone em{right:-7px;top:-7px}.zone span{left:32px;top:-4px}.zone-top span,.zone-bottom span{left:50%;top:18px;transform:translateX(-50%)}.zone-right span,.zone-top-right span,.zone-bottom-right span{left:auto;right:32px}
-  .window-demo{position:absolute;inset:20% 15% 31%;z-index:5;border:1px solid var(--line-strong);border-radius:8px;background:linear-gradient(160deg,var(--window-a),var(--window-b));display:grid;place-items:center;box-shadow:0 10px 24px rgba(0,0,0,.14);pointer-events:auto}
-  .window-demo>span{font:12px "Segoe UI Variable","Microsoft YaHei",sans-serif;color:var(--muted)}
-  .window-demo button{position:absolute;border:1px solid var(--line-strong);border-radius:5px;background:var(--raised);color:var(--muted);pointer-events:auto;font-size:10.5px;padding:0;box-shadow:0 2px 8px rgba(0,0,0,.12);transition:transform .15s cubic-bezier(.2,.9,.3,1.25),background-color .15s,color .15s,border-color .15s,box-shadow .18s,opacity .18s}
+  .window-demo{position:absolute;inset:20% 15% 31%;z-index:5;border:1px solid var(--line-strong);border-radius: var(--radius-sm);background:linear-gradient(160deg,var(--window-a),var(--window-b));display:grid;place-items:center;box-shadow:0 10px 24px rgba(0,0,0,.14);pointer-events:auto}
+  .window-demo>span{font: var(--fs-sm) "Segoe UI Variable","Microsoft YaHei",sans-serif;color:var(--muted)}
+  .window-demo button{position:absolute;border:1px solid var(--line-strong);border-radius: var(--radius-xs);background:var(--raised);color:var(--muted);pointer-events:auto;font-size: var(--fs-xs);padding:0;box-shadow:0 2px 8px rgba(0,0,0,.12);transition: transform var(--dur-fast) var(--ease-bounce),background-color var(--dur-fast),color var(--dur-fast),border-color var(--dur-fast),box-shadow var(--dur-base),opacity var(--dur-base)}
   .window-demo button.configured:not(.active){outline:1.5px dashed var(--zone-configured);outline-offset:5px}
   .window-demo button:hover:not(:disabled){border-color:var(--accent);background:var(--accent);color:#fff;outline-color:transparent;box-shadow:0 0 0 3px var(--accent-bg),0 6px 14px rgba(35,84,190,.22);transform:scale(1.08)}
-  .window-demo button.active{border-color:var(--accent);background:var(--accent);color:#fff;outline-color:transparent;box-shadow:0 0 0 3px var(--accent-bg),0 6px 14px rgba(35,84,190,.24);animation:edge-select-fill .28s cubic-bezier(.2,.9,.3,1.25)}
+  .window-demo button.active{border-color:var(--accent);background:var(--accent);color:#fff;outline-color:transparent;box-shadow:0 0 0 3px var(--accent-bg),0 6px 14px rgba(35,84,190,.24);animation:edge-select-fill .28s var(--ease-bounce)}
   .window-demo button:active:not(:disabled){transform:scale(.92)}
   .window-demo button.unavailable{border-color:var(--line);background:var(--unavailable-bg);color:var(--unavailable-ink);cursor:not-allowed;opacity:.6;box-shadow:none}
   @keyframes edge-select-fill{0%{background:var(--raised);transform:scale(.92)}65%{background:var(--accent);transform:scale(1.1)}100%{background:var(--accent);transform:scale(1)}}

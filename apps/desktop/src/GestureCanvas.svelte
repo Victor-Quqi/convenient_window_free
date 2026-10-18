@@ -62,7 +62,7 @@
 </svg>
 
 <style>
-  svg { width: min(100%, var(--gesture-canvas-height, 190px)); height: auto; aspect-ratio: 1; margin-inline: auto; box-sizing: border-box; display: block; overflow: visible; border: 1px solid var(--line-strong); border-radius: 8px; background: radial-gradient(circle at 50% 50%, var(--accent-bg), transparent 58%), var(--bg); touch-action: none; user-select: none; transition: background-color .32s, border-color .32s; }
+  svg { width: min(100%, var(--gesture-canvas-height, 190px)); height: auto; aspect-ratio: 1; margin-inline: auto; box-sizing: border-box; display: block; overflow: visible; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: radial-gradient(circle at 50% 50%, var(--accent-bg), transparent 58%), var(--bg); touch-action: none; user-select: none; transition: background-color var(--dur-slow), border-color var(--dur-slow); }
   svg.recording { cursor: crosshair; }
   .guide { fill: none; stroke: var(--line-strong); stroke-width: .45; }
   .saved { fill: none; stroke: var(--accent-soft); stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }

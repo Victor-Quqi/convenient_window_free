@@ -102,9 +102,9 @@
 
 <style>
   .modifier-recorder{min-width:0;display:grid;grid-template-columns:minmax(0,1fr) 30px;gap:6px;align-items:center}.modifier-recorder:not(:has(.clear)){grid-template-columns:1fr}
-  .modifier-recorder>button:first-child{height:38px;min-width:0;padding:5px 9px;border:1px solid var(--line-strong);border-radius:6px;background:var(--bg);color:var(--ink);display:flex;align-items:center;justify-content:space-between;transition:border-color .15s,box-shadow .15s,background-color .2s}
+  .modifier-recorder>button:first-child{height:38px;min-width:0;padding:5px 9px;border:1px solid var(--line-strong);border-radius: var(--radius-xs);background:var(--bg);color:var(--ink);display:flex;align-items:center;justify-content:space-between;transition: border-color var(--dur-fast),box-shadow var(--dur-fast),background-color var(--dur-base)}
   .modifier-recorder>button:first-child:hover,.modifier-recorder.recording>button:first-child{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
-  .key-row{min-width:0;display:flex;gap:4px;overflow:hidden}.key-row kbd{min-width:34px;height:24px;padding:0 6px;border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:4px;background:var(--surface);color:var(--ink);font:600 11px/21px "Segoe UI Variable","Microsoft YaHei",sans-serif;text-align:center}
-  .empty{color:var(--muted);font-size:12px}.modifier-recorder i{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
-  .clear{width:30px;height:30px;padding:0;border:1px solid var(--line);border-radius:5px;background:transparent;color:var(--muted);font-size:18px;line-height:1}.clear:hover{border-color:var(--danger);color:var(--danger)}
+  .key-row{min-width:0;display:flex;gap:4px;overflow:hidden}.key-row kbd{min-width:34px;height:24px;padding:0 6px;border:1px solid var(--line-strong);border-bottom-width:2px;border-radius: var(--radius-2xs);background:var(--surface);color:var(--ink);font: 600 var(--fs-xs)/21px "Segoe UI Variable","Microsoft YaHei",sans-serif;text-align:center}
+  .empty{color:var(--muted);font-size: var(--fs-sm)}.modifier-recorder i{width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
+  .clear{width:30px;height:30px;padding:0;border:1px solid var(--line);border-radius: var(--radius-xs);background:transparent;color:var(--muted);font-size: var(--fs-xl);line-height:1}.clear:hover{border-color:var(--danger);color:var(--danger)}
 </style>

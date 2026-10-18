@@ -204,39 +204,39 @@
 <style>
   .window-layouts-panel { gap: 14px; }
   .window-layouts-intro { align-items: center; gap: 12px; }
-  .window-layouts-intro h2 { font-size: 18px; letter-spacing: 0; }
+  .window-layouts-intro h2 { font-size: var(--fs-xl); letter-spacing: 0; }
   .window-layouts-intro p { max-width: 32em; margin-top: 5px; line-height: 1.5; }
   .layout-capture, .layout-restore {
     border: 1px solid var(--accent-line);
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     background: var(--accent-bg);
     color: var(--accent-soft);
     box-shadow: none;
     font-weight: 620;
-    transition: background .16s, border-color .16s, transform .16s;
+    transition: background var(--dur-fast), border-color var(--dur-fast), transform var(--dur-fast);
   }
   .layout-capture:hover:not(:disabled), .layout-restore:hover:not(:disabled) {
     border-color: var(--accent);
     background: var(--hover);
     transform: translateY(-1px);
   }
-  .window-layouts-status, .window-layouts-connection { border-radius: 8px; }
+  .window-layouts-status, .window-layouts-connection { border-radius: var(--radius-sm); }
   .window-layout-list { gap: 9px; }
   .window-layout-row {
     grid-template-columns: 64px minmax(0, 1fr);
     grid-template-rows: minmax(34px, auto) 34px;
     gap: 8px 12px;
     padding: 11px 12px;
-    border-radius: 8px;
+    border-radius: var(--radius-sm);
     background: var(--surface);
     box-shadow: none;
-    transition: border-color .16s, background .16s;
+    transition: border-color var(--dur-fast), background var(--dur-fast);
   }
   .window-layout-row:hover { border-color: var(--line-strong); background: var(--raised); }
   .layout-preview { grid-column: 1; grid-row: 1 / span 2; width: 64px; height: 50px; border-radius: 7px; }
   .layout-preview-window.minimized { border-style: dashed; opacity: .72; }
   .window-layout-copy { grid-column: 2; grid-row: 1; align-self: end; }
-  .layout-name { font-size: 12.5px; }
+  .layout-name { font-size: var(--fs-md); }
   .window-layout-copy p { margin-top: 4px; }
   .window-layout-actions {
     grid-column: 1 / -1;

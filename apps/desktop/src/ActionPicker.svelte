@@ -131,13 +131,13 @@
 
 <style>
   .action-picker{position:relative}
-  .picker-trigger{width:100%;min-height:42px;padding:6px 12px;border:1px solid var(--line-strong);border-radius:6px;background:var(--bg);display:flex;align-items:center;justify-content:space-between;text-align:left;transition:border-color .15s,box-shadow .15s,background-color .32s}
+  .picker-trigger{width:100%;min-height:42px;padding:6px 12px;border:1px solid var(--line-strong);border-radius: var(--radius-xs);background:var(--bg);display:flex;align-items:center;justify-content:space-between;text-align:left;transition: border-color var(--dur-fast),box-shadow var(--dur-fast),background-color var(--dur-slow)}
   .picker-trigger:hover,.picker-trigger.open{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-bg)}
-  .picker-trigger span{display:grid;gap:2px}.picker-trigger small{color:var(--faint);font:10.5px/1.2 "Segoe UI Variable","Microsoft YaHei",sans-serif;letter-spacing:.04em}.picker-trigger strong{color:var(--ink);font:500 12.5px/1.3 "Segoe UI Variable","Microsoft YaHei",sans-serif}
-  .picker-trigger>i{width:8px;height:8px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:translate(-2px,-2px) rotate(45deg);transition:transform .18s}.picker-trigger.open>i{transform:translate(-2px,2px) rotate(225deg)}
-  .picker-menu{position:fixed;z-index:999;overflow:auto;padding:6px;background:var(--tooltip-bg);border:1px solid var(--line-strong);border-radius:8px;box-shadow:var(--shadow-menu);scrollbar-width:thin;scrollbar-color:var(--scrollbar) transparent}
-  .group-label{display:block;padding:9px 9px 4px;color:var(--faint);font:600 10.5px/1.2 "Segoe UI Variable","Microsoft YaHei",sans-serif;letter-spacing:.08em}
-  .picker-menu button{width:100%;min-height:30px;padding:6px 9px;border:0;border-radius:5px;background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:space-between;text-align:left;font-size:12px;transition:background-color .12s,color .12s}
-  .picker-menu button:hover,.picker-menu button.active{background:var(--accent-bg);color:var(--ink)}.picker-menu button.selected{color:var(--accent-soft)}.picker-menu button i{color:var(--accent-soft);font-style:normal;font-size:12px}
+  .picker-trigger span{display:grid;gap:2px}.picker-trigger small{color: var(--faint-text);font: var(--fs-xs)/1.2 "Segoe UI Variable","Microsoft YaHei",sans-serif;letter-spacing:.04em}.picker-trigger strong{color:var(--ink);font: 500 var(--fs-md)/1.3 "Segoe UI Variable","Microsoft YaHei",sans-serif}
+  .picker-trigger>i{width:8px;height:8px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:translate(-2px,-2px) rotate(45deg);transition: transform var(--dur-base)}.picker-trigger.open>i{transform:translate(-2px,2px) rotate(225deg)}
+  .picker-menu{position:fixed;z-index:999;overflow:auto;padding:6px;background:var(--tooltip-bg);border:1px solid var(--line-strong);border-radius: var(--radius-sm);box-shadow:var(--shadow-menu);scrollbar-width:thin;scrollbar-color:var(--scrollbar) transparent}
+  .group-label{display:block;padding:9px 9px 4px;color: var(--faint-text);font: 600 var(--fs-xs)/1.2 "Segoe UI Variable","Microsoft YaHei",sans-serif;letter-spacing:.08em}
+  .picker-menu button{width:100%;min-height:30px;padding:6px 9px;border:0;border-radius: var(--radius-xs);background:transparent;color:var(--muted);display:flex;align-items:center;justify-content:space-between;text-align:left;font-size: var(--fs-sm);transition: background-color var(--dur-fast),color var(--dur-fast)}
+  .picker-menu button:hover,.picker-menu button.active{background:var(--accent-bg);color:var(--ink)}.picker-menu button.selected{color:var(--accent-soft)}.picker-menu button i{color:var(--accent-soft);font-style:normal;font-size: var(--fs-sm)}
   @media(prefers-reduced-motion:reduce){.picker-trigger,.picker-trigger>i,.picker-menu button{transition-duration:.01ms}}
 </style>
