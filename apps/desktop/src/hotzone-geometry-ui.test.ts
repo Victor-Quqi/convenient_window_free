@@ -16,10 +16,14 @@ it("edits geometry through the real App, isolates areas and displays, and round-
       import { HelperClient } from '../helper-client';
       import { defaultSettings, normalizeSettings } from '../settings-store';
       import { configureHostBridge } from '../host-bridge';
-      let receive, receiveStatus, saves = 0, stopCalls = 0, exportedJson = '';
+      let saves = 0, stopCalls = 0, exportedJson = '';
       const sent = [];
-      HelperClient.prototype.onMessage = function(handler) { receive = handler; return () => {}; };
-      HelperClient.prototype.onStatus = function(handler) { receiveStatus = handler; return () => {}; };
+      const receivers = [];
+      const statusReceivers = [];
+      const receive = message => { for (const handler of [...receivers]) handler(message); };
+      const receiveStatus = status => { for (const handler of [...statusReceivers]) handler(status); };
+      HelperClient.prototype.onMessage = function(handler) { receivers.push(handler); return () => { const index = receivers.indexOf(handler); if (index >= 0) receivers.splice(index, 1); }; };
+      HelperClient.prototype.onStatus = function(handler) { statusReceivers.push(handler); return () => { const index = statusReceivers.indexOf(handler); if (index >= 0) statusReceivers.splice(index, 1); }; };
       HelperClient.prototype.connect = function() { receiveStatus('connecting'); };
       HelperClient.prototype.disconnect = function() { receiveStatus('disconnected'); };
       HelperClient.prototype.stop = function() { stopCalls++; receiveStatus('disconnected'); return true; };

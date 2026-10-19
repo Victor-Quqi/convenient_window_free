@@ -178,9 +178,14 @@ async fn handle_connection(
 
     loop {
         tokio::select! {
-            _ = recording_tick.tick(), if crate::platform::shortcut_recording::has_work(&recording_connection.0) => {
+            _ = recording_tick.tick(), if crate::platform::shortcut_recording::has_work(&recording_connection.0)
+                || crate::platform::shortcut_hotkeys::has_work(&recording_connection.0) => {
                 while let Some(event) = crate::platform::shortcut_recording::take_event(&recording_connection.0) {
                     let message = HelperMessage::new("shortcut.recording", serde_json::to_value(event)?);
+                    writer.send(Message::Text(serde_json::to_string(&message)?.into())).await?;
+                }
+                while let Some(event) = crate::platform::shortcut_hotkeys::take_event(&recording_connection.0) {
+                    let message = HelperMessage::new("shortcut.hotkey.triggered", serde_json::to_value(event)?);
                     writer.send(Message::Text(serde_json::to_string(&message)?.into())).await?;
                 }
             }
@@ -282,6 +287,32 @@ async fn handle_connection(
                             crate::platform::shortcut_recording::cancel(&recording_connection.0, Some(id));
                         }
                     }
+                    "shortcut.hotkeys.sync" => {
+                        let hotkeys = match parse_hotkeys(&incoming.data) {
+                            Ok(hotkeys) => hotkeys,
+                            Err(error) => {
+                                let error = HelperMessage::new(
+                                    "runtime.error",
+                                    RuntimeError::new(ErrorCode::WindowOperationFailed, format!("{error:#}"))
+                                        .for_request(&incoming.id)
+                                        .data(),
+                                );
+                                writer.send(Message::Text(serde_json::to_string(&error)?.into())).await?;
+                                continue;
+                            }
+                        };
+                        let rejected = crate::platform::shortcut_hotkeys::sync(&recording_connection.0, &hotkeys);
+                        let accepted = hotkeys.len().saturating_sub(rejected.len());
+                        let synced = HelperMessage::new(
+                            "shortcut.hotkeys.synced",
+                            serde_json::json!({
+                                "requestId": incoming.id,
+                                "accepted": accepted,
+                                "rejected": rejected,
+                            }),
+                        );
+                        writer.send(Message::Text(serde_json::to_string(&synced)?.into())).await?;
+                    }
                     "config.update" => {
                         let (config, revision, adjusted) = match parse_config_update(incoming.data) {
                             Ok(update) => update,
@@ -351,7 +382,36 @@ struct RecordingConnection(String);
 impl Drop for RecordingConnection {
     fn drop(&mut self) {
         crate::platform::shortcut_recording::cancel(&self.0, None);
+        // 连接断开后必须注销该连接注册的布局全局热键，避免快捷键残留在系统里。
+        crate::platform::shortcut_hotkeys::clear(Some(&self.0));
     }
+}
+
+/// 解析 `shortcut.hotkeys.sync` 的 `{ hotkeys: [{ id, accelerator }] }` 数据。
+/// 单条非法 accelerator 交给注册表逐条拒绝，整包结构非法才返回错误。
+fn parse_hotkeys(data: &Value) -> Result<Vec<(String, String)>> {
+    const MAX_SYNC_HOTKEYS: usize = 64;
+    let raw = data.get("hotkeys").cloned().unwrap_or(Value::Null);
+    let items = raw
+        .as_array()
+        .ok_or_else(|| anyhow::anyhow!("hotkeys must be an array"))?;
+    if items.len() > MAX_SYNC_HOTKEYS {
+        anyhow::bail!("hotkey sync contains too many entries (maximum {MAX_SYNC_HOTKEYS})");
+    }
+    let mut hotkeys = Vec::with_capacity(items.len());
+    for item in items {
+        let id = item.get("id").and_then(Value::as_str).unwrap_or("").trim();
+        let accelerator = item
+            .get("accelerator")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .trim();
+        if id.is_empty() {
+            anyhow::bail!("hotkey entry id must not be empty");
+        }
+        hotkeys.push((id.to_owned(), accelerator.to_owned()));
+    }
+    Ok(hotkeys)
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -438,8 +498,10 @@ fn parse_window_layouts(data: &Value) -> Result<Vec<WindowLayout>, RuntimeError>
 fn layouts_from_windows(windows: Vec<WindowInfo>) -> Vec<WindowLayout> {
     let targets = windows
         .into_iter()
-        .map(|window| crate::platform::WindowLayoutTarget {
+        .enumerate()
+        .map(|(z_index, window)| crate::platform::WindowLayoutTarget {
             handle: window.handle,
+            z_index: z_index as u32,
             rect: window.rect,
             placement_rect: None,
             title: window.title,
@@ -464,6 +526,7 @@ fn layouts_from_layout_targets(
             class_name: window.class_name,
             title: window.title,
             occurrence,
+            z_index: window.z_index,
             rect: window.rect,
             placement_rect: window.placement_rect,
             minimized: window.minimized,
@@ -761,6 +824,95 @@ mod tests {
         assert_eq!(layouts[0].occurrence, 0);
         assert_eq!(layouts[1].occurrence, 1);
         assert_eq!(layouts[1].maximized, true);
+        // z-order 在按身份排序后依然随窗口保留：0 = 枚举时最顶层。
+        assert_eq!(layouts[0].z_index, 0);
+        assert_eq!(layouts[1].z_index, 1);
+    }
+
+    #[test]
+    fn layout_targets_forward_z_index_and_drop_snap_placement() {
+        let targets = vec![
+            // 可见 Snap 窗口：rect 是左半屏可见矩形，placement 被捕获逻辑丢弃。
+            crate::platform::WindowLayoutTarget {
+                handle: crate::platform::WindowHandle(1),
+                z_index: 0,
+                rect: crate::platform::Rect {
+                    left: 0,
+                    top: 0,
+                    right: 960,
+                    bottom: 1040,
+                },
+                placement_rect: None,
+                title: "Snap Editor".into(),
+                class_name: "Chrome_WidgetWin_1".into(),
+                process_name: "code.exe".into(),
+                minimized: false,
+                maximized: false,
+                transient: false,
+                topmost: false,
+            },
+            crate::platform::WindowLayoutTarget {
+                handle: crate::platform::WindowHandle(2),
+                z_index: 1,
+                rect: crate::platform::Rect {
+                    left: 960,
+                    top: 0,
+                    right: 1920,
+                    bottom: 1040,
+                },
+                placement_rect: Some(crate::platform::Rect {
+                    left: 100,
+                    top: 100,
+                    right: 900,
+                    bottom: 700,
+                }),
+                title: "A Normal Editor".into(),
+                class_name: "Chrome_WidgetWin_1".into(),
+                process_name: "code.exe".into(),
+                minimized: false,
+                maximized: false,
+                transient: false,
+                topmost: false,
+            },
+        ];
+
+        let layouts = layouts_from_layout_targets(targets);
+        assert_eq!(layouts.len(), 2);
+        // 输出按稳定身份排序，与 z-order 无关；zIndex 字段是预览叠放顺序的唯一来源。
+        assert_eq!(layouts[0].title, "A Normal Editor");
+        assert_eq!(layouts[1].title, "Snap Editor");
+
+        let serialized = serde_json::to_value(&layouts).unwrap();
+        let serialized = serialized.as_array().unwrap();
+        let find = |title: &str| {
+            serialized
+                .iter()
+                .find(|value| value["title"] == title)
+                .expect("layout is serialized")
+        };
+        assert_eq!(find("Snap Editor")["zIndex"], 0);
+        assert_eq!(find("A Normal Editor")["zIndex"], 1);
+        // Snap 快照没有 placementRect，恢复会走可见矩形 fallback。
+        assert!(find("Snap Editor")["placementRect"].is_null());
+        assert_eq!(
+            find("Snap Editor")["rect"],
+            serde_json::json!({"left": 0, "top": 0, "right": 960, "bottom": 1040})
+        );
+    }
+
+    #[test]
+    fn old_layout_snapshots_without_z_index_default_to_zero() {
+        let layout: WindowLayout = serde_json::from_value(serde_json::json!({
+            "processName": "app",
+            "className": "Window",
+            "title": "title",
+            "rect": {"left": 0, "top": 0, "right": 10, "bottom": 10},
+            "maximized": false,
+            "topmost": false
+        }))
+        .unwrap();
+        assert_eq!(layout.z_index, 0);
+        assert_eq!(layout.placement_rect, None);
     }
 
     #[test]
@@ -793,6 +945,7 @@ mod tests {
             "className": "Chrome_WidgetWin_1",
             "title": "Editor",
             "occurrence": 0,
+            "zIndex": 3,
             "rect": {"left": 10, "top": 20, "right": 810, "bottom": 620},
             "placementRect": {"left": 8, "top": 10, "right": 808, "bottom": 610},
             "minimized": true,
@@ -803,6 +956,63 @@ mod tests {
         let serialized = serde_json::to_value(layout).unwrap();
         assert_eq!(serialized["minimized"], true);
         assert_eq!(serialized["placementRect"], value["placementRect"]);
+        assert_eq!(serialized["zIndex"], 3);
+    }
+
+    #[test]
+    fn hotkey_sync_payload_is_validated_before_registration() {
+        let hotkeys = parse_hotkeys(&serde_json::json!({
+            "hotkeys": [
+                {"id": "layout-1", "accelerator": "Ctrl+Alt+1"},
+                {"id": "layout-2", "accelerator": "Win+Shift+F5"}
+            ]
+        }))
+        .unwrap();
+        assert_eq!(
+            hotkeys,
+            vec![
+                ("layout-1".to_owned(), "Ctrl+Alt+1".to_owned()),
+                ("layout-2".to_owned(), "Win+Shift+F5".to_owned()),
+            ]
+        );
+
+        assert!(parse_hotkeys(&serde_json::json!({})).is_err());
+        assert!(parse_hotkeys(&serde_json::json!({"hotkeys": "bad"})).is_err());
+        assert!(parse_hotkeys(&serde_json::json!({
+            "hotkeys": [{"id": "", "accelerator": "Ctrl+A"}]
+        }))
+        .is_err());
+
+        let oversized: Vec<Value> = (0..65)
+            .map(|index| {
+                serde_json::json!({
+                    "id": format!("layout-{index}"),
+                    "accelerator": "Ctrl+A"
+                })
+            })
+            .collect();
+        let error = parse_hotkeys(&serde_json::json!({ "hotkeys": oversized })).unwrap_err();
+        assert!(error.to_string().contains("too many entries"));
+    }
+
+    #[test]
+    fn hotkey_sync_accepts_valid_entries_and_reports_rejections() {
+        let owner = "test-connection";
+        let hotkeys = parse_hotkeys(&serde_json::json!({
+            "hotkeys": [
+                {"id": "layout-1", "accelerator": "Ctrl+Alt+1"},
+                {"id": "layout-2", "accelerator": "A"},
+                {"id": "layout-3", "accelerator": "Ctrl+Alt+1"}
+            ]
+        }))
+        .unwrap();
+        let rejected = crate::platform::shortcut_hotkeys::sync(owner, &hotkeys);
+        // 无修饰键与重复组合键都要逐条拒绝，整次同步不能失败。
+        assert_eq!(rejected.len(), 2);
+        assert!(rejected.iter().any(|item| item.id == "layout-2"));
+        assert!(rejected.iter().any(|item| item.id == "layout-3"));
+        assert_eq!(hotkeys.len().saturating_sub(rejected.len()), 1);
+        crate::platform::shortcut_hotkeys::clear(Some(owner));
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

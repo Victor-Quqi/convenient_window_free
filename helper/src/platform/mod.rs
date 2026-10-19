@@ -14,6 +14,7 @@ mod linux_audio;
 mod macos_audio;
 #[cfg(any(target_os = "macos", test))]
 mod macos_brightness;
+pub mod shortcut_hotkeys;
 pub mod shortcut_recording;
 pub use adjustment::{adjust_at, take_adjustment_feedback};
 
@@ -173,6 +174,11 @@ pub struct WindowLayout {
     pub title: String,
     #[serde(default)]
     pub occurrence: u32,
+    /// Capture-time enumeration z-order; 0 is the topmost window. UI preview
+    /// uses it to keep the visual stacking of the snapshot. Older snapshots
+    /// without the field deserialize as 0.
+    #[serde(default)]
+    pub z_index: u32,
     pub rect: Rect,
     #[serde(default)]
     pub placement_rect: Option<Rect>,
@@ -256,6 +262,10 @@ pub struct WindowInfo {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WindowLayoutTarget {
     pub handle: WindowHandle,
+    /// Enumeration z-order right after the capture, 0 = topmost. The layout
+    /// list is later sorted for stable occurrence matching, so this field is
+    /// the only surviving record of the original stacking order.
+    pub z_index: u32,
     pub rect: Rect,
     pub placement_rect: Option<Rect>,
     pub title: String,
@@ -282,6 +292,7 @@ pub fn list_window_layouts() -> Result<Vec<WindowLayoutTarget>> {
                 .into_iter()
                 .map(|window| WindowLayoutTarget {
                     handle: window.handle,
+                    z_index: 0,
                     rect: window.rect,
                     placement_rect: None,
                     title: window.title,

@@ -112,13 +112,25 @@ unsafe extern "system" fn enum_layout_target(hwnd: HWND, data: LPARAM) -> BOOL {
         return true.into();
     }
     let minimized = unsafe { IsIconic(hwnd).as_bool() };
-    let placement_rect = match normal_window_rect(hwnd) {
-        Ok(rect) => Some(rect),
-        Err(_) if minimized => return true.into(),
-        Err(_) => None,
+    // A snapped ("arranged") window keeps its pre-snap `rcNormalPosition`, so a
+    // placement-based restore would revert the Snap size. Keep only the visible
+    // `GetWindowRect` rectangle for those snapshots and let the restore fallback
+    // reproduce it exactly.
+    let placement_rect = if capture_normal_placement(minimized, window.arranged) {
+        match normal_window_rect(hwnd) {
+            Ok(rect) => Some(rect),
+            Err(_) if minimized => return true.into(),
+            Err(_) => None,
+        }
+    } else {
+        None
     };
+    // EnumWindows yields windows in z-order (topmost first), and only candidates
+    // reach this point, so the length before push is the rank we publish.
+    let z_index = windows.len() as u32;
     windows.push(crate::platform::WindowLayoutTarget {
         handle: window.handle,
+        z_index,
         rect: if minimized {
             placement_rect.unwrap_or(window.rect)
         } else {
@@ -134,6 +146,17 @@ unsafe extern "system" fn enum_layout_target(hwnd: HWND, data: LPARAM) -> BOOL {
         topmost: window.topmost,
     });
     true.into()
+}
+
+/// Whether a snapshot should keep `GetWindowPlacement().rcNormalPosition`.
+///
+/// For a visible snapped window that rectangle describes the geometry from
+/// *before* the snap; restoring through `SetWindowPlacement` therefore undoes
+/// the Snap resize. Minimized windows are excluded from the rule because their
+/// visible rectangle is the off-screen minimized position, while the normal
+/// placement rectangle is still the only reliable target geometry.
+fn capture_normal_placement(minimized: bool, arranged: bool) -> bool {
+    !(arranged && !minimized)
 }
 
 fn is_layout_candidate(window: &WindowInfo) -> bool {
@@ -190,7 +213,10 @@ pub fn apply_window_layout(
         return Ok(());
     }
 
-    // Older snapshots contain screen coordinates but no native placement.
+    // Fallback for snapshots without a usable native placement: legacy layouts
+    // and visible Aero Snap captures, whose `rcNormalPosition` predates the snap.
+    // `SW_RESTORE` must run first so a minimized/maximized target can be placed
+    // by `set_window_rect` before its final show state is re-applied below.
     unsafe {
         let _ = ShowWindow(hwnd, SW_RESTORE);
     }
@@ -682,19 +708,28 @@ mod tests {
         }
         assert!(window_is_minimized(handle));
 
-        let target = list_window_layouts()
-            .unwrap()
-            .into_iter()
+        let targets = list_window_layouts().unwrap();
+        let target = targets
+            .iter()
             .find(|window| window.handle == handle)
             .expect("a visible minimized ordinary window is a layout target");
         assert!(target.minimized);
         assert_eq!(target.placement_rect, Some(before));
+        // 枚举快照里的顺序即 z-order：0 = 最顶层，push 前长度就是名次。
+        assert_eq!(
+            target.z_index,
+            targets
+                .iter()
+                .position(|window| window.handle == handle)
+                .unwrap() as u32
+        );
 
         let mut layout = crate::platform::WindowLayout {
-            process_name: target.process_name,
-            class_name: target.class_name,
-            title: target.title,
+            process_name: target.process_name.clone(),
+            class_name: target.class_name.clone(),
+            title: target.title.clone(),
             occurrence: 0,
+            z_index: target.z_index,
             rect: target.rect,
             placement_rect: target.placement_rect,
             minimized: true,
@@ -709,6 +744,82 @@ mod tests {
         apply_window_layout(handle, &layout).unwrap();
         assert!(!window_is_minimized(handle));
         assert_eq!(normal_window_rect(hwnd).unwrap(), before);
+        let _ = unsafe { DestroyWindow(hwnd) };
+    }
+
+    /// 回归：Aero Snap 窗口的 `rcNormalPosition` 是 Snap 之前的正常矩形，快照若携带它，
+    /// 恢复时 `SetWindowPlacement` 会把 Snap 尺寸撤销成 Snap 前的大小。
+    #[test]
+    fn snap_capture_drops_normal_placement_but_keeps_it_for_minimized_windows() {
+        // 可见 Snap 窗口：只保留 GetWindowRect 的可见矩形，恢复走 fallback。
+        assert!(!capture_normal_placement(false, true));
+        // 普通与最大化窗口维持原有 placement 捕获。
+        assert!(capture_normal_placement(false, false));
+        // 最小化窗口的可见矩形是屏幕外的图标位置，必须保留正常矩形。
+        assert!(capture_normal_placement(true, false));
+        // Windows 文档保证 arranged/minimized 互斥；这里钉住「最小化优先」的稳健语义。
+        assert!(capture_normal_placement(true, true));
+    }
+
+    /// Snap 快照没有 placement，恢复必须按可见矩形精确落位 —— 这正是修复后的路径。
+    /// 同时核对 minimized 快照的 fallback 顺序：先 SW_RESTORE、再定位、最后重新最小化。
+    #[test]
+    fn snap_layout_fallback_restores_visible_rect_then_reapplies_minimized_state() {
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                w!("ConvenientWindowSnapLayoutTest"),
+                WS_POPUP | WS_VISIBLE,
+                40,
+                50,
+                180,
+                120,
+                HWND::default(),
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        let handle = WindowHandle(hwnd.0 as isize);
+        let target = list_window_layouts()
+            .unwrap()
+            .into_iter()
+            .find(|window| window.handle == handle)
+            .expect("a visible ordinary window is a layout target");
+        // “左半屏”可见矩形，模拟 Windows Snap 后的快照形状：rect 可见、placement 被丢弃。
+        let snap_rect = AppRect {
+            left: 0,
+            top: 0,
+            right: 960,
+            bottom: 1040,
+        };
+        let mut layout = crate::platform::WindowLayout {
+            process_name: target.process_name,
+            class_name: target.class_name,
+            title: target.title,
+            occurrence: 0,
+            z_index: target.z_index,
+            rect: snap_rect,
+            placement_rect: None,
+            minimized: false,
+            maximized: false,
+            topmost: false,
+        };
+
+        apply_window_layout(handle, &layout).unwrap();
+        assert!(!window_is_minimized(handle));
+        assert_eq!(window_rect(hwnd).unwrap(), snap_rect);
+
+        layout.minimized = true;
+        apply_window_layout(handle, &layout).unwrap();
+        assert!(window_is_minimized(handle));
+
+        layout.minimized = false;
+        apply_window_layout(handle, &layout).unwrap();
+        assert!(!window_is_minimized(handle));
+        assert_eq!(window_rect(hwnd).unwrap(), snap_rect);
         let _ = unsafe { DestroyWindow(hwnd) };
     }
 

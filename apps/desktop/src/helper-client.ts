@@ -178,6 +178,20 @@ export class HelperClient {
     });
   }
 
+  /** 把布局快捷键列表全量同步给 helper；helper 常驻键盘钩子负责匹配与触发。 */
+  syncShortcutHotkeys(hotkeys: Array<{ id: string; accelerator: string }>): Promise<{ accepted: number; rejected: Array<{ id: string; reason: string }> }> {
+    return this.request("shortcut.hotkeys.sync", { hotkeys }).then((message) => {
+      const data = message.data && typeof message.data === "object" ? message.data as Record<string, unknown> : {};
+      return {
+        accepted: typeof data.accepted === "number" ? data.accepted : 0,
+        rejected: Array.isArray(data.rejected) ? data.rejected.map((item) => {
+          const rejected = item && typeof item === "object" ? item as Record<string, unknown> : {};
+          return { id: typeof rejected.id === "string" ? rejected.id : "", reason: typeof rejected.reason === "string" ? rejected.reason : "" };
+        }).filter((item) => item.id.length > 0) : []
+      };
+    });
+  }
+
   stop(): boolean {
     this.shouldReconnect = false;
     this.clearReconnectTimer();
@@ -221,7 +235,7 @@ export class HelperClient {
   }
 
   private resolvePending(message: HelperMessage): void {
-    if (message.type !== "window.layout.captured" && message.type !== "window.layout.restored" && message.type !== "runtime.error") return;
+    if (message.type !== "window.layout.captured" && message.type !== "window.layout.restored" && message.type !== "shortcut.hotkeys.synced" && message.type !== "runtime.error") return;
     const data = message.data && typeof message.data === "object" ? message.data as Record<string, unknown> : {};
     const requestId = typeof data.requestId === "string" ? data.requestId : message.id;
     const pending = this.pendingRequests.get(requestId);

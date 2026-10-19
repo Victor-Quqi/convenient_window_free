@@ -1,7 +1,11 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import type { HelperClient } from "./helper-client";
   import { format, translator } from "./i18n";
   import type { UiKey } from "./i18n";
+  import { syncLayoutHotkeys } from "./layout-hotkeys";
+  import { layoutShortcutFromKeyboardEvent } from "./layout-hotkey-utils";
+  import { previewBounds, previewWindows, type WindowLayoutPreviewBounds } from "./window-layout-preview";
   import {
     createWindowLayoutId,
     loadWindowLayouts,
@@ -22,6 +26,8 @@
   let busy: "capture" | string = "";
   let editingId = "";
   let editName = "";
+  let recordingShortcutId = "";
+  let nameInput: HTMLInputElement | undefined = undefined;
   let status: { kind: "success" | "warning" | "error"; text: string } | null = null;
 
   let ui = translator("zh-CN");
@@ -81,13 +87,22 @@
   function beginRename(layout: WindowLayoutSnapshot): void {
     editingId = layout.id;
     editName = layout.name;
+    void tick().then(() => { nameInput?.focus(); nameInput?.select(); });
   }
 
+  // No confirm button: the name is saved on Enter and on blur, while Escape
+  // cancels. A blank name keeps the previous one instead of clearing it.
   function commitRename(layout: WindowLayoutSnapshot): void {
+    if (editingId !== layout.id) return;
     const name = editName.trim().slice(0, 80);
-    if (!name) return;
+    editingId = "";
+    editName = "";
+    if (!name || name === layout.name) return;
     layouts = layouts.map((item) => item.id === layout.id ? { ...item, name } : item);
     saveWindowLayouts(layouts);
+  }
+
+  function cancelRename(): void {
     editingId = "";
     editName = "";
   }
@@ -96,33 +111,93 @@
     layouts = layouts.filter((item) => item.id !== layout.id);
     saveWindowLayouts(layouts);
     if (editingId === layout.id) editingId = "";
+    if (recordingShortcutId === layout.id) recordingShortcutId = "";
     status = { kind: "success", text: text("windowLayoutsDeleted") };
+    // Persist the removal in the global shortcut registry as well.
+    void syncLayoutHotkeys().catch(() => []);
   }
 
-  function previewStyle(layout: WindowLayoutSnapshot, window: WindowLayoutWindow): string {
-    const rect = window.placementRect ?? window.rect;
-    const bounds = layoutBounds(layout.windows);
+  function beginShortcutRecording(layout: WindowLayoutSnapshot): void {
+    recordingShortcutId = recordingShortcutId === layout.id ? "" : layout.id;
+  }
+
+  function cancelShortcutRecording(): void {
+    recordingShortcutId = "";
+  }
+
+  async function applyShortcut(layout: WindowLayoutSnapshot, shortcut: string): Promise<void> {
+    recordingShortcutId = "";
+    layouts = layouts.map((item) => {
+      if (item.id === layout.id) {
+        if (!shortcut) {
+          const cleared = { ...item };
+          delete cleared.shortcut;
+          return cleared;
+        }
+        return { ...item, shortcut };
+      }
+      // A shortcut belongs to the layout that set it last: drop the same
+      // combination from older layouts so exactly one registration stays live
+      // instead of letting snapshot order decide which one wins.
+      if (shortcut && item.shortcut === shortcut) {
+        const cleared = { ...item };
+        delete cleared.shortcut;
+        return cleared;
+      }
+      return item;
+    });
+    saveWindowLayouts(layouts);
+    try {
+      const failed = await syncLayoutHotkeys();
+      if (shortcut && failed.includes(layout.id)) {
+        status = { kind: "warning", text: text("windowLayoutsShortcutFailed") };
+      }
+    } catch {
+      if (shortcut) status = { kind: "warning", text: text("windowLayoutsShortcutFailed") };
+    }
+  }
+
+  // Global keydown while recording. Escape cancels, Backspace/Delete clears the
+  // binding, and only a real shortcut (modifier + main key) is committed.
+  function handleShortcutKeydown(event: KeyboardEvent): void {
+    if (!recordingShortcutId) return;
+    const layout = layouts.find((item) => item.id === recordingShortcutId);
+    if (!layout) { recordingShortcutId = ""; return; }
+    if (event.key === "Escape") {
+      event.preventDefault();
+      event.stopPropagation();
+      cancelShortcutRecording();
+      return;
+    }
+    if (event.key === "Backspace" || event.key === "Delete") {
+      event.preventDefault();
+      event.stopPropagation();
+      void applyShortcut(layout, "");
+      return;
+    }
+    const shortcut = layoutShortcutFromKeyboardEvent(event);
+    if (!shortcut) return;
+    event.preventDefault();
+    event.stopPropagation();
+    void applyShortcut(layout, shortcut);
+  }
+
+  function shortcutAria(layout: WindowLayoutSnapshot): string {
+    if (recordingShortcutId === layout.id) return text("windowLayoutsShortcutRecording");
+    if (layout.shortcut) return text("windowLayoutsShortcutAria", { name: layout.name });
+    return text("windowLayoutsShortcutSet");
+  }
+
+  // The thumbnail draws the windows that are actually on the desktop, in
+  // bottom-to-top order, using opaque fills so covered windows disappear.
+  function previewStyle(bounds: WindowLayoutPreviewBounds, item: WindowLayoutWindow): string {
     const width = Math.max(1, bounds.right - bounds.left);
     const height = Math.max(1, bounds.bottom - bounds.top);
-    const left = ((rect.left - bounds.left) / width) * 100;
-    const top = ((rect.top - bounds.top) / height) * 100;
-    const itemWidth = ((rect.right - rect.left) / width) * 100;
-    const itemHeight = ((rect.bottom - rect.top) / height) * 100;
-    return `left:${clamp(left, 1, 94)}%;top:${clamp(top, 1, 94)}%;width:${clamp(itemWidth, 4, 96)}%;height:${clamp(itemHeight, 5, 94)}%`;
-  }
-
-  function layoutBounds(windows: WindowLayoutWindow[]): { left: number; top: number; right: number; bottom: number } {
-    if (!windows.length) return { left: 0, top: 0, right: 1, bottom: 1 };
-    const first = windows[0].placementRect ?? windows[0].rect;
-    return windows.reduce((bounds, item) => {
-      const rect = item.placementRect ?? item.rect;
-      return {
-        left: Math.min(bounds.left, rect.left),
-        top: Math.min(bounds.top, rect.top),
-        right: Math.max(bounds.right, rect.right),
-        bottom: Math.max(bounds.bottom, rect.bottom)
-      };
-    }, { left: first.left, top: first.top, right: first.right, bottom: first.bottom });
+    const left = clamp(((item.rect.left - bounds.left) / width) * 100, 0, 96);
+    const top = clamp(((item.rect.top - bounds.top) / height) * 100, 0, 94);
+    const itemWidth = clamp(((item.rect.right - item.rect.left) / width) * 100, 4, 100 - left);
+    const itemHeight = clamp(((item.rect.bottom - item.rect.top) / height) * 100, 5, 100 - top);
+    return `left:${round(left)}%;top:${round(top)}%;width:${round(itemWidth)}%;height:${round(itemHeight)}%`;
   }
 
   function formatDate(value: number): string {
@@ -140,7 +215,11 @@
   }
 
   function clamp(value: number, min: number, max: number): number { return Math.min(max, Math.max(min, value)); }
+
+  function round(value: number): number { return Math.round(value * 1000) / 1000; }
 </script>
+
+<svelte:window on:keydown={handleShortcutKeydown} />
 
 <section class="window-layouts-panel" aria-label={text("windowLayouts")}>
   <div class="window-layouts-intro">
@@ -174,24 +253,38 @@
   {:else}
     <div class="window-layout-list">
       {#each layouts as layout (layout.id)}
+        {@const bounds = previewBounds(layout.windows)}
+        {@const windows = previewWindows(layout.windows, bounds)}
         <article class="window-layout-row">
           <button class="layout-preview" aria-label={text("windowLayoutsRestoreAria", { name: layout.name })} disabled={!connected || !supported || Boolean(busy)} on:click={() => restoreLayout(layout)} type="button">
             <span class="layout-preview-grid" aria-hidden="true"></span>
-            {#each layout.windows.slice(0, 18) as item}
-              <span class:minimized={item.minimized} class="layout-preview-window" style={previewStyle(layout, item)}></span>
-            {/each}
-            {#if layout.windows.length > 18}<small>+{layout.windows.length - 18}</small>{/if}
+            <span class="layout-preview-canvas" aria-hidden="true">
+              {#each windows as item}
+                <span class="layout-preview-window" style={previewStyle(bounds, item)}></span>
+              {/each}
+            </span>
           </button>
           <div class="window-layout-copy">
             {#if editingId === layout.id}
-              <input aria-label={text("windowLayoutsLayoutName")} bind:value={editName} on:keydown={(event) => { if (event.key === "Enter") commitRename(layout); if (event.key === "Escape") editingId = ""; }} />
+              <input bind:this={nameInput} aria-label={text("windowLayoutsLayoutName")} bind:value={editName} on:blur={() => commitRename(layout)} on:keydown={(event) => {
+                if (event.key === "Enter") { event.preventDefault(); commitRename(layout); }
+                else if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); cancelRename(); }
+              }} />
             {:else}
               <button class="layout-name" on:click={() => beginRename(layout)} title={text("windowLayoutsRename")} type="button">{layout.name}</button>
             {/if}
             <p>{text("windowLayoutsWindowCount", { count: layout.windows.length })} · {formatDate(layout.capturedAt)}</p>
           </div>
+          <button class:recording={recordingShortcutId === layout.id} class="layout-shortcut" aria-label={shortcutAria(layout)} title={recordingShortcutId === layout.id ? text("windowLayoutsShortcutHint") : shortcutAria(layout)} on:click={() => beginShortcutRecording(layout)} on:blur={() => { if (recordingShortcutId === layout.id) cancelShortcutRecording(); }} type="button">
+            {#if recordingShortcutId === layout.id}
+              {text("windowLayoutsShortcutRecording")}
+            {:else if layout.shortcut}
+              {layout.shortcut}
+            {:else}
+              <span aria-hidden="true">⌨</span>
+            {/if}
+          </button>
           <div class="window-layout-actions">
-            {#if editingId === layout.id}<button class="icon-button" aria-label={text("windowLayoutsSaveName")} title={text("windowLayoutsSaveName")} on:click={() => commitRename(layout)} type="button">✓</button>{/if}
             <button class="apply layout-restore" disabled={!connected || !supported || Boolean(busy)} on:click={() => restoreLayout(layout)} type="button">{busy === layout.id ? text("windowLayoutsRestoring") : text("windowLayoutsRestore")}</button>
             <button class="icon-button danger-icon" aria-label={text("windowLayoutsDeleted")} title={text("windowLayoutsDeleted")} on:click={() => deleteLayout(layout)} type="button">×</button>
           </div>
@@ -223,7 +316,7 @@
   .window-layouts-status, .window-layouts-connection { border-radius: var(--radius-sm); }
   .window-layout-list { gap: 9px; }
   .window-layout-row {
-    grid-template-columns: 64px minmax(0, 1fr);
+    grid-template-columns: 64px minmax(0, 1fr) auto;
     grid-template-rows: minmax(34px, auto) 34px;
     gap: 8px 12px;
     padding: 11px 12px;
@@ -234,10 +327,34 @@
   }
   .window-layout-row:hover { border-color: var(--line-strong); background: var(--raised); }
   .layout-preview { grid-column: 1; grid-row: 1 / span 2; width: 64px; height: 50px; border-radius: 7px; }
-  .layout-preview-window.minimized { border-style: dashed; opacity: .72; }
+  .layout-preview-canvas { position: absolute; inset: 4px; }
   .window-layout-copy { grid-column: 2; grid-row: 1; align-self: end; }
   .layout-name { font-size: var(--fs-md); }
   .window-layout-copy p { margin-top: 4px; }
+  .layout-shortcut {
+    grid-column: 3;
+    grid-row: 1;
+    align-self: center;
+    justify-self: end;
+    min-width: 30px;
+    max-width: 132px;
+    height: 26px;
+    padding: 0 8px;
+    overflow: hidden;
+    border: 1px solid var(--line-strong);
+    border-radius: var(--radius-xs);
+    background: var(--surface);
+    color: var(--faint-text);
+    font-size: var(--fs-2xs);
+    font-weight: 620;
+    line-height: 24px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    transition: color var(--dur-fast), border-color var(--dur-fast), background var(--dur-fast), box-shadow var(--dur-fast);
+  }
+  .layout-shortcut:hover { border-color: var(--accent); color: var(--ink); }
+  .layout-shortcut:focus-visible { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-bg); outline: none; }
+  .layout-shortcut.recording { border-color: var(--accent); background: var(--accent-bg); color: var(--accent-soft); box-shadow: 0 0 0 3px var(--accent-bg); }
   .window-layout-actions {
     grid-column: 1 / -1;
     grid-row: 2;
@@ -248,15 +365,15 @@
     gap: 8px;
     padding: 0;
   }
-  .window-layout-actions .icon-button:first-child { grid-column: 1; }
-  .window-layout-actions .layout-restore { grid-column: 2; justify-self: center; width: min(100%, 154px); min-height: 31px; }
+  .window-layout-actions .layout-restore { grid-column: 2; justify-self: center; width: auto; min-width: 96px; padding-inline: 16px; min-height: 31px; }
   .window-layout-actions .danger-icon { grid-column: 3; justify-self: end; }
   .window-layout-actions .icon-button { width: 30px; height: 30px; border-radius: 7px; }
   .layout-name:hover { text-decoration: underline; text-underline-offset: 3px; }
   @media (max-width: 520px) {
     .window-layouts-intro { display: flex; align-items: flex-start; }
     .layout-capture { align-self: center; }
-    .window-layout-row { grid-template-columns: 56px minmax(0, 1fr); }
+    .window-layout-row { grid-template-columns: 56px minmax(0, 1fr) auto; }
     .layout-preview { width: 56px; height: 46px; }
+    .layout-shortcut { max-width: 96px; }
   }
 </style>

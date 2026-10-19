@@ -1,4 +1,5 @@
 import { loadHostValue, saveHostValue } from "./host-storage";
+import { normalizeLayoutShortcut } from "./layout-hotkey-utils";
 
 export interface WindowLayoutRect {
   left: number;
@@ -25,12 +26,16 @@ export interface WindowLayoutWindow {
   maximized: boolean;
   topmost: boolean;
   monitorId?: string;
+  /** 抓取时的 z-order，0 表示最顶层；旧快照没有该字段时视为未记录。 */
+  zIndex?: number;
 }
 
 export interface WindowLayoutSnapshot {
   id: string;
   name: string;
   capturedAt: number;
+  /** 布局全局快捷键，形如 "Ctrl+Alt+1"；未设置时不写入。 */
+  shortcut?: string;
   windows: WindowLayoutWindow[];
 }
 
@@ -76,10 +81,12 @@ function normalizeSnapshot(value: unknown, index: number): WindowLayoutSnapshot 
   const windows = Array.isArray(source.windows)
     ? source.windows.map(normalizeWindow).filter((item): item is WindowLayoutWindow => item !== null).slice(0, MAX_WINDOWS_PER_LAYOUT)
     : [];
+  const shortcut = normalizeLayoutShortcut(source.shortcut);
   return {
     id: typeof source.id === "string" && source.id.trim() ? source.id : `layout-${index + 1}`,
     name: typeof source.name === "string" && source.name.trim() ? source.name.trim().slice(0, 80) : `Layout ${index + 1}`,
     capturedAt: typeof source.capturedAt === "number" && Number.isFinite(source.capturedAt) ? source.capturedAt : Date.now(),
+    ...(shortcut ? { shortcut } : {}),
     windows
   };
 }
@@ -102,7 +109,8 @@ function normalizeWindow(value: unknown): WindowLayoutWindow | null {
     minimized: source.minimized === true,
     maximized: source.maximized === true,
     topmost: source.topmost === true,
-    ...(typeof source.monitorId === "string" && source.monitorId.trim() ? { monitorId: source.monitorId.trim() } : {})
+    ...(typeof source.monitorId === "string" && source.monitorId.trim() ? { monitorId: source.monitorId.trim() } : {}),
+    ...(typeof source.zIndex === "number" && Number.isInteger(source.zIndex) && source.zIndex >= 0 ? { zIndex: source.zIndex } : {})
   };
 }
 

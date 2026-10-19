@@ -336,6 +336,54 @@ describe("HelperClient", () => {
     });
   });
 
+  it("syncs layout hotkeys and reports the rejected layout ids", async () => {
+    const client = new HelperClient();
+    client.connect();
+    const socket = MockWebSocket.instances[0];
+    socket.receive("helper.ready", { protocolVersion: 7, schemaVersion: 9 });
+
+    const pending = client.syncShortcutHotkeys([
+      { id: "layout-1", accelerator: "Ctrl+Alt+1" },
+      { id: "layout-2", accelerator: "Ctrl+Alt+2" }
+    ]);
+    const request = JSON.parse(socket.sent.at(-1) ?? "{}");
+    expect(request).toMatchObject({
+      type: "shortcut.hotkeys.sync",
+      data: { hotkeys: [{ id: "layout-1", accelerator: "Ctrl+Alt+1" }, { id: "layout-2", accelerator: "Ctrl+Alt+2" }] }
+    });
+    socket.receive("shortcut.hotkeys.synced", {
+      requestId: request.id,
+      accepted: 1,
+      rejected: [{ id: "layout-2", reason: "duplicate accelerator" }]
+    });
+
+    await expect(pending).resolves.toEqual({ accepted: 1, rejected: [{ id: "layout-2", reason: "duplicate accelerator" }] });
+  });
+
+  it("fills defaults for a malformed hotkey sync acknowledgement", async () => {
+    const client = new HelperClient();
+    client.connect();
+    const socket = MockWebSocket.instances[0];
+    socket.receive("helper.ready", { protocolVersion: 7, schemaVersion: 9 });
+
+    const pending = client.syncShortcutHotkeys([]);
+    const requestId = JSON.parse(socket.sent.at(-1) ?? "{}").id;
+    socket.receive("shortcut.hotkeys.synced", {
+      requestId,
+      accepted: "2",
+      rejected: [null, { id: "layout-2" }, { id: "", reason: "x" }, "layout-3"]
+    });
+
+    await expect(pending).resolves.toEqual({ accepted: 0, rejected: [{ id: "layout-2", reason: "" }] });
+  });
+
+  it("rejects a hotkey sync before the helper protocol handshake", async () => {
+    const client = new HelperClient();
+    client.connect();
+
+    await expect(client.syncShortcutHotkeys([])).rejects.toThrow("Helper is not ready");
+  });
+
   it("does not send configuration to an incompatible helper protocol", () => {
     const client = new HelperClient();
     client.sendConfig({ enabled: true } as Parameters<typeof client.sendConfig>[0]);

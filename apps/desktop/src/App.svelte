@@ -27,6 +27,7 @@
   import NavigationComposer from "./NavigationComposer.svelte";
   import NavGlyph from "./NavGlyph.svelte";
   import WindowLayouts from "./WindowLayouts.svelte";
+  import { disposeLayoutHotkeys, initLayoutHotkeys } from "./layout-hotkeys";
   import { loadNavigationPreferences, normalizeNavigationPreferences, saveNavigationPreferences, type NavigationFeatureId, type NavigationPreferences } from "./navigation-preferences";
   import type { Language, UiKey } from "./i18n";
   import type {
@@ -476,6 +477,15 @@
     else if (hasSecureBridge()) lastMessage = "helperInstallNeeded";
     else lastMessage = "bridgeMissingDesktop";
     return () => { settingsApply.dispose(); if (helperUpgradeTimer) clearTimeout(helperUpgradeTimer); clearHelperRecoveryTimers(); clearConnectionTestTimers(); offStatus(); offMessage(); helper.disconnect(); };
+  });
+
+  // 布局全局快捷键跟随主窗口生命周期：挂载时把已保存布局同步给 helper，
+  // 卸载时把空列表同步回去，避免快捷键残留在系统里。
+  onMount(() => {
+    void initLayoutHotkeys(helper, async (layout) => {
+      try { await helper.restoreWindowLayout(layout.windows); } catch { /* 后台触发无 UI 面，静默失败 */ }
+    });
+    return () => { disposeLayoutHotkeys(); };
   });
 
   function runConnectionTest(): void {

@@ -301,6 +301,12 @@ pub unsafe extern "system" fn keyboard_proc(
             if let Ok(mut state) = state().lock() {
                 if state.session.is_none() && !state.swallowed.iter().any(|held| *held) {
                     drop(state);
+                    // 没有录制会话时键盘钩子服务于布局全局热键：命中注册表就吞掉
+                    // 这次按键，由 websocket 把触发事件回推给宿主。
+                    let down = matches!(message, WM_KEYDOWN | WM_SYSKEYDOWN);
+                    if super::shortcut_hotkeys::handle_key(hook.vkCode as u32, down) {
+                        return LRESULT(1);
+                    }
                     return CallNextHookEx(HHOOK::default(), code, wparam, lparam);
                 }
                 if state.key(
