@@ -10,7 +10,7 @@ const monitorStage = readFileSync(nodePath.join(import.meta.dirname, "MonitorSta
 describe("window enhancement UI wiring", () => {
   it("keeps one dictionary for both hosts with matching keys and a system-language default", () => {
     // 两套前端各持一份逐字节一致的 src/i18n.ts；这里校验宿主侧契约，
-    // 跨宿主的哈希一致由私有仓库 scripts/check-i18n-parity.mjs 负责。
+    // 跨宿主的哈希一致由维护流程的共享模块校验负责。
     expect(i18n.LANGUAGE_KEY).toBe("convenient-window-language");
     expect(Object.keys(i18n.en).sort()).toEqual(Object.keys(i18n.zh).sort());
     expect(i18n.zh.power).toBe("运行中心");

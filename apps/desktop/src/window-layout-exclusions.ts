@@ -4,8 +4,7 @@
 // 它不进入 AppSettings，也不下发给 helper —— 过滤在宿主侧完成，记录、复位与缩略图
 // 都只看到过滤后的窗口。
 //
-//   utools-plugin/src/window-layout-exclusions.ts              （私有 uTools 插件）
-//   open-source/apps/desktop/src/window-layout-exclusions.ts   （公开独立桌面）
+// 两套宿主（uTools 插件与独立桌面）的 src/window-layout-exclusions.ts 必须逐字节一致。
 
 import { loadHostValue, saveHostValue } from "./host-storage";
 

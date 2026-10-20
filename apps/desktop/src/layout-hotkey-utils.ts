@@ -1,8 +1,6 @@
 // 布局全局快捷键的纯函数工具：解析、规范化与宿主 accelerator 转换。
 //
-// 本文件在两套前端中必须逐字节一致：
-//   utools-plugin/src/layout-hotkey-utils.ts              （私有 uTools 插件）
-//   open-source/apps/desktop/src/layout-hotkey-utils.ts   （公开独立桌面）
+// 两套宿主（uTools 插件与独立桌面）的 src/layout-hotkey-utils.ts 必须逐字节一致。
 //
 // 存储格式固定为 "Ctrl+Alt+1" 这类字符串：修饰键固定顺序 Ctrl、Alt、Shift、Win，
 // 主键只允许 A-Z / 0-9 / F1..F12，且至少包含一个修饰键。真正注册到宿主时再经

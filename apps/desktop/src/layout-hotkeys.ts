@@ -5,9 +5,7 @@
 // 「布局 id + accelerator」列表全量同步给 helper，由 helper 常驻的低级键盘钩子
 // 匹配，命中后回推 shortcut.hotkey.triggered 事件，前端再执行 window.layout.restore。
 //
-// 本文件在两套前端中必须逐字节一致：
-//   utools-plugin/src/layout-hotkeys.ts              （私有 uTools 插件）
-//   open-source/apps/desktop/src/layout-hotkeys.ts   （公开独立桌面）
+// 两套宿主（uTools 插件与独立桌面）的 src/layout-hotkeys.ts 必须逐字节一致。
 
 import type { HelperClient } from "./helper-client";
 import { toHostAccelerator } from "./layout-hotkey-utils";

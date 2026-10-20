@@ -2,10 +2,8 @@ import { runtimeErrorText } from "./runtime-error";
 import type { RuntimeError } from "./runtime-error";
 // 音量/亮度调节反馈的纯逻辑：两套宿主共用，界面措辞一律来自共享字典。
 //
-// 本文件在两套前端中必须逐字节一致：
-//   utools-plugin/src/adjustment-feedback.ts            （私有 uTools 插件）
-//   open-source/apps/desktop/src/adjustment-feedback.ts （公开独立桌面）
-// 私有仓库 scripts/check-i18n-parity.mjs 会校验两侧哈希，任一侧单独修改都会失败。
+// 两套宿主（uTools 插件与独立桌面）各自持有一份逐字节一致的
+// src/adjustment-feedback.ts；维护流程的共享模块校验会比对两侧哈希，任一侧单独修改都会失败。
 // 桌面用它渲染底部提示条，uTools 宿主用它拼状态栏文字，措辞因此不会各写一套。
 
 import type { UiKey } from "./i18n";

@@ -4,7 +4,7 @@
   import { translator, type Language } from "./i18n";
 
   // 这是两套宿主的共享绘制层：只吃 props，不碰任何宿主 API。
-  // uTools 插件与独立桌面版的提示条必须逐字节一致，由 scripts/check-i18n-parity.mjs 守护。
+  // 两套宿主的提示条绘制必须逐字节一致，由维护流程的共享模块校验守护。
   let { feedback, language }: { feedback: AdjustmentFeedback | null; language: Language } = $props();
 
   const ui = $derived(translator(language));
