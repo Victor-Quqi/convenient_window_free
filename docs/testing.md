@@ -1,14 +1,14 @@
 # Testing
 
-## 0.6.7 Online Acceptance Candidate
+## 0.6.7 Online Acceptance
 
-The Windows x64 0.6.7 candidate is published as a GitHub Pre-release for online acceptance. The 0.6.6 stable downloads remain the latest stable and are unchanged; nothing has been promoted, no UPXS has been exported or install-verified, and no market submission has been made.
+The Windows x64 0.6.7 candidates were accepted by the user and promoted in place to stable / Latest on October 20, 2026. The installer, portable archive, manifest and checksums retain their accepted identities; nothing was rebuilt or re-uploaded. The 0.6.6 stable downloads remain available for rollback.
 
-- Desktop: `v0.6.7` Pre-release, NSIS installer and portable archive;
-- Helper: `v0.6.7` Pre-release, downloaded by the packaged plugin after explicit user consent;
-- uTools plugin: packaged from the fixed market candidate `release/utools-plugin/plugin.json`; the plugin package itself contains no executable helper files.
+- Desktop: [v0.6.7](https://github.com/ximizhou/convenient_window_free/releases/tag/v0.6.7) NSIS installer and portable archive;
+- Helper: [v0.6.7](https://github.com/ximizhou/convenient-window-helper-releases/releases/tag/v0.6.7), downloaded by the packaged plugin after explicit user consent;
+- uTools plugin: packaged from the fixed market candidate; the plugin package itself contains no executable helper files.
 
-Acceptance scope:
+The acceptance list below is the tested scope and remains a regression reference; it is not a claim that every hardware, DPI or UAC scenario has an individual record.
 
 1. Packaged plugin: install the exported UPXS, let it download and verify the 0.6.7 helper after explicit consent, restart both hosts, then stop and start the helper and confirm it reconnects.
 2. Window layouts: record a desktop with snapped windows, duplicated browser/editor windows and a minimized window; restore and confirm position, size, maximized/minimized, topmost and collapsed-at-edge states, with skipped entries reported individually.
@@ -18,7 +18,7 @@ Acceptance scope:
 6. Desktop: install from the 0.6.7 NSIS package, run it, verify tray exit and uninstall; test the portable archive from a separate folder.
 7. Regression: language/theme/narrow layouts, master-switch cycles, UAC approval/cancellation, hot zones, gestures, screenshots and taskbar behavior.
 
-Status after publication: helper and desktop are active Pre-releases, the uTools UPXS has not been exported or install-verified, nothing has been promoted to stable, and the market submission has not been made.
+Status after publication: helper and desktop are stable / Latest. The user confirmed the installed UPXS and the online helper download during acceptance; the UPXS file identity (path, size, SHA-256) is still pending, and the market submission has not been made.
 
 ## 0.6.6 Online Acceptance
 
@@ -36,7 +36,7 @@ The acceptance list below is the tested scope and remains a regression reference
 4. Desktop: install from the 0.6.6 NSIS package, run it, and uninstall it; test the portable archive from a separate folder after closing the installed app.
 5. Regression: language/theme/narrow layouts, master-switch cycles, UAC approval/cancellation, existing hot zones, gestures, pins, screenshots and taskbar behavior.
 
-Status after publication: helper and desktop are active Pre-releases, the uTools UPXS has not been exported or install-verified, nothing has been promoted to stable, and the market submission has not been made.
+Status after publication: helper and desktop are stable / Latest. The UPXS file identity was still pending from the user at promotion time, and the market submission has not been made.
 
 ## 0.6.5 Online Acceptance
 

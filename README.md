@@ -24,7 +24,7 @@ Convenient Window is a small tray companion for Windows 11. Configure the four c
 
 ## What's new in 0.6.7
 
-This build is a GitHub Pre-release candidate for online acceptance; the 0.6.6 stable downloads remain available.
+0.6.7 is the current stable release for Windows 11 x64; the 0.6.6 stable downloads remain available for rollback.
 
 - **Window layouts** — snapped windows are recorded at the size Windows shows and restore without jumping back; previews draw only windows visible on the desktop in real z-order, each layout can record a global shortcut, and an exclusion list skips chosen apps.
 - **Edge hiding** — dragging a window above the top edge past the move-out ratio now tucks it into the top edge, and layouts remember windows collapsed at an edge so a restore returns them to the same state.

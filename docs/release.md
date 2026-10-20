@@ -1,6 +1,6 @@
 # Release Process
 
-Version 0.6.7 is the current Windows x64 release candidate. It is published as a GitHub Pre-release from the frozen `main` commit for online acceptance; nothing has been promoted and version 0.6.6 remains the latest stable. Version 0.6.6 was promoted in place on October 17, 2026 after user acceptance; its four assets and tag retain their accepted identities, with build source `0e295b82993e13db4659c75cf80ba06df4701588`. Later documentation commits do not change that source identity. All stable releases remain immutable; see the [0.6.7 candidate scope](testing.md#067-online-acceptance-candidate) and the [0.6.6 acceptance scope](testing.md#066-online-acceptance).
+Version 0.6.7 is the current stable Windows x64 release. It was promoted in place on October 20, 2026 after user acceptance; the four assets and the tag retain their accepted identities, with build source `b67338849b01fbb0009d9fe17cdb62dc68714883`. Later documentation commits do not change that source identity. All stable releases remain immutable; version 0.6.6 remains available as the previous stable release. See the [0.6.7 acceptance scope](testing.md#067-online-acceptance) and the [0.6.6 acceptance scope](testing.md#066-online-acceptance).
 
 Version 0.6.5 remains available as the previous stable release with its own immutable assets and build source `57c52d8c4d3beed12fdc2b9ae1ba3a91bfa9fa16`.
 
