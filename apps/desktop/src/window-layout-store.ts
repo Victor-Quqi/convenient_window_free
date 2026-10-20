@@ -15,6 +15,13 @@ export interface WindowLayoutPlacement {
   bottom: number;
 }
 
+/** 贴边收纳（edge-hide）状态，由 helper 在记录布局时附带。 */
+export interface WindowLayoutEdgeHidden {
+  edge: "left" | "top" | "right" | "bottom";
+  restoreRect: WindowLayoutRect;
+  hiddenRect: WindowLayoutRect;
+}
+
 export interface WindowLayoutWindow {
   title: string;
   processName: string;
@@ -28,6 +35,8 @@ export interface WindowLayoutWindow {
   monitorId?: string;
   /** 抓取时的 z-order，0 表示最顶层；旧快照没有该字段时视为未记录。 */
   zIndex?: number;
+  /** 记录时窗口正被贴边收纳；恢复后 helper 会重新收纳到同一边。 */
+  edgeHidden?: WindowLayoutEdgeHidden;
 }
 
 export interface WindowLayoutSnapshot {
@@ -99,6 +108,7 @@ function normalizeWindow(value: unknown): WindowLayoutWindow | null {
   const rawRect = rect as Record<string, unknown>;
   const values = [rawRect.left, rawRect.top, rawRect.right, rawRect.bottom];
   if (!values.every((item) => typeof item === "number" && Number.isFinite(item))) return null;
+  const edgeHidden = normalizeEdgeHidden(source.edgeHidden);
   return {
     title: stringValue(source.title),
     processName: stringValue(source.processName),
@@ -110,8 +120,23 @@ function normalizeWindow(value: unknown): WindowLayoutWindow | null {
     maximized: source.maximized === true,
     topmost: source.topmost === true,
     ...(typeof source.monitorId === "string" && source.monitorId.trim() ? { monitorId: source.monitorId.trim() } : {}),
-    ...(typeof source.zIndex === "number" && Number.isInteger(source.zIndex) && source.zIndex >= 0 ? { zIndex: source.zIndex } : {})
+    ...(typeof source.zIndex === "number" && Number.isInteger(source.zIndex) && source.zIndex >= 0 ? { zIndex: source.zIndex } : {}),
+    ...(edgeHidden ? { edgeHidden } : {})
   };
+}
+
+const EDGE_HIDDEN_EDGES = ["left", "top", "right", "bottom"] as const;
+
+/** 只保留 helper 协议里的合法收纳状态；非法值（未知边、坏矩形）整段丢弃。 */
+function normalizeEdgeHidden(value: unknown): WindowLayoutEdgeHidden | null {
+  if (!value || typeof value !== "object") return null;
+  const source = value as Record<string, unknown>;
+  const edge = source.edge;
+  if (typeof edge !== "string" || !(EDGE_HIDDEN_EDGES as readonly string[]).includes(edge)) return null;
+  const restoreRect = normalizeRect(source.restoreRect);
+  const hiddenRect = normalizeRect(source.hiddenRect);
+  if (!restoreRect || !hiddenRect) return null;
+  return { edge: edge as WindowLayoutEdgeHidden["edge"], restoreRect, hiddenRect };
 }
 
 function normalizeRect(value: unknown): WindowLayoutPlacement | null {

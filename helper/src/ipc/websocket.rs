@@ -1,4 +1,5 @@
 use crate::config::SCHEMA_VERSION;
+use crate::core::edge_hide::CollapseRequest;
 use crate::ipc::errors::{ErrorCode, RuntimeError};
 #[cfg(test)]
 use crate::platform::WindowInfo;
@@ -432,7 +433,11 @@ async fn capture_window_layout() -> Result<Vec<WindowLayout>> {
     let windows = tokio::task::spawn_blocking(crate::platform::list_window_layouts)
         .await
         .context("window layout capture task failed")??;
-    Ok(layouts_from_layout_targets(windows))
+    // Edge-hidden windows are parked mostly off-screen. Their snapshot must
+    // record the expanded restore rectangle plus the edge state so a restore
+    // can bring them back on screen and re-collapse them afterwards.
+    let collapsed = collapsed_windows_by_handle();
+    Ok(layouts_from_layout_targets(windows, &collapsed))
 }
 
 async fn restore_window_layout(layouts: Vec<WindowLayout>) -> Result<WindowLayoutRestoreSummary> {
@@ -441,9 +446,21 @@ async fn restore_window_layout(layouts: Vec<WindowLayout>) -> Result<WindowLayou
         .context("window layout restore task failed")?
 }
 
+/// Snapshot of the windows the engine currently keeps hidden at an edge.
+///
+/// The engine publishes this once per tick; the layout capture/restore code
+/// runs on its own task and cannot read the engine-local controller.
+fn collapsed_windows_by_handle() -> HashMap<isize, crate::core::edge_hide::CollapsedWindow> {
+    crate::core::edge_hide::collapsed_windows_snapshot()
+        .into_iter()
+        .map(|window| (window.handle.0, window))
+        .collect()
+}
+
 fn restore_window_layout_blocking(layouts: &[WindowLayout]) -> Result<WindowLayoutRestoreSummary> {
     let windows = crate::platform::list_window_layouts()?;
     let indexed = windows_with_occurrences(windows);
+    let collapsed = collapsed_windows_by_handle();
     let mut used_handles = HashSet::new();
     let mut restored = 0;
     let mut skipped = 0;
@@ -459,13 +476,21 @@ fn restore_window_layout_blocking(layouts: &[WindowLayout]) -> Result<WindowLayo
             continue;
         };
         used_handles.insert(window.0.handle);
-        if let Err(error) = crate::platform::apply_window_layout(window.0.handle, layout) {
-            errors.push(WindowLayoutRestoreError {
+        match crate::platform::apply_window_layout(window.0.handle, layout) {
+            Err(error) => errors.push(WindowLayoutRestoreError {
                 window: layout.clone(),
                 details: format!("{error:#}"),
-            });
-        } else {
-            restored += 1;
+            }),
+            Ok(()) => {
+                restored += 1;
+                // Only a window that really landed at its recorded rectangle may
+                // be collapsed again; skipped entries keep the legacy behaviour.
+                if let Some(request) =
+                    collapse_request_after_restore(layout, window.0.handle, &collapsed)
+                {
+                    crate::core::edge_hide::request_collapse(request);
+                }
+            }
         }
     }
 
@@ -473,6 +498,28 @@ fn restore_window_layout_blocking(layouts: &[WindowLayout]) -> Result<WindowLayo
         restored,
         skipped,
         errors,
+    })
+}
+
+/// Re-collapse request for a layout entry that was just applied.
+///
+/// Windows the engine already tracks as collapsed are skipped: moving them
+/// here already breaks the controller's own state, and queueing another
+/// collapse would race its reconciliation.
+fn collapse_request_after_restore(
+    layout: &WindowLayout,
+    handle: crate::platform::WindowHandle,
+    collapsed: &HashMap<isize, crate::core::edge_hide::CollapsedWindow>,
+) -> Option<CollapseRequest> {
+    let edge_hidden = layout.edge_hidden.as_ref()?;
+    if collapsed.contains_key(&handle.0) {
+        return None;
+    }
+    Some(CollapseRequest {
+        handle,
+        edge: edge_hidden.edge,
+        restore_rect: layout.rect,
+        hidden_rect: edge_hidden.hidden_rect,
     })
 }
 
@@ -513,25 +560,46 @@ fn layouts_from_windows(windows: Vec<WindowInfo>) -> Vec<WindowLayout> {
             topmost: window.topmost,
         })
         .collect();
-    layouts_from_layout_targets(targets)
+    layouts_from_layout_targets(targets, &HashMap::new())
 }
 
 fn layouts_from_layout_targets(
-    windows: Vec<crate::platform::WindowLayoutTarget>,
+    mut windows: Vec<crate::platform::WindowLayoutTarget>,
+    collapsed: &HashMap<isize, crate::core::edge_hide::CollapsedWindow>,
 ) -> Vec<WindowLayout> {
+    // Occurrence assignment sorts duplicate identities by geometry, so
+    // edge-hidden windows must already be represented by their expanded
+    // rectangle here; otherwise capture order and restore order diverge.
+    for window in &mut windows {
+        if let Some(hidden) = collapsed.get(&window.handle.0) {
+            window.rect = hidden.restore_rect;
+            window.placement_rect = None;
+        }
+    }
     windows_with_occurrences(windows)
         .into_iter()
-        .map(|(window, occurrence)| WindowLayout {
-            process_name: window.process_name,
-            class_name: window.class_name,
-            title: window.title,
-            occurrence,
-            z_index: window.z_index,
-            rect: window.rect,
-            placement_rect: window.placement_rect,
-            minimized: window.minimized,
-            maximized: window.maximized,
-            topmost: window.topmost,
+        .map(|(window, occurrence)| {
+            let edge_hidden =
+                collapsed
+                    .get(&window.handle.0)
+                    .map(|hidden| crate::platform::EdgeHiddenLayout {
+                        edge: hidden.edge,
+                        restore_rect: hidden.restore_rect,
+                        hidden_rect: hidden.hidden_rect,
+                    });
+            WindowLayout {
+                process_name: window.process_name,
+                class_name: window.class_name,
+                title: window.title,
+                occurrence,
+                z_index: window.z_index,
+                rect: window.rect,
+                placement_rect: window.placement_rect,
+                minimized: window.minimized,
+                maximized: window.maximized,
+                topmost: window.topmost,
+                edge_hidden,
+            }
         })
         .collect()
 }
@@ -693,6 +761,9 @@ fn constant_time_eq(left: &str, right: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::Edge;
+    use crate::core::edge_hide::CollapsedWindow;
+    use crate::platform::EdgeHiddenLayout;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
 
@@ -876,7 +947,7 @@ mod tests {
             },
         ];
 
-        let layouts = layouts_from_layout_targets(targets);
+        let layouts = layouts_from_layout_targets(targets, &HashMap::new());
         assert_eq!(layouts.len(), 2);
         // 输出按稳定身份排序，与 z-order 无关；zIndex 字段是预览叠放顺序的唯一来源。
         assert_eq!(layouts[0].title, "A Normal Editor");
@@ -957,6 +1028,234 @@ mod tests {
         assert_eq!(serialized["minimized"], true);
         assert_eq!(serialized["placementRect"], value["placementRect"]);
         assert_eq!(serialized["zIndex"], 3);
+    }
+
+    fn layout_with_edge_hidden(edge_hidden: Option<EdgeHiddenLayout>) -> WindowLayout {
+        WindowLayout {
+            process_name: "code.exe".into(),
+            class_name: "Chrome_WidgetWin_1".into(),
+            title: "Editor".into(),
+            occurrence: 0,
+            z_index: 0,
+            rect: crate::platform::Rect {
+                left: 0,
+                top: 120,
+                right: 600,
+                bottom: 700,
+            },
+            placement_rect: None,
+            minimized: false,
+            maximized: false,
+            topmost: false,
+            edge_hidden,
+        }
+    }
+
+    #[test]
+    fn layout_capture_injects_edge_hidden_and_records_the_expanded_rect() {
+        let restore_rect = crate::platform::Rect {
+            left: 0,
+            top: 120,
+            right: 600,
+            bottom: 700,
+        };
+        let hidden_rect = crate::platform::Rect {
+            left: -584,
+            top: 120,
+            right: 16,
+            bottom: 700,
+        };
+        let handle = crate::platform::WindowHandle(7);
+        // The platform enumerates an edge-hidden window at its off-screen rect
+        // and keeps a native placement for it; both must be replaced by the
+        // expanded rectangle so the restore path can put it back on screen.
+        let targets = vec![crate::platform::WindowLayoutTarget {
+            handle,
+            z_index: 0,
+            rect: hidden_rect,
+            placement_rect: Some(hidden_rect),
+            title: "Editor".into(),
+            class_name: "Window".into(),
+            process_name: "editor.exe".into(),
+            minimized: false,
+            maximized: false,
+            transient: false,
+            topmost: false,
+        }];
+        let collapsed = HashMap::from([(
+            handle.0,
+            CollapsedWindow {
+                handle,
+                edge: Edge::Left,
+                restore_rect,
+                hidden_rect,
+            },
+        )]);
+
+        let layouts = layouts_from_layout_targets(targets, &collapsed);
+        assert_eq!(layouts.len(), 1);
+        assert_eq!(layouts[0].rect, restore_rect);
+        assert_eq!(layouts[0].placement_rect, None);
+        assert_eq!(
+            layouts[0].edge_hidden,
+            Some(EdgeHiddenLayout {
+                edge: Edge::Left,
+                restore_rect,
+                hidden_rect,
+            })
+        );
+
+        let serialized = serde_json::to_value(&layouts[0]).unwrap();
+        assert_eq!(serialized["edgeHidden"]["edge"], "left");
+        assert_eq!(
+            serialized["edgeHidden"]["restoreRect"],
+            serde_json::json!({"left": 0, "top": 120, "right": 600, "bottom": 700})
+        );
+        assert_eq!(
+            serialized["edgeHidden"]["hiddenRect"],
+            serde_json::json!({"left": -584, "top": 120, "right": 16, "bottom": 700})
+        );
+
+        // A plain window keeps the legacy snapshot shape with no field at all.
+        let plain = layouts_from_layout_targets(
+            vec![crate::platform::WindowLayoutTarget {
+                handle: crate::platform::WindowHandle(8),
+                z_index: 1,
+                rect: restore_rect,
+                placement_rect: None,
+                title: "Plain".into(),
+                class_name: "Window".into(),
+                process_name: "editor.exe".into(),
+                minimized: false,
+                maximized: false,
+                transient: false,
+                topmost: false,
+            }],
+            &HashMap::new(),
+        );
+        assert_eq!(plain[0].edge_hidden, None);
+        assert!(serde_json::to_value(&plain[0])
+            .unwrap()
+            .get("edgeHidden")
+            .is_none());
+    }
+
+    #[test]
+    fn old_and_new_layout_payloads_parse_with_optional_edge_hidden() {
+        let legacy: WindowLayout = serde_json::from_value(serde_json::json!({
+            "processName": "app",
+            "className": "Window",
+            "title": "title",
+            "rect": {"left": 0, "top": 0, "right": 10, "bottom": 10},
+            "maximized": false,
+            "topmost": false
+        }))
+        .unwrap();
+        assert_eq!(legacy.edge_hidden, None);
+
+        let payload = serde_json::json!({
+            "windows": [{
+                "processName": "app",
+                "className": "Window",
+                "title": "title",
+                "rect": {"left": 0, "top": 120, "right": 600, "bottom": 700},
+                "maximized": false,
+                "topmost": false,
+                "edgeHidden": {
+                    "edge": "right",
+                    "restoreRect": {"left": 1320, "top": 120, "right": 1920, "bottom": 700},
+                    "hiddenRect": {"left": 1904, "top": 120, "right": 2504, "bottom": 700}
+                }
+            }]
+        });
+        let parsed = parse_window_layouts(&payload).unwrap();
+        assert_eq!(
+            parsed[0].edge_hidden,
+            Some(EdgeHiddenLayout {
+                edge: Edge::Right,
+                restore_rect: crate::platform::Rect {
+                    left: 1320,
+                    top: 120,
+                    right: 1920,
+                    bottom: 700,
+                },
+                hidden_rect: crate::platform::Rect {
+                    left: 1904,
+                    top: 120,
+                    right: 2504,
+                    bottom: 700,
+                },
+            })
+        );
+
+        let invalid_edge = serde_json::json!({
+            "windows": [{
+                "processName": "app",
+                "className": "Window",
+                "title": "title",
+                "rect": {"left": 0, "top": 0, "right": 10, "bottom": 10},
+                "maximized": false,
+                "topmost": false,
+                "edgeHidden": {
+                    "edge": "diagonal",
+                    "restoreRect": {"left": 0, "top": 0, "right": 10, "bottom": 10},
+                    "hiddenRect": {"left": 0, "top": 0, "right": 10, "bottom": 10}
+                }
+            }]
+        });
+        let error = parse_window_layouts(&invalid_edge).unwrap_err();
+        assert_eq!(error.code, ErrorCode::WindowOperationFailed);
+    }
+
+    #[test]
+    fn restore_requests_a_recollapse_only_for_restored_edge_hidden_layouts() {
+        let edge_hidden = EdgeHiddenLayout {
+            edge: Edge::Left,
+            restore_rect: crate::platform::Rect {
+                left: 0,
+                top: 120,
+                right: 600,
+                bottom: 700,
+            },
+            hidden_rect: crate::platform::Rect {
+                left: -584,
+                top: 120,
+                right: 16,
+                bottom: 700,
+            },
+        };
+        let handle = crate::platform::WindowHandle(11);
+        let layout = layout_with_edge_hidden(Some(edge_hidden.clone()));
+        let mut collapsed = HashMap::new();
+
+        assert_eq!(
+            collapse_request_after_restore(&layout, handle, &collapsed),
+            Some(CollapseRequest {
+                handle,
+                edge: Edge::Left,
+                restore_rect: edge_hidden.restore_rect,
+                hidden_rect: edge_hidden.hidden_rect,
+            })
+        );
+        // Legacy snapshots without the field keep the old behaviour.
+        assert_eq!(
+            collapse_request_after_restore(&layout_with_edge_hidden(None), handle, &collapsed),
+            None
+        );
+        // Windows the engine already keeps collapsed are not requested again.
+        collapsed.insert(
+            handle.0,
+            CollapsedWindow {
+                handle,
+                edge: Edge::Left,
+                restore_rect: edge_hidden.restore_rect,
+                hidden_rect: edge_hidden.hidden_rect,
+            },
+        );
+        assert_eq!(
+            collapse_request_after_restore(&layout, handle, &collapsed),
+            None
+        );
     }
 
     #[test]

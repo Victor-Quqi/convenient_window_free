@@ -67,4 +67,29 @@ describe("window layout store", () => {
     expect(loaded[0].shortcut).toBe("Ctrl+Alt+9");
     expect("shortcut" in loaded[1]).toBe(false);
   });
+
+  it("keeps edge-hide state so a restore can re-collapse the window", () => {
+    const window = { title: "Editor", processName: "code.exe", className: "Code", rect: { left: 0, top: 120, right: 600, bottom: 700 }, minimized: false, maximized: false, topmost: false };
+    const restoreRect = { left: 0, top: 120, right: 600, bottom: 700 };
+    const hiddenRect = { left: -584, top: 120, right: 16, bottom: 700 };
+    saveWindowLayouts([{
+      id: "layout-1", name: "Layout", capturedAt: 1,
+      windows: [
+        { ...window, edgeHidden: { edge: "left", restoreRect, hiddenRect } },
+        { ...window, title: "Bad Edge", edgeHidden: { edge: "diagonal", restoreRect, hiddenRect } as never },
+        { ...window, title: "Bad Rect", edgeHidden: { edge: "left", restoreRect: null, hiddenRect } as never }
+      ]
+    }]);
+
+    const loaded = loadWindowLayouts();
+    expect(loaded[0].windows[0].edgeHidden).toEqual({ edge: "left", restoreRect, hiddenRect });
+    expect(loaded[0].windows[1].edgeHidden).toBeUndefined();
+    expect(loaded[0].windows[2].edgeHidden).toBeUndefined();
+
+    // 旧快照没有 edgeHidden 时不能凭空生成字段，保持原有恢复行为。
+    localStorage.setItem("convenient-window-layouts", JSON.stringify([
+      { id: "legacy", name: "Legacy", capturedAt: 2, windows: [window] }
+    ]));
+    expect(loadWindowLayouts()[0].windows[0].edgeHidden).toBeUndefined();
+  });
 });

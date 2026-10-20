@@ -1,6 +1,7 @@
 use crate::config::{Edge, EdgeHideConfig};
 use crate::platform::{Monitor, Point, Rect, WindowHandle, WindowInfo};
 use std::collections::{HashMap, VecDeque};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 const EDGE_HIDE_PREVIEW_THICKNESS: i32 = 4;
@@ -189,7 +190,14 @@ impl EdgeHideController {
             .map(|intent| intent.since)
             .unwrap_or(now);
         let dwell = Duration::from_millis(config.top_hover_delay_ms);
-        let progress = if edge == Edge::Top && !dwell.is_zero() {
+        // Moving the window further off the top resets `since`, so the hover dwell can never
+        // finish while the user keeps dragging up. A drag that already meets the top out-of-screen
+        // ratio is ready immediately, matching the left/right/bottom ratio triggers.
+        let ratio_ready = edge == Edge::Top
+            && ratio_triggered(window.rect, monitor.work_area, Edge::Top, config, 0);
+        let progress = if ratio_ready {
+            1.0
+        } else if edge == Edge::Top && !dwell.is_zero() {
             (now.saturating_duration_since(since).as_secs_f64() / dwell.as_secs_f64()).min(1.0)
         } else {
             1.0
@@ -368,6 +376,85 @@ impl EdgeHideController {
                 (strip.width() > 0 && strip.height() > 0).then_some(strip)
             })
             .collect()
+    }
+
+    /// Windows the controller currently keeps hidden at a screen edge.
+    ///
+    /// Layout capture reads this so it records the expanded restore rectangle
+    /// and the edge instead of the window's off-screen hidden rectangle.
+    pub fn collapsed_windows(&self) -> Vec<CollapsedWindow> {
+        self.states
+            .iter()
+            .filter_map(|(handle, state)| {
+                let EdgeHideState::Collapsed {
+                    edge,
+                    restore_rect,
+                    hidden_rect,
+                    ..
+                } = state
+                else {
+                    return None;
+                };
+                Some(CollapsedWindow {
+                    handle: *handle,
+                    edge: *edge,
+                    restore_rect: *restore_rect,
+                    hidden_rect: *hidden_rect,
+                })
+            })
+            .collect()
+    }
+
+    /// Re-collapses a window that a layout restore has just placed at
+    /// `restore_rect`.
+    ///
+    /// The restore path is trusted only after every input is validated against
+    /// the live window and the current monitor profile: a stale snapshot must
+    /// never be able to push a window off-screen when its edge is no longer
+    /// enabled, when the window stopped being an edge-hide candidate, or when
+    /// the restore did not actually land on the recorded rectangle. Returns the
+    /// collapse command to execute on success.
+    pub fn collapse_now(
+        &mut self,
+        _now: Instant,
+        config: &EdgeHideConfig,
+        monitors: &[Monitor],
+        window: &WindowInfo,
+        edge: Edge,
+        restore_rect: Rect,
+        hidden_rect: Rect,
+    ) -> Option<EdgeHideCommand> {
+        let monitor = monitor_for_rect(restore_rect, monitors)?;
+        if !config.enabled
+            || !is_candidate_window(window, config)
+            || !edges_for_monitor(config, monitor).contains(&edge)
+            || !rects_roughly_equal(
+                restore_rect_for(restore_rect, monitor.work_area),
+                restore_rect,
+            )
+            || !is_edge_exposed_for_rect(monitor, edge, restore_rect, monitors)
+            || !rects_roughly_equal(window.rect, restore_rect)
+            || hidden_rect.width() != restore_rect.width()
+            || hidden_rect.height() != restore_rect.height()
+            || hidden_rect == restore_rect
+        {
+            return None;
+        }
+        self.relocation_retry_after.remove(&window.handle);
+        self.states.insert(
+            window.handle,
+            EdgeHideState::Collapsing {
+                edge,
+                restore_rect,
+                hidden_rect,
+                original_topmost: window.topmost,
+                was_foreground: false,
+            },
+        );
+        Some(EdgeHideCommand::Collapse {
+            handle: window.handle,
+            rect: hidden_rect,
+        })
     }
 
     pub fn prune_invalid_windows(&mut self, mut window_exists: impl FnMut(WindowHandle) -> bool) {
@@ -1583,6 +1670,63 @@ impl EdgeHideController {
     }
 }
 
+/// A window the controller currently keeps hidden at a screen edge.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CollapsedWindow {
+    pub handle: WindowHandle,
+    pub edge: Edge,
+    pub restore_rect: Rect,
+    pub hidden_rect: Rect,
+}
+
+/// A layout-restore request for the engine to re-collapse one window.
+///
+/// The IPC restore task cannot touch the controller (it lives in the engine
+/// run loop), so it queues the recorded edge state here and the next engine
+/// tick performs the collapse with the usual command lifecycle.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct CollapseRequest {
+    pub handle: WindowHandle,
+    pub edge: Edge,
+    pub restore_rect: Rect,
+    pub hidden_rect: Rect,
+}
+
+// `Mutex::new` is const, so the shared queues need no lazy initialization.
+static COLLAPSE_REQUESTS: Mutex<Vec<CollapseRequest>> = Mutex::new(Vec::new());
+static COLLAPSED_WINDOWS: Mutex<Vec<CollapsedWindow>> = Mutex::new(Vec::new());
+
+fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+/// Queue a re-collapse request for the next engine tick.
+pub fn request_collapse(request: CollapseRequest) {
+    lock(&COLLAPSE_REQUESTS).push(request);
+}
+
+/// Drain every queued re-collapse request.
+pub fn take_collapse_requests() -> Vec<CollapseRequest> {
+    std::mem::take(&mut *lock(&COLLAPSE_REQUESTS))
+}
+
+/// Drop pending requests, for example when the engine starts or stops.
+pub fn clear_collapse_requests() {
+    lock(&COLLAPSE_REQUESTS).clear();
+}
+
+/// Publish the controller's current collapsed set for the layout capture path.
+pub fn publish_collapsed_windows(windows: Vec<CollapsedWindow>) {
+    *lock(&COLLAPSED_WINDOWS) = windows;
+}
+
+/// Copy of the last published collapsed set.
+pub fn collapsed_windows_snapshot() -> Vec<CollapsedWindow> {
+    lock(&COLLAPSED_WINDOWS).clone()
+}
+
 fn is_candidate_window(window: &WindowInfo, config: &EdgeHideConfig) -> bool {
     is_candidate_window_at(window, window.rect, config)
 }
@@ -1671,7 +1815,8 @@ fn edge_triggered(
     tolerance: i32,
 ) -> bool {
     if edge == Edge::Top {
-        return (rect.top - area.top).abs() <= config.top_trigger_distance + tolerance;
+        return (rect.top - area.top).abs() <= config.top_trigger_distance + tolerance
+            || ratio_triggered(rect, area, edge, config, i32::from(tolerance > 0));
     }
     let distance = config.trigger_distance.max(1) + tolerance;
     let offset = match edge {
@@ -2333,6 +2478,192 @@ mod tests {
                 false
             )
             .is_none());
+    }
+
+    #[test]
+    fn top_ratio_drag_past_the_off_screen_ratio_previews_and_collapses_without_dwell() {
+        let mut config = EdgeHideConfig::default();
+        config.enabled = true;
+        let monitors = [monitor()];
+        let now = Instant::now();
+        // 400px tall window with its top 200px above the work area = 50% > 33% default ratio.
+        let target = window(Rect {
+            left: 400,
+            top: -200,
+            right: 1000,
+            bottom: 200,
+        });
+        assert_eq!(
+            detect_window_edge(target.rect, &monitors, &config).map(|(edge, _)| edge),
+            Some(Edge::Top)
+        );
+        let mut controller = EdgeHideController::new();
+        let begin = controller
+            .update_drag_preview(now, &config, &monitors, Some(&target), true)
+            .expect("an off-screen top drag past the ratio must preview the blue line");
+        assert_eq!(begin.width(), target.rect.width());
+        // Moving further up changes the anchor and would restart the hover dwell; the ratio
+        // trigger alone must keep the intent ready.
+        let mut higher = target.clone();
+        higher.rect.top = -300;
+        higher.rect.bottom = 100;
+        let moved = controller
+            .update_drag_preview(
+                now + Duration::from_millis(100),
+                &config,
+                &monitors,
+                Some(&higher),
+                true,
+            )
+            .expect("an upward move must not reset a ratio-qualified top intent");
+        assert_eq!(moved.width(), higher.rect.width());
+        controller.update_drag_preview(
+            now + Duration::from_millis(110),
+            &config,
+            &monitors,
+            None,
+            false,
+        );
+        assert_eq!(controller.released_top_handle(), Some(target.handle));
+        assert!(matches!(
+            controller.take_top_drop(
+                now + Duration::from_millis(120),
+                &config,
+                &monitors,
+                Some(&higher),
+                false
+            ),
+            Some(EdgeHideCommand::Collapse { .. })
+        ));
+    }
+
+    #[test]
+    fn top_ratio_below_threshold_and_outside_the_top_band_does_not_trigger() {
+        let mut config = EdgeHideConfig::default();
+        config.enabled = true;
+        config.top_trigger_distance = 8;
+        let monitors = [monitor()];
+        // 40 / 400 = 10% outside, still 40px away from the top trigger band.
+        let target = window(Rect {
+            left: 400,
+            top: -40,
+            right: 1000,
+            bottom: 360,
+        });
+        assert!(detect_window_edge(target.rect, &monitors, &config).is_none());
+        let mut controller = EdgeHideController::new();
+        assert!(controller
+            .update_drag_preview(Instant::now(), &config, &monitors, Some(&target), true)
+            .is_none());
+        assert_eq!(controller.released_top_handle(), None);
+    }
+
+    #[test]
+    fn top_ratio_trigger_requires_the_ratio_setting() {
+        let mut config = EdgeHideConfig::default();
+        config.enabled = true;
+        config.ratio_trigger_enabled = false;
+        let monitors = [monitor()];
+        let target = window(Rect {
+            left: 400,
+            top: -200,
+            right: 1000,
+            bottom: 200,
+        });
+        assert!(detect_window_edge(target.rect, &monitors, &config).is_none());
+        let mut controller = EdgeHideController::new();
+        assert!(controller
+            .update_drag_preview(Instant::now(), &config, &monitors, Some(&target), true)
+            .is_none());
+        assert_eq!(controller.released_top_handle(), None);
+    }
+
+    #[test]
+    fn top_ratio_ready_intent_clears_when_the_window_returns_below_the_ratio() {
+        let mut config = EdgeHideConfig::default();
+        config.enabled = true;
+        let monitors = [monitor()];
+        let now = Instant::now();
+        let mut target = window(Rect {
+            left: 400,
+            top: -200,
+            right: 1000,
+            bottom: 200,
+        });
+        let mut controller = EdgeHideController::new();
+        assert!(controller
+            .update_drag_preview(now, &config, &monitors, Some(&target), true)
+            .is_some());
+        target.rect.top = -80;
+        target.rect.bottom = 320;
+        assert!(controller
+            .update_drag_preview(
+                now + Duration::from_millis(50),
+                &config,
+                &monitors,
+                Some(&target),
+                true
+            )
+            .is_none());
+        controller.update_drag_preview(
+            now + Duration::from_millis(60),
+            &config,
+            &monitors,
+            None,
+            false,
+        );
+        assert_eq!(controller.released_top_handle(), None);
+        assert!(controller
+            .take_top_drop(
+                now + Duration::from_millis(70),
+                &config,
+                &monitors,
+                Some(&target),
+                false
+            )
+            .is_none());
+    }
+
+    #[test]
+    fn top_ratio_ready_release_can_replace_its_own_just_released_snap() {
+        let mut config = EdgeHideConfig::default();
+        config.enabled = true;
+        let monitors = [monitor()];
+        let now = Instant::now();
+        let target = window(Rect {
+            left: 400,
+            top: -200,
+            right: 1000,
+            bottom: 200,
+        });
+        let mut controller = EdgeHideController::new();
+        controller.update_drag_preview(now, &config, &monitors, Some(&target), true);
+        controller.update_drag_preview(
+            now + Duration::from_millis(10),
+            &config,
+            &monitors,
+            None,
+            false,
+        );
+        assert_eq!(controller.released_top_handle(), Some(target.handle));
+        let mut snapped = target.clone();
+        snapped.maximized = true;
+        snapped.arranged = true;
+        snapped.rect = monitors[0].work_area;
+        let command = controller
+            .take_top_drop(
+                now + Duration::from_millis(20),
+                &config,
+                &monitors,
+                Some(&snapped),
+                false,
+            )
+            .unwrap();
+        let EdgeHideCommand::Collapse { rect, .. } = command else {
+            panic!("expected collapse");
+        };
+        assert_eq!(rect.width(), target.rect.width());
+        assert_eq!(rect.height(), target.rect.height());
     }
 
     #[test]
@@ -5728,5 +6059,326 @@ mod tests {
                 topmost: true,
             })
         );
+    }
+
+    #[test]
+    fn collapsed_windows_report_only_the_collapsed_state() {
+        let mut controller = collapsed_controller_on_left_monitor();
+        controller.states.insert(
+            WindowHandle(7),
+            EdgeHideState::Expanded {
+                edge: Edge::Right,
+                restore_rect: Rect {
+                    left: 900,
+                    top: 100,
+                    right: 1500,
+                    bottom: 700,
+                },
+                hidden_rect: Rect {
+                    left: 1500,
+                    top: 100,
+                    right: 2100,
+                    bottom: 700,
+                },
+                original_topmost: false,
+                pointer_entered: false,
+                leave_since: None,
+            },
+        );
+
+        assert_eq!(
+            controller.collapsed_windows(),
+            vec![CollapsedWindow {
+                handle: WindowHandle(42),
+                edge: Edge::Left,
+                restore_rect: Rect {
+                    left: 0,
+                    top: 120,
+                    right: 600,
+                    bottom: 700,
+                },
+                hidden_rect: Rect {
+                    left: -592,
+                    top: 120,
+                    right: 8,
+                    bottom: 700,
+                },
+            }]
+        );
+    }
+
+    #[test]
+    fn collapse_now_reissues_the_recorded_collapse_after_a_restore() {
+        let config = EdgeHideConfig {
+            enabled: true,
+            ..EdgeHideConfig::default()
+        };
+        let monitors = [monitor()];
+        let now = Instant::now();
+        let restore_rect = Rect {
+            left: 0,
+            top: 120,
+            right: 600,
+            bottom: 700,
+        };
+        let hidden_rect = Rect {
+            left: -584,
+            top: 120,
+            right: 16,
+            bottom: 700,
+        };
+        let live = window(restore_rect);
+        let mut controller = EdgeHideController::new();
+
+        let command = controller
+            .collapse_now(
+                now,
+                &config,
+                &monitors,
+                &live,
+                Edge::Left,
+                restore_rect,
+                hidden_rect,
+            )
+            .expect("a restored window on an enabled edge must collapse again");
+        assert_eq!(
+            command,
+            EdgeHideCommand::Collapse {
+                handle: live.handle,
+                rect: hidden_rect,
+            }
+        );
+        // The pending collapse is not reported as collapsed until the move
+        // actually lands on the hidden rectangle.
+        assert!(controller.collapsed_windows().is_empty());
+        assert_eq!(
+            controller.command_succeeded(command, EdgeHideLiveState::Visible(hidden_rect), now),
+            None
+        );
+        assert_eq!(
+            controller.collapsed_windows(),
+            vec![CollapsedWindow {
+                handle: live.handle,
+                edge: Edge::Left,
+                restore_rect,
+                hidden_rect,
+            }]
+        );
+    }
+
+    #[test]
+    fn collapse_now_rejects_stale_or_unsupported_layouts() {
+        let monitors = [monitor()];
+        let now = Instant::now();
+        let restore_rect = Rect {
+            left: 0,
+            top: 120,
+            right: 600,
+            bottom: 700,
+        };
+        let hidden_rect = Rect {
+            left: -584,
+            top: 120,
+            right: 16,
+            bottom: 700,
+        };
+        let mut controller = EdgeHideController::new();
+        let enabled = EdgeHideConfig {
+            enabled: true,
+            ..EdgeHideConfig::default()
+        };
+
+        // The restore did not actually land on the recorded rectangle.
+        let mut moved = window(restore_rect);
+        moved.rect.left = 240;
+        assert_eq!(
+            controller.collapse_now(
+                now,
+                &enabled,
+                &monitors,
+                &moved,
+                Edge::Left,
+                restore_rect,
+                hidden_rect,
+            ),
+            None
+        );
+
+        // The recorded edge is no longer part of the monitor profile.
+        let right_only = EdgeHideConfig {
+            enabled: true,
+            edges: vec![Edge::Right],
+            ..EdgeHideConfig::default()
+        };
+        assert_eq!(
+            controller.collapse_now(
+                now,
+                &right_only,
+                &monitors,
+                &window(restore_rect),
+                Edge::Left,
+                restore_rect,
+                hidden_rect,
+            ),
+            None
+        );
+
+        // Edge hiding itself is off: a restored snapshot must stay expanded.
+        let disabled = EdgeHideConfig {
+            enabled: false,
+            ..EdgeHideConfig::default()
+        };
+        assert_eq!(
+            controller.collapse_now(
+                now,
+                &disabled,
+                &monitors,
+                &window(restore_rect),
+                Edge::Left,
+                restore_rect,
+                hidden_rect,
+            ),
+            None
+        );
+
+        // The window stopped being an edge-hide candidate.
+        let mut maximized = window(restore_rect);
+        maximized.maximized = true;
+        assert_eq!(
+            controller.collapse_now(
+                now,
+                &enabled,
+                &monitors,
+                &maximized,
+                Edge::Left,
+                restore_rect,
+                hidden_rect,
+            ),
+            None
+        );
+
+        // The recorded hidden rectangle is inconsistent with the restore rect.
+        let stretched = Rect {
+            left: -684,
+            top: 120,
+            right: 16,
+            bottom: 700,
+        };
+        assert_eq!(
+            controller.collapse_now(
+                now,
+                &enabled,
+                &monitors,
+                &window(restore_rect),
+                Edge::Left,
+                restore_rect,
+                stretched,
+            ),
+            None
+        );
+
+        // The edge is covered by an adjacent monitor, so it never collapses.
+        let stacked = [
+            monitor(),
+            Monitor {
+                bounds: Rect {
+                    left: 0,
+                    top: -1080,
+                    right: 1920,
+                    bottom: 0,
+                },
+                work_area: Rect {
+                    left: 0,
+                    top: -1040,
+                    right: 1920,
+                    bottom: 0,
+                },
+                primary: false,
+                device_id: [0; 128],
+            },
+        ];
+        let top_restore = Rect {
+            left: 300,
+            top: 0,
+            right: 900,
+            bottom: 580,
+        };
+        let top_hidden = Rect {
+            left: 300,
+            top: -564,
+            right: 900,
+            bottom: 16,
+        };
+        assert_eq!(
+            controller.collapse_now(
+                now,
+                &enabled,
+                &stacked,
+                &window(top_restore),
+                Edge::Top,
+                top_restore,
+                top_hidden,
+            ),
+            None
+        );
+        assert!(controller.collapsed_windows().is_empty());
+    }
+
+    #[test]
+    fn collapse_request_queue_and_collapsed_snapshot_are_process_wide() {
+        let request = CollapseRequest {
+            handle: WindowHandle(9),
+            edge: Edge::Bottom,
+            restore_rect: Rect {
+                left: 100,
+                top: 400,
+                right: 700,
+                bottom: 980,
+            },
+            hidden_rect: Rect {
+                left: 100,
+                top: 964,
+                right: 700,
+                bottom: 1564,
+            },
+        };
+        clear_collapse_requests();
+        assert!(take_collapse_requests().is_empty());
+        request_collapse(request);
+        request_collapse(request);
+        assert_eq!(take_collapse_requests(), vec![request, request]);
+        assert!(take_collapse_requests().is_empty());
+        request_collapse(request);
+        clear_collapse_requests();
+        assert!(take_collapse_requests().is_empty());
+
+        let collapsed = vec![
+            CollapsedWindow {
+                handle: WindowHandle(9),
+                edge: Edge::Bottom,
+                restore_rect: request.restore_rect,
+                hidden_rect: request.hidden_rect,
+            },
+            CollapsedWindow {
+                handle: WindowHandle(10),
+                edge: Edge::Left,
+                restore_rect: Rect {
+                    left: 0,
+                    top: 100,
+                    right: 500,
+                    bottom: 700,
+                },
+                hidden_rect: Rect {
+                    left: -484,
+                    top: 100,
+                    right: 16,
+                    bottom: 700,
+                },
+            },
+        ];
+        publish_collapsed_windows(collapsed.clone());
+        assert_eq!(collapsed_windows_snapshot(), collapsed);
+        publish_collapsed_windows(Vec::new());
+        assert!(collapsed_windows_snapshot().is_empty());
     }
 }

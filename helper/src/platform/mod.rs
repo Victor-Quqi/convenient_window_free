@@ -186,6 +186,24 @@ pub struct WindowLayout {
     pub minimized: bool,
     pub maximized: bool,
     pub topmost: bool,
+    /// Capture-time edge-hide state. `None` for ordinary windows and for every
+    /// snapshot recorded before this field existed, so old layouts keep their
+    /// exact behaviour (and old payloads keep their exact shape).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edge_hidden: Option<EdgeHiddenLayout>,
+}
+
+/// The edge-hide state of a window at capture time.
+///
+/// `rect` of the enclosing layout records `restore_rect` (the expanded
+/// position), so a restore first brings the window back on screen and lets the
+/// engine re-collapse it afterwards instead of leaving it half off-screen.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EdgeHiddenLayout {
+    pub edge: crate::config::Edge,
+    pub restore_rect: Rect,
+    pub hidden_rect: Rect,
 }
 
 impl Rect {

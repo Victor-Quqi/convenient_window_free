@@ -735,6 +735,7 @@ mod tests {
             minimized: true,
             maximized: false,
             topmost: false,
+            edge_hidden: None,
         };
         apply_window_layout(handle, &layout).unwrap();
         assert!(window_is_minimized(handle));
@@ -806,6 +807,7 @@ mod tests {
             minimized: false,
             maximized: false,
             topmost: false,
+            edge_hidden: None,
         };
 
         apply_window_layout(handle, &layout).unwrap();
