@@ -1,5 +1,25 @@
 # Testing
 
+## 0.6.7 Online Acceptance Candidate
+
+The Windows x64 0.6.7 candidate is published as a GitHub Pre-release for online acceptance. The 0.6.6 stable downloads remain the latest stable and are unchanged; nothing has been promoted, no UPXS has been exported or install-verified, and no market submission has been made.
+
+- Desktop: `v0.6.7` Pre-release, NSIS installer and portable archive;
+- Helper: `v0.6.7` Pre-release, downloaded by the packaged plugin after explicit user consent;
+- uTools plugin: packaged from the fixed market candidate `release/utools-plugin/plugin.json`; the plugin package itself contains no executable helper files.
+
+Acceptance scope:
+
+1. Packaged plugin: install the exported UPXS, let it download and verify the 0.6.7 helper after explicit consent, restart both hosts, then stop and start the helper and confirm it reconnects.
+2. Window layouts: record a desktop with snapped windows, duplicated browser/editor windows and a minimized window; restore and confirm position, size, maximized/minimized, topmost and collapsed-at-edge states, with skipped entries reported individually.
+3. Layout extras: record a global shortcut per layout and trigger it from another app; add an excluded app and confirm recording, restore and preview all skip it; rename a layout and click away; confirm the compact restore button.
+4. Edge hiding: drag a window above the top edge past the move-out ratio and confirm the full-width blue line and top tuck; drag back below the ratio to cancel; tuck a window at a side edge, record a layout, then restore and confirm it returns to the collapsed state.
+5. Pins and overlays: leave a window topmost, restart the host, confirm the pin reappears and cancels the state; tuck a window at an edge, open and close a screenshot overlay and confirm the hidden window stays hidden; hover the exposed strip to expand it normally.
+6. Desktop: install from the 0.6.7 NSIS package, run it, verify tray exit and uninstall; test the portable archive from a separate folder.
+7. Regression: language/theme/narrow layouts, master-switch cycles, UAC approval/cancellation, hot zones, gestures, screenshots and taskbar behavior.
+
+Status after publication: helper and desktop are active Pre-releases, the uTools UPXS has not been exported or install-verified, nothing has been promoted to stable, and the market submission has not been made.
+
 ## 0.6.6 Online Acceptance
 
 The Windows x64 0.6.6 candidates were accepted by the user and promoted in place to stable / Latest on October 17, 2026. The installer, portable archive, manifest and checksums retain their accepted identities; nothing was rebuilt or re-uploaded. The 0.6.5 stable downloads remain available for rollback.

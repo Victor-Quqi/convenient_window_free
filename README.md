@@ -22,14 +22,16 @@
 
 Convenient Window is a small tray companion for Windows 11. Configure the four corners and four edges of every display, tuck windows away at the screen edge, draw one-stroke mouse gestures, keep screenshots floating above other windows, and save the current desktop as a **window layout** you can restore in one click. Settings apply live, the interface is bilingual, and everything runs locally.
 
-## What's new in 0.6.6
+## What's new in 0.6.7
 
-- **Window layouts** — record ordinary window positions, sizes, maximized/minimized and topmost state, then restore them in one click. Closed, inaccessible, or identity-mismatched windows are skipped individually.
-- **Safer restores** — every target is re-checked by process name, window class and title, so duplicate browser or editor windows are not redirected to the wrong window.
-- **Feature entries** — compose the bottom tabs from two rows of bubbles. The highlighted row keeps up to four features, the Center is always present, and a fifth entry dropped on a full row is visibly rejected.
-- **One icon set, one look** — bottom tabs and settings bubbles share the same glyphs, and narrow layouts switch the tabs to icons only.
+This build is a GitHub Pre-release candidate for online acceptance; the 0.6.6 stable downloads remain available.
 
-[Release notes](docs/release-notes/0.6.6.md) · [All releases](https://github.com/ximizhou/convenient_window_free/releases)
+- **Window layouts** — snapped windows are recorded at the size Windows shows and restore without jumping back; previews draw only windows visible on the desktop in real z-order, each layout can record a global shortcut, and an exclusion list skips chosen apps.
+- **Edge hiding** — dragging a window above the top edge past the move-out ratio now tucks it into the top edge, and layouts remember windows collapsed at an edge so a restore returns them to the same state.
+- **Pins and overlays** — the topmost pin re-adopts windows left topmost after a restart, and closing a screenshot overlay no longer expands edge-hidden windows underneath it.
+- **Visual polish** — one consistent type, radius, motion and elevation scale, brighter dark surfaces, pressed feedback and focus rings, without changing the layout skeleton.
+
+[Release notes](docs/release-notes/0.6.7.md) · [All releases](https://github.com/ximizhou/convenient_window_free/releases)
 
 ## A closer look
 
