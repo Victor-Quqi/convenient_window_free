@@ -18,7 +18,7 @@ The acceptance list below is the tested scope and remains a regression reference
 6. Desktop: install from the 0.6.7 NSIS package, run it, verify tray exit and uninstall; test the portable archive from a separate folder.
 7. Regression: language/theme/narrow layouts, master-switch cycles, UAC approval/cancellation, hot zones, gestures, screenshots and taskbar behavior.
 
-Status after publication: helper and desktop are stable / Latest. The user confirmed the installed UPXS and the online helper download during acceptance; the UPXS file identity (path, size, SHA-256) is still pending, and the market submission has not been made.
+Status after publication: helper and desktop are stable / Latest. The user confirmed the installed UPXS and the online helper download during acceptance, and the exported UPXS identity (path, size, SHA-256) is recorded in the release record; the market submission has not been made.
 
 ## 0.6.6 Online Acceptance
 
