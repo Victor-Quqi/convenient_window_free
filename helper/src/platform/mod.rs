@@ -513,9 +513,51 @@ fn latest_modifier_mask(current: &[u64; 16], previous: &[u64; 16]) -> Option<u8>
         .map(|(mask, _)| mask as u8)
 }
 
+/// 贴边收纳窗口「因前台激活而自动展开」的临时抑制截止时间。
+///
+/// helper 自己的浮层（尤其截图贴图）会主动成为前台窗口；关闭这些浮层时，Windows 可能把
+/// 前台交给某个贴在边上的已收纳窗口，看起来就像用户主动激活了它。关闭浮层前调用本函数，
+/// engine 会在接下来的一小段时间内跳过前台激活恢复；鼠标进入露出边条的正常恢复路径不受
+/// 影响，所以不会妨碍用户真正想展开窗口的操作。
+static EDGE_HIDE_FOREGROUND_RESTORE_UNTIL: std::sync::Mutex<Option<std::time::Instant>> =
+    std::sync::Mutex::new(None);
+
+pub fn suppress_edge_hide_foreground_restore(duration: std::time::Duration) {
+    if let Ok(mut until) = EDGE_HIDE_FOREGROUND_RESTORE_UNTIL.lock() {
+        *until = Some(std::time::Instant::now() + duration);
+    }
+}
+
+pub fn edge_hide_foreground_restore_suppressed() -> bool {
+    let Ok(mut until) = EDGE_HIDE_FOREGROUND_RESTORE_UNTIL.lock() else {
+        return false;
+    };
+    match *until {
+        Some(deadline) if std::time::Instant::now() < deadline => true,
+        Some(_) => {
+            *until = None;
+            false
+        }
+        None => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn edge_hide_foreground_restore_suppression_is_bounded() {
+        suppress_edge_hide_foreground_restore(std::time::Duration::from_secs(30));
+        assert!(edge_hide_foreground_restore_suppressed());
+        // 零时长表示立即过期：调用方不能借此留下永久抑制。
+        suppress_edge_hide_foreground_restore(std::time::Duration::ZERO);
+        assert!(!edge_hide_foreground_restore_suppressed());
+        // 过期的截止时间会被清掉，下一次查询不再抑制。
+        suppress_edge_hide_foreground_restore(std::time::Duration::from_millis(1));
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        assert!(!edge_hide_foreground_restore_suppressed());
+    }
 
     #[test]
     fn short_mouse_clicks_are_detected_between_poll_samples() {

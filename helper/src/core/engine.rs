@@ -126,7 +126,8 @@ impl Engine {
                             now,
                             foreground_handle,
                             platform::window_is_minimized,
-                        );
+                        )
+                            || platform::edge_hide_foreground_restore_suppressed();
                         if window_prune.should_refresh(now) {
                             edge_hide.prune_invalid_windows(platform::window_exists);
                         }

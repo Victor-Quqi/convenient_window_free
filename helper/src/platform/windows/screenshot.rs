@@ -586,6 +586,12 @@ unsafe fn show_pin_context_menu(hwnd: HWND, lparam: LPARAM, state: &PinState) {
             });
         }
         CLOSE_MENU_ID => {
+            // 贴图窗口关闭后前台会回落到别的窗口；如果落到某个贴边收纳窗口，不能被
+            // 当成用户主动激活而自动展开。短暂抑制 engine 的前台激活恢复；边条悬停
+            // 恢复路径不受影响。
+            crate::platform::suppress_edge_hide_foreground_restore(
+                std::time::Duration::from_millis(500),
+            );
             let _ = DestroyWindow(hwnd);
         }
         _ => {}
