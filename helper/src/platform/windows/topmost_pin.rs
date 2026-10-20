@@ -5,25 +5,27 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, OnceLock};
 use std::time::Duration;
 use windows::core::w;
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{BOOL, COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreatePen, CreateSolidBrush, DeleteObject, Ellipse, EndPaint, FillRect,
     InvalidateRect, LineTo, MoveToEx, ScreenToClient, SelectObject, HBRUSH, PAINTSTRUCT, PS_SOLID,
 };
+use windows::Win32::System::Threading::GetCurrentProcessId;
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetCapture, ReleaseCapture, SetCapture, TrackMouseEvent, TME_LEAVE, TRACKMOUSEEVENT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetCursorPos, GetWindow,
-    GetWindowLongPtrW, GetWindowRect, IsIconic, IsWindow, IsWindowVisible, LoadCursorW,
-    PeekMessageW, RegisterClassW, SetCursor, SetLayeredWindowAttributes, SetWindowDisplayAffinity,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, TranslateMessage, CREATESTRUCTW, CS_HREDRAW,
-    CS_VREDRAW, GWLP_USERDATA, GWL_EXSTYLE, GW_HWNDPREV, HWND_NOTOPMOST, HWND_TOPMOST, IDC_HAND,
-    LWA_ALPHA, LWA_COLORKEY, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER,
-    SWP_SHOWWINDOW, SW_HIDE, WDA_EXCLUDEFROMCAPTURE, WINDOW_EX_STYLE, WM_DESTROY, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_SETCURSOR, WNDCLASSW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TOPMOST as TOPMOST_STYLE, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, EnumWindows, GetClassNameW,
+    GetCursorPos, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowThreadProcessId, IsIconic,
+    IsWindow, IsWindowVisible, LoadCursorW, PeekMessageW, RegisterClassW, SetCursor,
+    SetLayeredWindowAttributes, SetWindowDisplayAffinity, SetWindowLongPtrW, SetWindowPos,
+    ShowWindow, TranslateMessage, CREATESTRUCTW, CS_HREDRAW, CS_VREDRAW, GWLP_USERDATA,
+    GWL_EXSTYLE, GW_HWNDPREV, GW_OWNER, HWND_NOTOPMOST, HWND_TOPMOST, IDC_HAND, LWA_ALPHA,
+    LWA_COLORKEY, MSG, PM_REMOVE, SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOZORDER, SWP_SHOWWINDOW,
+    SW_HIDE, WDA_EXCLUDEFROMCAPTURE, WINDOW_EX_STYLE, WM_DESTROY, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_NCCREATE, WM_PAINT, WM_SETCURSOR, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TOPMOST as TOPMOST_STYLE, WS_POPUP,
 };
 
 const CLASS_NAME: windows::core::PCWSTR = w!("ConvenientWindowTopmostPin");
@@ -63,8 +65,12 @@ enum PinCommand {
 }
 
 pub fn configure_topmost_pins(enabled: bool) {
-    if PIN_ENABLED.swap(enabled, Ordering::AcqRel) != enabled {
-        let _ = pin_commands().send(PinCommand::Configure(enabled));
+    let changed = PIN_ENABLED.swap(enabled, Ordering::AcqRel) != enabled;
+    // 首次配置时就创建图钉线程：helper 启动后要能接管已经在置顶状态的窗口，
+    // 否则重启前遗留的置顶窗口就永远没有图钉可点。
+    let sender = pin_commands();
+    if changed {
+        let _ = sender.send(PinCommand::Configure(enabled));
     }
 }
 
@@ -91,6 +97,9 @@ fn run_pin_thread(receiver: mpsc::Receiver<PinCommand>) {
     register_pin_class();
     let mut enabled = PIN_ENABLED.load(Ordering::Acquire);
     let mut pins: HashMap<WindowHandle, ManagedPin> = HashMap::new();
+    if enabled {
+        adopt_existing_topmost_windows(&mut pins);
+    }
     loop {
         match receiver.recv_timeout(pin_refresh_interval(pins.values().any(|pin| pin.shown))) {
             Ok(PinCommand::SetTarget(handle, topmost)) => {
@@ -106,6 +115,7 @@ fn run_pin_thread(receiver: mpsc::Receiver<PinCommand>) {
             Ok(PinCommand::Configure(next)) => {
                 enabled = next;
                 if enabled {
+                    adopt_existing_topmost_windows(&mut pins);
                     for (&target, pin) in pins.iter_mut() {
                         ensure_pin_window(target, pin);
                     }
@@ -123,6 +133,91 @@ fn run_pin_thread(receiver: mpsc::Receiver<PinCommand>) {
         pump_messages();
     }
     clear_pins(&mut pins);
+}
+
+/// 接管本次会话开始前就已经置顶的普通窗口。
+///
+/// 置顶是窗口自身的 `WS_EX_TOPMOST` 属性：helper 退出或重启后图钉窗口消失，但目标窗口
+/// 仍保持置顶，用户就失去了「点图钉取消置顶」的入口，只能再触发一次切换动作。这里在
+/// 图钉线程启动（或功能重新启用）时枚举当前置顶的普通窗口，为它们补上图钉，让置顶状态
+/// 重新可见、可取消。图钉只负责指示与取消，不会改变这些窗口的置顶状态。
+fn adopt_existing_topmost_windows(pins: &mut HashMap<WindowHandle, ManagedPin>) {
+    let exclude_process = unsafe { GetCurrentProcessId() };
+    for handle in collect_adoptable_topmost(exclude_process) {
+        if pins.contains_key(&handle) {
+            continue;
+        }
+        let mut pin = ManagedPin::new(0);
+        ensure_pin_window(handle, &mut pin);
+        pins.insert(handle, pin);
+    }
+}
+
+struct AdoptContext {
+    exclude_process: u32,
+    windows: Vec<WindowHandle>,
+}
+
+fn collect_adoptable_topmost(exclude_process: u32) -> Vec<WindowHandle> {
+    let mut context = AdoptContext {
+        exclude_process,
+        windows: Vec::new(),
+    };
+    let parameter = LPARAM((&mut context as *mut AdoptContext) as isize);
+    unsafe {
+        let _ = EnumWindows(Some(enum_adoptable_topmost), parameter);
+    }
+    context.windows
+}
+
+unsafe extern "system" fn enum_adoptable_topmost(hwnd: HWND, data: LPARAM) -> BOOL {
+    let context = &mut *(data.0 as *mut AdoptContext);
+    if is_adoptable_topmost(hwnd, context.exclude_process) {
+        context.windows.push(WindowHandle(hwnd.0 as isize));
+    }
+    true.into()
+}
+
+/// 只接管用户能看见、能操作的普通置顶窗口：排除 helper 自己的浮层（按进程）、
+/// tool window、带 owner 的弹窗、Shell 表面和过小的窗口。
+fn is_adoptable_topmost(hwnd: HWND, exclude_process: u32) -> bool {
+    unsafe {
+        if !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool() {
+            return false;
+        }
+        let ex_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+        if ex_style & TOPMOST_STYLE.0 == 0 || ex_style & WS_EX_TOOLWINDOW.0 != 0 {
+            return false;
+        }
+        if exclude_process != 0 {
+            let mut process_id = 0u32;
+            GetWindowThreadProcessId(hwnd, Some(&mut process_id));
+            if process_id == exclude_process {
+                return false;
+            }
+        }
+        if GetWindow(hwnd, GW_OWNER).is_ok_and(|owner| !owner.0.is_null()) {
+            return false;
+        }
+        if is_shell_surface(hwnd) {
+            return false;
+        }
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return false;
+        }
+        rect.right - rect.left >= 120 && rect.bottom - rect.top >= 80
+    }
+}
+
+fn is_shell_surface(hwnd: HWND) -> bool {
+    let mut buffer = [0u16; 128];
+    let length = (unsafe { GetClassNameW(hwnd, &mut buffer) }.max(0) as usize).min(buffer.len());
+    let class_name = String::from_utf16_lossy(&buffer[..length]);
+    matches!(
+        class_name.as_str(),
+        "Progman" | "WorkerW" | "Shell_TrayWnd" | "Shell_SecondaryTrayWnd" | "#32768"
+    )
 }
 
 fn pin_refresh_interval(has_visible_pin: bool) -> Duration {
@@ -508,6 +603,41 @@ mod tests {
             current = previous;
         }
         false
+    }
+
+    #[test]
+    fn topmost_pin_adoption_only_covers_existing_ordinary_topmost_windows() {
+        let _guard = PIN_WINDOW_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let topmost = test_topmost_window();
+        let plain = TestWindow(unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE::default(),
+                w!("STATIC"),
+                None,
+                WS_POPUP | WS_VISIBLE,
+                80,
+                60,
+                420,
+                260,
+                HWND::default(),
+                None,
+                None,
+                None,
+            )
+            .unwrap()
+        });
+        let topmost_handle = WindowHandle(topmost.0 .0 as isize);
+        let plain_handle = WindowHandle(plain.0 .0 as isize);
+
+        let adopted = collect_adoptable_topmost(0);
+        assert!(adopted.contains(&topmost_handle));
+        assert!(!adopted.contains(&plain_handle));
+
+        // 正常启动路径按进程排除：helper 自己的图钉/提示浮层不能被接管。
+        let adopted_without_self = collect_adoptable_topmost(unsafe { GetCurrentProcessId() });
+        assert!(!adopted_without_self.contains(&topmost_handle));
     }
 
     #[test]
