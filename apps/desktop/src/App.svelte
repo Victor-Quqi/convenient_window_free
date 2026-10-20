@@ -28,6 +28,7 @@
   import NavGlyph from "./NavGlyph.svelte";
   import WindowLayouts from "./WindowLayouts.svelte";
   import { disposeLayoutHotkeys, initLayoutHotkeys } from "./layout-hotkeys";
+  import { filterLayoutWindows, loadLayoutExclusions } from "./window-layout-exclusions";
   import { loadNavigationPreferences, normalizeNavigationPreferences, saveNavigationPreferences, type NavigationFeatureId, type NavigationPreferences } from "./navigation-preferences";
   import type { Language, UiKey } from "./i18n";
   import type {
@@ -483,7 +484,8 @@
   // 卸载时把空列表同步回去，避免快捷键残留在系统里。
   onMount(() => {
     void initLayoutHotkeys(helper, async (layout) => {
-      try { await helper.restoreWindowLayout(layout.windows); } catch { /* 后台触发无 UI 面，静默失败 */ }
+      // 与面板里的复位一致：快捷键触发时也跳过布局排除的应用（名单实时读取）。
+      try { await helper.restoreWindowLayout(filterLayoutWindows(layout.windows, loadLayoutExclusions())); } catch { /* 后台触发无 UI 面，静默失败 */ }
     });
     return () => { disposeLayoutHotkeys(); };
   });
@@ -1631,7 +1633,7 @@
                 </div>
               </details>
             {:else if mode === "window-layouts"}
-              <WindowLayouts {helper} english={english} connected={helperStatus === "connected"} supported={helperPlatform?.capabilities.windowLayouts === true} platformSupportsWindowControl={helperPlatform?.capabilities.windowControl === true} />
+              <WindowLayouts {helper} english={english} foregroundApp={foregroundApp} connected={helperStatus === "connected"} supported={helperPlatform?.capabilities.windowLayouts === true} platformSupportsWindowControl={helperPlatform?.capabilities.windowControl === true} />
             {:else if mode === "beautification"}
               <TaskbarAppearance {english} appearance={settings.taskbarAppearance} connected={helperStatus === "connected"} masterEnabled={settings.enabled} status={taskbarStatus} onChange={updateTaskbarAppearance} />
             {:else}

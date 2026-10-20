@@ -6,6 +6,7 @@
   import { syncLayoutHotkeys } from "./layout-hotkeys";
   import { layoutShortcutFromKeyboardEvent } from "./layout-hotkey-utils";
   import { previewBounds, previewWindows, type WindowLayoutPreviewBounds } from "./window-layout-preview";
+  import { filterLayoutWindows, loadLayoutExclusions, normalizeLayoutExclusions, saveLayoutExclusions } from "./window-layout-exclusions";
   import {
     createWindowLayoutId,
     loadWindowLayouts,
@@ -21,8 +22,10 @@
   export let connected = false;
   export let supported = false;
   export let platformSupportsWindowControl = true;
+  export let foregroundApp = "";
 
   let layouts: WindowLayoutSnapshot[] = loadWindowLayouts();
+  let exclusions: string[] = loadLayoutExclusions();
   let busy: "capture" | string = "";
   let editingId = "";
   let editName = "";
@@ -40,7 +43,8 @@
     status = null;
     try {
       const result: WindowLayoutCapture = await helper.captureWindowLayout();
-      const windows = Array.isArray(result.windows) ? result.windows : [];
+      // 排除名单在宿主侧过滤：helper 不参与，记录的窗口数量就是过滤后的数量。
+      const windows = filterLayoutWindows(Array.isArray(result.windows) ? result.windows : [], exclusions);
       const number = layouts.length + 1;
       const snapshot: WindowLayoutSnapshot = {
         id: createWindowLayoutId(),
@@ -68,8 +72,11 @@
     busy = layout.id;
     status = null;
     try {
-      const result: WindowLayoutRestoreResult = await helper.restoreWindowLayout(layout.windows);
-      const skipped = Number.isFinite(result.skipped) ? result.skipped : 0;
+      // 复位前先过滤排除的应用：被排除的窗口不发送给 helper，数量并入 skipped 提示。
+      const windows = filterLayoutWindows(layout.windows, exclusions);
+      const excluded = layout.windows.length - windows.length;
+      const result: WindowLayoutRestoreResult = await helper.restoreWindowLayout(windows);
+      const skipped = (Number.isFinite(result.skipped) ? result.skipped : 0) + excluded;
       const restored = Number.isFinite(result.restored) ? result.restored : 0;
       status = {
         kind: skipped ? "warning" : "success",
@@ -82,6 +89,31 @@
     } finally {
       busy = "";
     }
+  }
+
+  function addExclusion(): void {
+    const app = foregroundApp.trim();
+    if (!app) {
+      status = { kind: "warning", text: text("statusForegroundMissing") };
+      return;
+    }
+    // 大小写不敏感去重；已达上限时名单不会变化，也不重复写存储。
+    const next = normalizeLayoutExclusions([...exclusions, app]);
+    if (sameEntries(next, exclusions)) return;
+    exclusions = next;
+    saveLayoutExclusions(exclusions);
+    status = { kind: "success", text: text("statusAppAdded", { app }) };
+  }
+
+  function removeExclusion(app: string): void {
+    const next = exclusions.filter((item) => item !== app);
+    if (next.length === exclusions.length) return;
+    exclusions = next;
+    saveLayoutExclusions(exclusions);
+  }
+
+  function sameEntries(left: string[], right: string[]): boolean {
+    return left.length === right.length && left.every((item, index) => item.toLowerCase() === right[index].toLowerCase());
   }
 
   function beginRename(layout: WindowLayoutSnapshot): void {
@@ -253,8 +285,9 @@
   {:else}
     <div class="window-layout-list">
       {#each layouts as layout (layout.id)}
-        {@const bounds = previewBounds(layout.windows)}
-        {@const windows = previewWindows(layout.windows, bounds)}
+        {@const visibleWindows = filterLayoutWindows(layout.windows, exclusions)}
+        {@const bounds = previewBounds(visibleWindows)}
+        {@const windows = previewWindows(visibleWindows, bounds)}
         <article class="window-layout-row">
           <button class="layout-preview" aria-label={text("windowLayoutsRestoreAria", { name: layout.name })} disabled={!connected || !supported || Boolean(busy)} on:click={() => restoreLayout(layout)} type="button">
             <span class="layout-preview-grid" aria-hidden="true"></span>
@@ -273,7 +306,7 @@
             {:else}
               <button class="layout-name" on:click={() => beginRename(layout)} title={text("windowLayoutsRename")} type="button">{layout.name}</button>
             {/if}
-            <p>{text("windowLayoutsWindowCount", { count: layout.windows.length })} · {formatDate(layout.capturedAt)}</p>
+            <p>{text("windowLayoutsWindowCount", { count: visibleWindows.length })} · {formatDate(layout.capturedAt)}</p>
           </div>
           <button class:recording={recordingShortcutId === layout.id} class="layout-shortcut" aria-label={shortcutAria(layout)} title={recordingShortcutId === layout.id ? text("windowLayoutsShortcutHint") : shortcutAria(layout)} on:click={() => beginShortcutRecording(layout)} on:blur={() => { if (recordingShortcutId === layout.id) cancelShortcutRecording(); }} type="button">
             {#if recordingShortcutId === layout.id}
@@ -292,6 +325,23 @@
       {/each}
     </div>
   {/if}
+
+  <div class="list-section layout-excluded-apps">
+    <div class="subhead">
+      <div>
+        <h2>{text("layoutExcludedApps")}</h2>
+        <p>{text("foreground")}{foregroundApp || text("noForeground")}</p>
+      </div>
+      <button class="quiet" on:click={addExclusion} type="button">+ {text("addCurrentApp")}</button>
+    </div>
+    <div class="app-list">
+      {#each exclusions as app}
+        <div><span>{app}</span><button aria-label={`${text("removeApp")} ${app}`} on:click={() => removeExclusion(app)} type="button">×</button></div>
+      {:else}
+        <p class="empty">{text("noLayoutExcludedApps")}</p>
+      {/each}
+    </div>
+  </div>
 </section>
 
 <style>
